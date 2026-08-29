@@ -7,6 +7,7 @@ const state = {
   dashboard: null,
   accounts: [],
   inspection: null,
+  managerInspection: null,
   selectedExceptionId: null,
   loading: true,
 };
@@ -70,6 +71,12 @@ const api = {
   },
   inspectionSubmit(payload) {
     return this.request("/inspections/submit", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerInspection() {
+    return this.request("/manager/inspection");
+  },
+  managerParametersSave(payload) {
+    return this.request("/manager/parameters", { method: "POST", body: JSON.stringify(payload) });
   },
 };
 
@@ -197,14 +204,17 @@ async function loadDashboard() {
   renderLoading();
   const isAdminActor = state.session?.actor?.role === "admin";
   const isSuperintendent = state.session?.user?.role === "superintendent";
-  const [dashboardResponse, accountsResponse, inspectionResponse] = await Promise.all([
+  const isRegionalManager = state.session?.user?.role === "regional_manager";
+  const [dashboardResponse, accountsResponse, inspectionResponse, managerInspectionResponse] = await Promise.all([
     api.dashboard(),
     isAdminActor ? api.accounts() : Promise.resolve({ accounts: [] }),
     isSuperintendent ? api.inspectionToday() : Promise.resolve(null),
+    isRegionalManager ? api.managerInspection() : Promise.resolve(null),
   ]);
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
   state.inspection = inspectionResponse;
+  state.managerInspection = managerInspectionResponse;
   state.selectedExceptionId = state.dashboard?.exceptions?.[0]?.id || null;
   renderApp();
 }
@@ -239,7 +249,7 @@ function renderApp() {
       <main class="dashboard">
         ${renderDashboard(state.dashboard)}
       </main>
-      <footer class="app-footer"><span>FHG Command</span><span>Phase 2 · Secure operations workspace</span></footer>
+      <footer class="app-footer"><span>FHG Command</span><span>Phase 3 · Secure operations workspace</span></footer>
     </div>`;
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
@@ -302,7 +312,107 @@ function renderManagerDashboard(data) {
         </div>
         <div class="progress-track"><span style="width:${Number(data.recurring.percentage)}%"></span></div>
       </section>
+    </div>
+    ${renderManagerInspectionPanel(state.managerInspection)}`;
+}
+
+function renderManagerInspectionPanel(data) {
+  if (!data) return "";
+  const groups = groupTagsBySystem(data.tags);
+  return `
+    <section class="card inspection-card" aria-labelledby="manager-inspection-title">
+      <div class="card__header">
+        <div>
+          <p class="section-kicker">${escapeHtml(data.building.name)} · Today's Inspection</p>
+          <h2 id="manager-inspection-title">${escapeHtml(formatInspectionDate(data.date))}</h2>
+        </div>
+        ${renderInspectionStatusBadge(data)}
+      </div>
+      <form id="parameters-form" class="inspection-form">
+        <p class="parameters-intro">Set an optional normal range for any reading. Submitted values outside it are flagged automatically — a value just past the edge shows yellow, further out shows red. Leave a reading blank to skip evaluating it.</p>
+        ${Object.entries(groups)
+          .map(([system, tags]) => renderParameterGroup(system, tags))
+          .join("")}
+        <div class="inspection-actions">
+          <button type="submit" class="button button--primary" id="save-parameters-button">Save parameters</button>
+        </div>
+        <p class="form-error" id="parameters-error" hidden role="alert"></p>
+      </form>
+    </section>`;
+}
+
+function renderParameterGroup(system, tags) {
+  return `
+    <fieldset class="inspection-group">
+      <legend>${escapeHtml(system)}</legend>
+      <div class="parameter-list">
+        ${tags.map(renderParameterRow).join("")}
+      </div>
+    </fieldset>`;
+}
+
+function renderParameterRow(tag) {
+  const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
+  return `
+    <div class="parameter-row">
+      <div class="parameter-row__reading">
+        <span class="parameter-row__label">${escapeHtml(label)}${tag.unit ? ` <small>(${escapeHtml(tag.unit)})</small>` : ""}</span>
+        <span class="parameter-row__value">${tag.value ? escapeHtml(tag.value) : "—"}</span>
+        ${renderFlagBadge(tag.flag)}
+      </div>
+      <div class="parameter-row__inputs">
+        ${
+          tag.value_type === "on_off"
+            ? `<label class="parameter-inline"><span>Expected</span>
+                <select data-param-tag-id="${tag.id}" data-param-field="expected">
+                  <option value="" ${!tag.parameter?.expected ? "selected" : ""}>Not evaluated</option>
+                  <option value="on" ${tag.parameter?.expected === "on" ? "selected" : ""}>On</option>
+                  <option value="off" ${tag.parameter?.expected === "off" ? "selected" : ""}>Off</option>
+                </select>
+              </label>`
+            : `<label class="parameter-inline"><span>Min</span>
+                <input type="number" step="any" data-param-tag-id="${tag.id}" data-param-field="min" value="${tag.parameter?.min ?? ""}" />
+              </label>
+              <label class="parameter-inline"><span>Max</span>
+                <input type="number" step="any" data-param-tag-id="${tag.id}" data-param-field="max" value="${tag.parameter?.max ?? ""}" />
+              </label>`
+        }
+      </div>
     </div>`;
+}
+
+function renderFlagBadge(flag) {
+  if (!flag) return `<span class="flag-badge flag-badge--neutral">Not evaluated</span>`;
+  const labels = { green: "Normal", yellow: "Needs a look", red: "Abnormal" };
+  return `<span class="flag-badge flag-badge--${flag}">${escapeHtml(labels[flag])}</span>`;
+}
+
+function collectParametersForm(form) {
+  const byTag = {};
+  form.querySelectorAll("[data-param-tag-id]").forEach((field) => {
+    const tagId = field.dataset.paramTagId;
+    byTag[tagId] ||= { tagId };
+    byTag[tagId][field.dataset.paramField] = field.value;
+  });
+  return { buildingId: state.managerInspection.building.id, parameters: Object.values(byTag) };
+}
+
+async function handleParametersSave(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = document.querySelector("#save-parameters-button");
+  const error = document.querySelector("#parameters-error");
+  button.disabled = true;
+  button.textContent = "Saving…";
+  try {
+    state.managerInspection = await api.managerParametersSave(collectParametersForm(form));
+    renderApp();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+    button.disabled = false;
+    button.textContent = "Save parameters";
+  }
 }
 
 function renderMetric(metric) {
@@ -534,6 +644,7 @@ function bindDashboardEvents() {
   });
   document.querySelector("#save-draft-button")?.addEventListener("click", handleInspectionSave);
   document.querySelector("#inspection-form")?.addEventListener("submit", handleInspectionSubmit);
+  document.querySelector("#parameters-form")?.addEventListener("submit", handleParametersSave);
 }
 
 async function handleImpersonate(button) {

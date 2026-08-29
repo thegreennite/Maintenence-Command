@@ -8,6 +8,7 @@ import {
 } from "./security.js";
 import { dashboardForRole, roleLabels } from "./dashboard-data.js";
 import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit } from "./inspections.js";
+import { handleManagerInspection, handleManagerParametersSave } from "./manager.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 
@@ -83,6 +84,20 @@ export default {
           return json({ error: "Superintendent access required" }, 403, cors.headers);
         }
         return handleInspectionSubmit(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/inspection" && request.method === "GET") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleManagerInspection(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/parameters" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleManagerParametersSave(request, session, env, cors.headers);
       }
 
       return json({ error: "Not found" }, 404, cors.headers);

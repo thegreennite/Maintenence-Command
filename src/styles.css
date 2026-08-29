@@ -295,3 +295,26 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .inspection-actions { flex-direction: column-reverse; }
   .inspection-actions .button { width: 100%; }
 }
+
+/* Phase 3: parameters + flagging */
+.parameters-intro { margin: -4px 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
+.parameter-list { display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; }
+.parameter-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); }
+.parameter-row__reading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 220px; font-size: 13px; font-weight: 600; }
+.parameter-row__label small { font-weight: 500; color: var(--muted); }
+.parameter-row__value { min-width: 34px; padding: 3px 8px; border-radius: 5px; background: var(--paper); border: 1px solid var(--line); font-variant-numeric: tabular-nums; color: var(--ink); }
+.parameter-row__inputs { display: flex; gap: 10px; }
+.parameter-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.parameter-inline input, .parameter-inline select { height: 34px; width: 84px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 13px; }
+.parameter-inline select { width: auto; }
+
+.flag-badge { padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.flag-badge--neutral { color: var(--muted); background: var(--paper); border: 1px solid var(--line); }
+.flag-badge--green { color: var(--success); background: var(--success-soft); }
+.flag-badge--yellow { color: #aa6916; background: var(--warning-soft); }
+.flag-badge--red { color: var(--danger); background: var(--danger-soft); }
+
+@media (max-width: 640px) {
+  .parameter-row { flex-direction: column; align-items: stretch; }
+  .parameter-row__inputs { justify-content: space-between; }
+}
