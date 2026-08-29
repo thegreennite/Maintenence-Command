@@ -27,10 +27,14 @@ CREATE INDEX idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
 CREATE INDEX idx_users_role_active ON users(role, is_active);
 
+-- Passwords hashed with PBKDF2-SHA256, 120,000 iterations, 32-byte output
+-- (must match worker/security.js verifyPassword) — plaintext seed passwords
+-- for local testing: admin/FHG-Admin-2026!, alex.kim/FHG-Manager-2026!,
+-- jordan.lee/FHG-Super-2026!, taylor.morgan/FHG-Property-2026!
 INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region) VALUES
-  ('admin', 'c2a4f9820c680f5d96a9d0b6e7e5076b6b79718842e2b559f9f8eb95818b4d24', 'c0e6032d2388207c7175be50f5853563', 'Morgan Reed', 'System Administrator', 'admin', 'All regions'),
-  ('alex.kim', '35c5bd5efa399073b4d08dab214a20556573677037ba82afb929bafcd2f5661b', '466e1ed7b3128649760e8bf12e6d1a9b', 'Alex Kim', 'Regional Operations Manager', 'regional_manager', 'Central Portfolio'),
-  ('jordan.lee', 'b49358ecea56cdc25bb1d9c3216c10242f78a4ee8ca28261958331bf23c55a15', '79733be6bfab3720dd5efba0fd58c6d0', 'Jordan Lee', 'Superintendent', 'superintendent', 'Harbour Point'),
-  ('taylor.morgan', 'd2496cbf51756ef3383a4707123ca70bce27cf1896a6158886d482a90a1ebddb', 'afb39819f2165a1ec816bd90b055fc09', 'Taylor Morgan', 'Property Manager', 'property_manager', 'Lakeshore Residences');
+  ('admin', '800f2bd0e6d8e6d639e970ad8d8e2f034944e3674744283965e2c5a8fe311038', 'c0e6032d2388207c7175be50f5853563', 'Morgan Reed', 'System Administrator', 'admin', 'All regions'),
+  ('alex.kim', '42e7fc8af976b10548edbf7c60209c33bb22d7357cd32d89dc79302258fcb944', '466e1ed7b3128649760e8bf12e6d1a9b', 'Alex Kim', 'Regional Operations Manager', 'regional_manager', 'Central Portfolio'),
+  ('jordan.lee', '484ca24230660ee7b26f92d6199cc1bb3ef548a7c980e8d58b657538615f4a6a', '79733be6bfab3720dd5efba0fd58c6d0', 'Jordan Lee', 'Superintendent', 'superintendent', 'Harbour Point'),
+  ('taylor.morgan', '526e65481446565e965648b17d70345ecdfa62b760dbf2749d6c21203df4922e', 'afb39819f2165a1ec816bd90b055fc09', 'Taylor Morgan', 'Property Manager', 'property_manager', 'Lakeshore Residences');
 
 PRAGMA optimize;
