@@ -332,3 +332,14 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .property-log__row--head { display: none; }
   .property-log__row span:not(:first-child)::before { content: attr(data-label) ": "; color: var(--muted); font-weight: 500; }
 }
+
+/* Phase 5: photo capture */
+.photo-capture { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+.photo-capture__button { width: auto; min-height: 36px; cursor: pointer; }
+.photo-capture__button .icon { width: 16px; height: 16px; }
+.photo-capture__status { font-size: 12px; font-weight: 600; color: var(--muted); }
+.photo-capture__status--busy { color: var(--forest); }
+.photo-capture__status--success { color: var(--success); }
+.photo-capture__status--warning { color: #aa6916; }
+.inspection-field--filled input { border-color: var(--success); background: var(--success-soft); }
+.inspection-field--unclear input { border-color: var(--warning); background: var(--warning-soft); }

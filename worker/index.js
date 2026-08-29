@@ -10,6 +10,7 @@ import { dashboardForRole, roleLabels } from "./dashboard-data.js";
 import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit } from "./inspections.js";
 import { handleManagerInspection, handleManagerParametersSave } from "./manager.js";
 import { handlePropertyInspections } from "./property.js";
+import { handleInspectionPhoto } from "./vision.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 
@@ -85,6 +86,13 @@ export default {
           return json({ error: "Superintendent access required" }, 403, cors.headers);
         }
         return handleInspectionSubmit(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/inspections/photo" && request.method === "POST") {
+        if (session.role !== "superintendent") {
+          return json({ error: "Superintendent access required" }, 403, cors.headers);
+        }
+        return handleInspectionPhoto(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/inspection" && request.method === "GET") {

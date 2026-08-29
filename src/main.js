@@ -73,6 +73,9 @@ const api = {
   inspectionSubmit(payload) {
     return this.request("/inspections/submit", { method: "POST", body: JSON.stringify(payload) });
   },
+  inspectionPhoto(payload) {
+    return this.request("/inspections/photo", { method: "POST", body: JSON.stringify(payload) });
+  },
   managerInspection() {
     return this.request("/manager/inspection");
   },
@@ -106,6 +109,7 @@ function icon(name) {
   const paths = {
     arrow: '<path d="m9 18 6-6-6-6"/>',
     building: '<path d="M3 21h18M6 21V5l6-3 6 3v16M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/>',
+    camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2Z"/><circle cx="12" cy="13" r="4"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     command: '<path d="M9 6V3M15 6V3M9 21v-3M15 21v-3M6 9H3M6 15H3M21 9h-3M21 15h-3"/><rect x="6" y="6" width="12" height="12" rx="3"/>',
@@ -257,7 +261,7 @@ function renderApp() {
       <main class="dashboard">
         ${renderDashboard(state.dashboard)}
       </main>
-      <footer class="app-footer"><span>FHG Command</span><span>Phase 4 · Secure operations workspace</span></footer>
+      <footer class="app-footer"><span>FHG Command</span><span>Phase 5 · Secure operations workspace</span></footer>
     </div>`;
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
@@ -537,9 +541,21 @@ function renderInspectionStatusBadge(data) {
 }
 
 function renderInspectionGroup(system, tags, readings, locked) {
+  const groupId = `photo-${slugify(system)}`;
   return `
     <fieldset class="inspection-group">
       <legend>${escapeHtml(system)}</legend>
+      ${
+        locked
+          ? ""
+          : `<div class="photo-capture">
+              <label class="button button--outline button--small photo-capture__button" for="${groupId}">
+                ${icon("camera")} Use a photo for this section
+              </label>
+              <input type="file" accept="image/*" capture="environment" id="${groupId}" data-photo-group="${escapeHtml(system)}" hidden />
+              <span class="photo-capture__status" data-photo-status="${escapeHtml(system)}"></span>
+            </div>`
+      }
       <div class="inspection-grid">
         ${tags.map((tag) => renderInspectionField(tag, readings[tag.id], locked)).join("")}
       </div>
@@ -549,7 +565,7 @@ function renderInspectionGroup(system, tags, readings, locked) {
 function renderInspectionField(tag, value, locked) {
   const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
   return `
-    <label class="inspection-field">
+    <label class="inspection-field" data-field-tag-id="${tag.id}">
       <span>${escapeHtml(label)}${tag.unit ? ` <small>(${escapeHtml(tag.unit)})</small>` : ""}</span>
       <input
         type="text"
@@ -560,6 +576,64 @@ function renderInspectionField(tag, value, locked) {
         autocomplete="off"
       />
     </label>`;
+}
+
+function slugify(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+async function fileToBase64(file) {
+  const buffer = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function handlePhotoCapture(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  const system = input.dataset.photoGroup;
+  const status = document.querySelector(`[data-photo-status="${CSS.escape(system)}"]`);
+  const tagIds = Array.from(document.querySelectorAll(`.inspection-group:has([data-photo-group="${CSS.escape(system)}"]) [data-tag-id]`)).map(
+    (el) => Number(el.dataset.tagId),
+  );
+
+  status.textContent = "Reading photo…";
+  status.className = "photo-capture__status photo-capture__status--busy";
+  try {
+    const imageBase64 = await fileToBase64(file);
+    const response = await api.inspectionPhoto({ tagIds, imageBase64, mediaType: file.type });
+    let filled = 0;
+    const unclear = [];
+    for (const result of response.results) {
+      const field = document.querySelector(`[data-field-tag-id="${result.tagId}"] input`);
+      if (!field) continue;
+      if (result.value != null && !result.unclear) {
+        field.value = result.value;
+        field.closest("label").classList.add("inspection-field--filled");
+        filled += 1;
+      } else if (result.unclear) {
+        field.closest("label").classList.add("inspection-field--unclear");
+        unclear.push(field.closest("label").querySelector("span").textContent);
+      }
+    }
+    status.textContent = unclear.length
+      ? `Filled ${filled} — retake for: ${unclear.join(", ")}`
+      : filled
+        ? `Filled ${filled} reading${filled === 1 ? "" : "s"} from this photo`
+        : "Couldn't read any of these readings in that photo — try again";
+    status.className = `photo-capture__status ${unclear.length || !filled ? "photo-capture__status--warning" : "photo-capture__status--success"}`;
+  } catch (error) {
+    status.textContent = error.message;
+    status.className = "photo-capture__status photo-capture__status--warning";
+  } finally {
+    input.value = "";
+  }
 }
 
 function groupTagsBySystem(tags) {
@@ -692,6 +766,9 @@ function bindDashboardEvents() {
   });
   document.querySelector("#save-draft-button")?.addEventListener("click", handleInspectionSave);
   document.querySelector("#inspection-form")?.addEventListener("submit", handleInspectionSubmit);
+  document.querySelectorAll("[data-photo-group]").forEach((input) => {
+    input.addEventListener("change", handlePhotoCapture);
+  });
   document.querySelector("#parameters-form")?.addEventListener("submit", handleParametersSave);
 }
 
