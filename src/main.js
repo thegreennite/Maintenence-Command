@@ -8,6 +8,7 @@ const state = {
   accounts: [],
   inspection: null,
   managerInspection: null,
+  propertyInspections: null,
   selectedExceptionId: null,
   loading: true,
 };
@@ -77,6 +78,9 @@ const api = {
   },
   managerParametersSave(payload) {
     return this.request("/manager/parameters", { method: "POST", body: JSON.stringify(payload) });
+  },
+  propertyInspections() {
+    return this.request("/property/inspections");
   },
 };
 
@@ -205,16 +209,20 @@ async function loadDashboard() {
   const isAdminActor = state.session?.actor?.role === "admin";
   const isSuperintendent = state.session?.user?.role === "superintendent";
   const isRegionalManager = state.session?.user?.role === "regional_manager";
-  const [dashboardResponse, accountsResponse, inspectionResponse, managerInspectionResponse] = await Promise.all([
-    api.dashboard(),
-    isAdminActor ? api.accounts() : Promise.resolve({ accounts: [] }),
-    isSuperintendent ? api.inspectionToday() : Promise.resolve(null),
-    isRegionalManager ? api.managerInspection() : Promise.resolve(null),
-  ]);
+  const isPropertyManager = state.session?.user?.role === "property_manager";
+  const [dashboardResponse, accountsResponse, inspectionResponse, managerInspectionResponse, propertyResponse] =
+    await Promise.all([
+      api.dashboard(),
+      isAdminActor ? api.accounts() : Promise.resolve({ accounts: [] }),
+      isSuperintendent ? api.inspectionToday() : Promise.resolve(null),
+      isRegionalManager ? api.managerInspection() : Promise.resolve(null),
+      isPropertyManager ? api.propertyInspections() : Promise.resolve(null),
+    ]);
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
   state.inspection = inspectionResponse;
   state.managerInspection = managerInspectionResponse;
+  state.propertyInspections = propertyResponse;
   state.selectedExceptionId = state.dashboard?.exceptions?.[0]?.id || null;
   renderApp();
 }
@@ -249,7 +257,7 @@ function renderApp() {
       <main class="dashboard">
         ${renderDashboard(state.dashboard)}
       </main>
-      <footer class="app-footer"><span>FHG Command</span><span>Phase 3 · Secure operations workspace</span></footer>
+      <footer class="app-footer"><span>FHG Command</span><span>Phase 4 · Secure operations workspace</span></footer>
     </div>`;
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
@@ -266,7 +274,9 @@ function renderDashboard(data) {
         ? renderAdminDashboard(data)
         : data.kind === "superintendent"
           ? renderInspectionView(state.inspection)
-          : renderRoleShell(data);
+          : data.kind === "property_manager"
+            ? renderPropertyView(state.propertyInspections)
+            : renderRoleShell(data);
 
   return `
     <section class="dashboard-heading">
@@ -618,6 +628,44 @@ async function handleInspectionSubmit(event) {
     button.disabled = false;
     button.textContent = "Submit inspection";
   }
+}
+
+function renderPropertyView(data) {
+  if (!data) return renderErrorState();
+  if (!data.days.length) {
+    return `<section class="card empty-state"><span>${icon("clock")}</span><h2>No inspections yet</h2><p>${escapeHtml(data.building.name)} hasn't had an inspection submitted yet — check back after today's rounds.</p></section>`;
+  }
+  return `
+    <section class="card" aria-labelledby="property-log-title">
+      <div class="card__header">
+        <div><p class="section-kicker">${escapeHtml(data.building.name)}</p><h2 id="property-log-title">Inspection log</h2></div>
+        <span class="quiet-label">Last ${data.days.length} day${data.days.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="property-log">
+        <div class="property-log__row property-log__row--head">
+          <span>Date</span><span>Status</span><span>Started</span><span>Submitted</span><span>Outcome</span>
+        </div>
+        ${data.days.map(renderPropertyLogRow).join("")}
+      </div>
+    </section>`;
+}
+
+function renderPropertyLogRow(day) {
+  const outcomeLabels = {
+    normal: ["Normal", "flag-badge--green"],
+    needs_look: ["Needs a look", "flag-badge--yellow"],
+    abnormal: ["Abnormal", "flag-badge--red"],
+    not_evaluated: ["Not evaluated", "flag-badge--neutral"],
+  };
+  const [label, tone] = outcomeLabels[day.outcome];
+  return `
+    <div class="property-log__row">
+      <span>${escapeHtml(formatInspectionDate(day.date))}</span>
+      <span class="status-pill ${day.status === "submitted" ? "status-pill--success" : "status-pill--warning"}">${day.status === "submitted" ? "Submitted" : "Draft"}</span>
+      <span>${escapeHtml(formatTimestamp(day.startedAt) || "—")}</span>
+      <span>${escapeHtml(formatTimestamp(day.submittedAt) || "—")}</span>
+      <span class="flag-badge ${tone}">${escapeHtml(label)}</span>
+    </div>`;
 }
 
 function renderStat(stat) {

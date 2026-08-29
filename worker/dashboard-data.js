@@ -68,18 +68,9 @@ const shellData = {
   },
   property_manager: {
     kind: "property_manager",
-    eyebrow: "Lakeshore Residences",
+    eyebrow: "Harbour Point",
     title: "Property overview",
-    summary: "A clear, role-specific view of building performance is ready for future workflows.",
-    stats: [
-      { label: "Portfolio", value: "1 property", meta: "Lakeshore Residences", tone: "neutral" },
-      { label: "Operations status", value: "Stable", meta: "No critical notices", tone: "success" },
-      { label: "Coverage", value: "On site", meta: "Team available", tone: "success" },
-    ],
-    panels: [
-      { title: "Building summary", copy: "Current property signals and operational context will live in this workspace." },
-      { title: "Team communication", copy: "Relevant updates from site operations will be organized here in a later phase." },
-    ],
+    summary: "A simple, read-only record of when each daily inspection happened and what it found.",
   },
 };
 

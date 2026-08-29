@@ -11,7 +11,7 @@ function today() {
 // to 10% of the range width (minimum 1 unit) — a defensible starting point,
 // not a precisely specified rule; adjust the multiplier below if a manager
 // wants tighter or looser tolerance once this is in real use.
-function flagFor(tag, rawValue, parameter) {
+export function flagFor(tag, rawValue, parameter) {
   if (!parameter || rawValue == null || rawValue === "") return null;
 
   if (tag.value_type === "on_off") {

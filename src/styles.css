@@ -318,3 +318,17 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .parameter-row { flex-direction: column; align-items: stretch; }
   .parameter-row__inputs { justify-content: space-between; }
 }
+
+/* Phase 4: property manager log */
+.property-log { padding: 6px 22px 20px; }
+.property-log__row { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr 1.2fr; align-items: center; gap: 10px; padding: 13px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.property-log__row:last-child { border-bottom: none; }
+.property-log__row--head { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding-bottom: 10px; }
+.property-log__row span:first-child { font-weight: 600; }
+.property-log__row .status-pill, .property-log__row .flag-badge { justify-self: start; }
+
+@media (max-width: 720px) {
+  .property-log__row { grid-template-columns: 1fr; gap: 4px; padding: 14px 4px; }
+  .property-log__row--head { display: none; }
+  .property-log__row span:not(:first-child)::before { content: attr(data-label) ": "; color: var(--muted); font-weight: 500; }
+}
