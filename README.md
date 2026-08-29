@@ -10,7 +10,14 @@ Role-based property operations command center — Phase 1: four-role auth skelet
 
 Not built yet (later phases, on purpose): real inspection entry, parameters/red-yellow-green flagging, Property Manager's real inspection view, AI photo-reading extraction, building registration, WhatsApp/SMS reminders.
 
-## Seed accounts (local testing only — change before any real deployment)
+## Live deployment
+
+- **App:** https://fhg-command.pages.dev
+- **API:** https://fhg-command-api.douglasmrgarcia.workers.dev
+
+Both live on Cloudflare (Pages + Workers + D1) under account `Douglasmrgarcia@gmail.com`. Log in at the app URL with any seed account below.
+
+## Seed accounts (test credentials — change before any real rollout)
 
 | Role | Username | Password |
 |---|---|---|
