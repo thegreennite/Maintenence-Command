@@ -27,14 +27,16 @@ CREATE INDEX idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
 CREATE INDEX idx_users_role_active ON users(role, is_active);
 
--- Passwords hashed with PBKDF2-SHA256, 120,000 iterations, 32-byte output
--- (must match worker/security.js verifyPassword) — plaintext seed passwords
--- for local testing: admin/FHG-Admin-2026!, alex.kim/FHG-Manager-2026!,
--- jordan.lee/FHG-Super-2026!, taylor.morgan/FHG-Property-2026!
+-- Passwords hashed with PBKDF2-SHA256, 100,000 iterations, 32-byte output
+-- (must match worker/security.js verifyPassword — Cloudflare Workers' edge
+-- WebCrypto caps PBKDF2 at 100,000 iterations, so this cannot go higher)
+-- plaintext seed passwords for local testing: admin/FHG-Admin-2026!,
+-- alex.kim/FHG-Manager-2026!, jordan.lee/FHG-Super-2026!,
+-- taylor.morgan/FHG-Property-2026!
 INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region) VALUES
-  ('admin', '800f2bd0e6d8e6d639e970ad8d8e2f034944e3674744283965e2c5a8fe311038', 'c0e6032d2388207c7175be50f5853563', 'Morgan Reed', 'System Administrator', 'admin', 'All regions'),
-  ('alex.kim', '42e7fc8af976b10548edbf7c60209c33bb22d7357cd32d89dc79302258fcb944', '466e1ed7b3128649760e8bf12e6d1a9b', 'Alex Kim', 'Regional Operations Manager', 'regional_manager', 'Central Portfolio'),
-  ('jordan.lee', '484ca24230660ee7b26f92d6199cc1bb3ef548a7c980e8d58b657538615f4a6a', '79733be6bfab3720dd5efba0fd58c6d0', 'Jordan Lee', 'Superintendent', 'superintendent', 'Harbour Point'),
-  ('taylor.morgan', '526e65481446565e965648b17d70345ecdfa62b760dbf2749d6c21203df4922e', 'afb39819f2165a1ec816bd90b055fc09', 'Taylor Morgan', 'Property Manager', 'property_manager', 'Lakeshore Residences');
+  ('admin', '3f2c9dd77216ea6bd8cfce3c0514f963e8b306b07046fcc449bbce95eb1b2034', 'c0e6032d2388207c7175be50f5853563', 'Morgan Reed', 'System Administrator', 'admin', 'All regions'),
+  ('alex.kim', '602f2e8fc56ad52a82b6321e598ede14cfb4ce6b39666ffd1413f35962f7f4fe', '466e1ed7b3128649760e8bf12e6d1a9b', 'Alex Kim', 'Regional Operations Manager', 'regional_manager', 'Central Portfolio'),
+  ('jordan.lee', 'c7f6760bade20dfbfcfdb7aae817fc976319c3bccf659122309a770ef2a294bc', '79733be6bfab3720dd5efba0fd58c6d0', 'Jordan Lee', 'Superintendent', 'superintendent', 'Harbour Point'),
+  ('taylor.morgan', '0f5b955d187653c05a91154207c51c26379120bbf82a23b10ba6bf095ada1b17', 'afb39819f2165a1ec816bd90b055fc09', 'Taylor Morgan', 'Property Manager', 'property_manager', 'Lakeshore Residences');
 
 PRAGMA optimize;

@@ -25,7 +25,10 @@ export async function verifyPassword(password, saltHex, expectedHashHex) {
       name: "PBKDF2",
       hash: "SHA-256",
       salt: hexToBytes(saltHex),
-      iterations: 120_000,
+      // Cloudflare Workers' WebCrypto caps PBKDF2 at 100,000 iterations —
+      // this must stay <= 100_000 or verifyPassword throws in production
+      // even though it works fine locally under Miniflare/Node.
+      iterations: 100_000,
     },
     key,
     256,

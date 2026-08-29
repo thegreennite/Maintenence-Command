@@ -10,9 +10,15 @@ const state = {
   loading: true,
 };
 
+// In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
+// relative path works. In production there's no proxy — call the deployed
+// Worker's own URL directly (cross-origin), which the Worker is already
+// built to support (CORS origin-reflection + SameSite=None cookie).
+const API_BASE = import.meta.env.VITE_API_URL || "";
+
 const api = {
   async request(path, options = {}) {
-    const response = await fetch(`/api${path}`, {
+    const response = await fetch(`${API_BASE}/api${path}`, {
       credentials: "include",
       ...options,
       headers: {
