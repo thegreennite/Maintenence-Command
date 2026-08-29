@@ -1,0 +1,3 @@
+# Optional local overrides for the Worker.
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:4173
+SESSION_TTL_HOURS=12

@@ -1,0 +1,278 @@
+import {
+  clearSessionCookie,
+  createSessionToken,
+  hashToken,
+  readCookie,
+  sessionCookie,
+  verifyPassword,
+} from "./security.js";
+import { dashboardForRole, roleLabels } from "./dashboard-data.js";
+
+const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const cors = corsHeaders(request, env);
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: cors.allowed ? 204 : 403, headers: cors.headers });
+    }
+
+    if (url.pathname === "/api/health" && request.method === "GET") {
+      return json({ ok: true, service: "fhg-command-api" }, 200, cors.headers);
+    }
+
+    if (!url.pathname.startsWith("/api/")) {
+      return json({ error: "Not found" }, 404, cors.headers);
+    }
+
+    if (!cors.allowed) {
+      return json({ error: "Origin not allowed" }, 403, cors.headers);
+    }
+
+    try {
+      if (url.pathname === "/api/auth/login" && request.method === "POST") {
+        return handleLogin(request, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/auth/logout" && request.method === "POST") {
+        return handleLogout(request, env, cors.headers);
+      }
+
+      const session = await requireSession(request, env);
+      if (!session) return json({ error: "Authentication required" }, 401, cors.headers);
+
+      if (url.pathname === "/api/auth/me" && request.method === "GET") {
+        return json(sessionPayload(session), 200, cors.headers);
+      }
+
+      if (url.pathname === "/api/dashboard" && request.method === "GET") {
+        return json({ dashboard: dashboardForRole(session.role) }, 200, cors.headers);
+      }
+
+      if (url.pathname === "/api/admin/accounts" && request.method === "GET") {
+        return handleAccounts(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/admin/impersonate" && request.method === "POST") {
+        return handleImpersonate(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/admin/return" && request.method === "POST") {
+        return handleAdminReturn(session, env, cors.headers);
+      }
+
+      return json({ error: "Not found" }, 404, cors.headers);
+    } catch (error) {
+      console.error("Request failed", error);
+      return json({ error: "Something went wrong" }, 500, cors.headers);
+    }
+  },
+};
+
+async function handleLogin(request, env, corsHeaders) {
+  const body = await readJson(request);
+  const username = String(body.username || "").trim();
+  const password = String(body.password || "");
+
+  if (!username || !password) {
+    return json({ error: "Username and password are required" }, 400, corsHeaders);
+  }
+
+  const user = await env.DB.prepare(
+    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region
+     FROM users WHERE username = ? AND is_active = 1`,
+  )
+    .bind(username)
+    .first();
+
+  const valid = user
+    ? await verifyPassword(password, user.password_salt, user.password_hash)
+    : false;
+
+  if (!valid) return json({ error: "Invalid username or password" }, 401, corsHeaders);
+
+  const token = createSessionToken();
+  const tokenHash = await hashToken(token);
+  const ttlHours = Math.max(1, Number.parseInt(env.SESSION_TTL_HOURS || "12", 10));
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
+
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(new Date().toISOString()),
+    env.DB.prepare(
+      "INSERT INTO sessions (token_hash, user_id, actor_user_id, expires_at) VALUES (?, ?, ?, ?)",
+    ).bind(tokenHash, user.id, user.id, expiresAt),
+  ]);
+
+  const headers = new Headers(corsHeaders);
+  headers.set("Set-Cookie", sessionCookie(request, token, ttlHours * 60 * 60));
+  return json(
+    {
+      user: publicUser(user),
+      actor: publicUser(user),
+      isImpersonating: false,
+    },
+    200,
+    headers,
+  );
+}
+
+async function handleLogout(request, env, corsHeaders) {
+  const token = readCookie(request, "fhg_session");
+  if (token) {
+    await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?")
+      .bind(await hashToken(token))
+      .run();
+  }
+  const headers = new Headers(corsHeaders);
+  headers.set("Set-Cookie", clearSessionCookie(request));
+  return json({ ok: true }, 200, headers);
+}
+
+async function handleAccounts(session, env, corsHeaders) {
+  if (session.actor_role !== "admin") {
+    return json({ error: "Administrator access required" }, 403, corsHeaders);
+  }
+
+  const result = await env.DB.prepare(
+    `SELECT id, username, full_name, job_title, role, region
+     FROM users WHERE is_active = 1 AND role != 'admin'
+     ORDER BY CASE role
+       WHEN 'regional_manager' THEN 1
+       WHEN 'superintendent' THEN 2
+       ELSE 3 END, full_name`,
+  ).all();
+
+  return json({ accounts: result.results.map(publicUser) }, 200, corsHeaders);
+}
+
+async function handleImpersonate(request, session, env, corsHeaders) {
+  if (session.actor_role !== "admin") {
+    return json({ error: "Administrator access required" }, 403, corsHeaders);
+  }
+
+  const body = await readJson(request);
+  const userId = Number.parseInt(body.userId, 10);
+  const target = await env.DB.prepare(
+    `SELECT id, username, full_name, job_title, role, region
+     FROM users WHERE id = ? AND is_active = 1 AND role != 'admin'`,
+  )
+    .bind(userId)
+    .first();
+
+  if (!target) return json({ error: "Account not found" }, 404, corsHeaders);
+
+  await env.DB.prepare("UPDATE sessions SET user_id = ?, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(target.id, session.session_id)
+    .run();
+
+  return json(
+    {
+      user: publicUser(target),
+      actor: actorUser(session),
+      isImpersonating: true,
+    },
+    200,
+    corsHeaders,
+  );
+}
+
+async function handleAdminReturn(session, env, corsHeaders) {
+  if (session.actor_role !== "admin") {
+    return json({ error: "Administrator access required" }, 403, corsHeaders);
+  }
+
+  await env.DB.prepare("UPDATE sessions SET user_id = actor_user_id, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(session.session_id)
+    .run();
+
+  const admin = actorUser(session);
+  return json({ user: admin, actor: admin, isImpersonating: false }, 200, corsHeaders);
+}
+
+async function requireSession(request, env) {
+  const token = readCookie(request, "fhg_session");
+  if (!token) return null;
+
+  const session = await env.DB.prepare(
+    `SELECT s.id AS session_id, s.expires_at,
+       u.id, u.username, u.full_name, u.job_title, u.role, u.region,
+       actor.id AS actor_id, actor.username AS actor_username,
+       actor.full_name AS actor_full_name, actor.job_title AS actor_job_title,
+       actor.role AS actor_role, actor.region AS actor_region
+     FROM sessions s
+     JOIN users u ON u.id = s.user_id AND u.is_active = 1
+     JOIN users actor ON actor.id = s.actor_user_id AND actor.is_active = 1
+     WHERE s.token_hash = ? AND s.expires_at > ?`,
+  )
+    .bind(await hashToken(token), new Date().toISOString())
+    .first();
+
+  if (session) {
+    await env.DB.prepare("UPDATE sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .bind(session.session_id)
+      .run();
+  }
+  return session;
+}
+
+function sessionPayload(session) {
+  return {
+    user: publicUser(session),
+    actor: actorUser(session),
+    isImpersonating: session.id !== session.actor_id,
+  };
+}
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    fullName: user.full_name,
+    jobTitle: user.job_title,
+    role: user.role,
+    roleLabel: roleLabels[user.role],
+    region: user.region,
+  };
+}
+
+function actorUser(session) {
+  return publicUser({
+    id: session.actor_id,
+    username: session.actor_username,
+    full_name: session.actor_full_name,
+    job_title: session.actor_job_title,
+    role: session.actor_role,
+    region: session.actor_region,
+  });
+}
+
+function corsHeaders(request, env) {
+  const origin = request.headers.get("Origin");
+  const allowedOrigins = String(env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const allowed = !origin || allowedOrigins.includes(origin);
+  const headers = new Headers({
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    Vary: "Origin",
+  });
+  if (origin && allowed) headers.set("Access-Control-Allow-Origin", origin);
+  return { allowed, headers };
+}
+
+async function readJson(request) {
+  if (!request.headers.get("Content-Type")?.includes("application/json")) return {};
+  return request.json();
+}
+
+function json(data, status = 200, headers = {}) {
+  const responseHeaders = new Headers(headers);
+  for (const [key, value] of Object.entries(JSON_HEADERS)) responseHeaders.set(key, value);
+  responseHeaders.set("Cache-Control", "no-store");
+  return new Response(JSON.stringify(data), { status, headers: responseHeaders });
+}

@@ -1,0 +1,16 @@
+name = "fhg-command-api"
+main = "worker/index.js"
+compatibility_date = "2026-08-28"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fhg-command-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173"
+SESSION_TTL_HOURS = "12"
+
+[observability]
+enabled = true
