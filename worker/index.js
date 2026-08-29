@@ -7,6 +7,7 @@ import {
   verifyPassword,
 } from "./security.js";
 import { dashboardForRole, roleLabels } from "./dashboard-data.js";
+import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit } from "./inspections.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 
@@ -61,6 +62,27 @@ export default {
 
       if (url.pathname === "/api/admin/return" && request.method === "POST") {
         return handleAdminReturn(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/inspections/today" && request.method === "GET") {
+        if (session.role !== "superintendent") {
+          return json({ error: "Superintendent access required" }, 403, cors.headers);
+        }
+        return handleInspectionToday(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/inspections/save" && request.method === "POST") {
+        if (session.role !== "superintendent") {
+          return json({ error: "Superintendent access required" }, 403, cors.headers);
+        }
+        return handleInspectionSave(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/inspections/submit" && request.method === "POST") {
+        if (session.role !== "superintendent") {
+          return json({ error: "Superintendent access required" }, 403, cors.headers);
+        }
+        return handleInspectionSubmit(request, session, env, cors.headers);
       }
 
       return json({ error: "Not found" }, 404, cors.headers);
@@ -197,7 +219,7 @@ async function requireSession(request, env) {
 
   const session = await env.DB.prepare(
     `SELECT s.id AS session_id, s.expires_at,
-       u.id, u.username, u.full_name, u.job_title, u.role, u.region,
+       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id,
        actor.id AS actor_id, actor.username AS actor_username,
        actor.full_name AS actor_full_name, actor.job_title AS actor_job_title,
        actor.role AS actor_role, actor.region AS actor_region

@@ -6,6 +6,7 @@ const state = {
   session: null,
   dashboard: null,
   accounts: [],
+  inspection: null,
   selectedExceptionId: null,
   loading: true,
 };
@@ -60,6 +61,15 @@ const api = {
   },
   returnToAdmin() {
     return this.request("/admin/return", { method: "POST" });
+  },
+  inspectionToday() {
+    return this.request("/inspections/today");
+  },
+  inspectionSave(payload) {
+    return this.request("/inspections/save", { method: "POST", body: JSON.stringify(payload) });
+  },
+  inspectionSubmit(payload) {
+    return this.request("/inspections/submit", { method: "POST", body: JSON.stringify(payload) });
   },
 };
 
@@ -186,12 +196,15 @@ async function handleLogin(event) {
 async function loadDashboard() {
   renderLoading();
   const isAdminActor = state.session?.actor?.role === "admin";
-  const [dashboardResponse, accountsResponse] = await Promise.all([
+  const isSuperintendent = state.session?.user?.role === "superintendent";
+  const [dashboardResponse, accountsResponse, inspectionResponse] = await Promise.all([
     api.dashboard(),
     isAdminActor ? api.accounts() : Promise.resolve({ accounts: [] }),
+    isSuperintendent ? api.inspectionToday() : Promise.resolve(null),
   ]);
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
+  state.inspection = inspectionResponse;
   state.selectedExceptionId = state.dashboard?.exceptions?.[0]?.id || null;
   renderApp();
 }
@@ -226,7 +239,7 @@ function renderApp() {
       <main class="dashboard">
         ${renderDashboard(state.dashboard)}
       </main>
-      <footer class="app-footer"><span>FHG Command</span><span>Phase 1 · Secure operations workspace</span></footer>
+      <footer class="app-footer"><span>FHG Command</span><span>Phase 2 · Secure operations workspace</span></footer>
     </div>`;
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
@@ -241,7 +254,9 @@ function renderDashboard(data) {
       ? renderManagerDashboard(data)
       : data.kind === "admin"
         ? renderAdminDashboard(data)
-        : renderRoleShell(data);
+        : data.kind === "superintendent"
+          ? renderInspectionView(state.inspection)
+          : renderRoleShell(data);
 
   return `
     <section class="dashboard-heading">
@@ -356,6 +371,145 @@ function renderRoleShell(data) {
     </div>`;
 }
 
+function renderInspectionView(data) {
+  if (!data) return renderErrorState();
+  const locked = data.status === "submitted";
+  const groups = groupTagsBySystem(data.tags);
+
+  return `
+    <section class="card inspection-card" aria-labelledby="inspection-title">
+      <div class="card__header">
+        <div>
+          <p class="section-kicker">${escapeHtml(data.building.name)} · Daily Inspection</p>
+          <h2 id="inspection-title">${escapeHtml(formatInspectionDate(data.date))}</h2>
+        </div>
+        ${renderInspectionStatusBadge(data)}
+      </div>
+      <form id="inspection-form" class="inspection-form">
+        ${Object.entries(groups)
+          .map(([system, tags]) => renderInspectionGroup(system, tags, data.readings, locked))
+          .join("")}
+        <label class="inspection-notes">
+          <span>Comments</span>
+          <textarea name="notes" rows="3" ${locked ? "disabled" : ""} placeholder="Anything the next shift should know…">${escapeHtml(data.notes || "")}</textarea>
+        </label>
+        ${
+          locked
+            ? `<p class="inspection-locked-note">${icon("check")} Submitted ${formatTimestamp(data.submittedAt)} — this inspection is locked. Contact your regional manager if it needs to be reopened.</p>`
+            : `<div class="inspection-actions">
+                <button type="button" class="button button--outline" id="save-draft-button">Save draft</button>
+                <button type="submit" class="button button--primary" id="submit-inspection-button">Submit inspection</button>
+              </div>
+              <p class="form-error" id="inspection-error" hidden role="alert"></p>`
+        }
+      </form>
+    </section>`;
+}
+
+function renderInspectionStatusBadge(data) {
+  if (data.status === "submitted") {
+    return `<span class="status-pill status-pill--success">${icon("check")} Submitted</span>`;
+  }
+  if (data.status === "draft") {
+    return `<span class="status-pill status-pill--warning">${icon("clock")} Draft saved</span>`;
+  }
+  return `<span class="status-pill">${icon("clock")} Not started</span>`;
+}
+
+function renderInspectionGroup(system, tags, readings, locked) {
+  return `
+    <fieldset class="inspection-group">
+      <legend>${escapeHtml(system)}</legend>
+      <div class="inspection-grid">
+        ${tags.map((tag) => renderInspectionField(tag, readings[tag.id], locked)).join("")}
+      </div>
+    </fieldset>`;
+}
+
+function renderInspectionField(tag, value, locked) {
+  const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
+  return `
+    <label class="inspection-field">
+      <span>${escapeHtml(label)}${tag.unit ? ` <small>(${escapeHtml(tag.unit)})</small>` : ""}</span>
+      <input
+        type="text"
+        name="tag-${tag.id}"
+        data-tag-id="${tag.id}"
+        value="${escapeHtml(value ?? "")}"
+        ${locked ? "disabled" : ""}
+        autocomplete="off"
+      />
+    </label>`;
+}
+
+function groupTagsBySystem(tags) {
+  const groups = {};
+  for (const tag of tags) {
+    if (!groups[tag.system_name]) groups[tag.system_name] = [];
+    groups[tag.system_name].push(tag);
+  }
+  return groups;
+}
+
+function formatInspectionDate(isoDate) {
+  const date = new Date(`${isoDate}T00:00:00`);
+  return date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+}
+
+function formatTimestamp(isoValue) {
+  if (!isoValue) return "";
+  return new Date(isoValue).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function collectInspectionForm(form) {
+  const readings = {};
+  form.querySelectorAll("[data-tag-id]").forEach((input) => {
+    readings[input.dataset.tagId] = input.value;
+  });
+  return { notes: form.querySelector('[name="notes"]').value, readings };
+}
+
+async function handleInspectionSave(event) {
+  const form = document.querySelector("#inspection-form");
+  const button = document.querySelector("#save-draft-button");
+  const error = document.querySelector("#inspection-error");
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Saving…";
+  try {
+    state.inspection = await api.inspectionSave(collectInspectionForm(form));
+    renderApp();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+async function handleInspectionSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = document.querySelector("#submit-inspection-button");
+  const error = document.querySelector("#inspection-error");
+  button.disabled = true;
+  button.textContent = "Submitting…";
+  try {
+    state.inspection = await api.inspectionSubmit(collectInspectionForm(form));
+    renderApp();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+    button.disabled = false;
+    button.textContent = "Submit inspection";
+  }
+}
+
 function renderStat(stat) {
   return `<article class="metric-card metric-card--${escapeHtml(stat.tone)}">
     <div class="metric-card__top"><span>${escapeHtml(stat.label)}</span><i></i></div>
@@ -378,6 +532,8 @@ function bindDashboardEvents() {
   document.querySelectorAll(".impersonate-button").forEach((button) => {
     button.addEventListener("click", () => handleImpersonate(button));
   });
+  document.querySelector("#save-draft-button")?.addEventListener("click", handleInspectionSave);
+  document.querySelector("#inspection-form")?.addEventListener("submit", handleInspectionSubmit);
 }
 
 async function handleImpersonate(button) {

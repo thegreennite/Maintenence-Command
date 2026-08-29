@@ -64,16 +64,7 @@ const shellData = {
     kind: "superintendent",
     eyebrow: "Harbour Point",
     title: "Your site command center",
-    summary: "A focused workspace for daily property operations is ready for the next phase.",
-    stats: [
-      { label: "Property", value: "Harbour Point", meta: "Primary assignment", tone: "neutral" },
-      { label: "Shift status", value: "Active", meta: "Started 7:02 AM", tone: "success" },
-      { label: "Team coverage", value: "4 / 4", meta: "Fully staffed", tone: "success" },
-    ],
-    panels: [
-      { title: "Today at a glance", copy: "Daily work and priority updates will appear here as later phases are enabled." },
-      { title: "Property activity", copy: "A concise operational feed will keep the site team aligned without adding noise." },
-    ],
+    summary: "Complete today's building inspection below — it saves as you go and locks once submitted.",
   },
   property_manager: {
     kind: "property_manager",
