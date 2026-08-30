@@ -343,3 +343,25 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .photo-capture__status--warning { color: #aa6916; }
 .inspection-field--filled input { border-color: var(--success); background: var(--success-soft); }
 .inspection-field--unclear input { border-color: var(--warning); background: var(--warning-soft); }
+
+/* Phase 6: building registration */
+.buildings-card { margin-top: 22px; }
+.buildings-list { padding: 4px 22px; }
+.building-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 4px; border-bottom: 1px solid var(--line); }
+.building-row:last-child { border-bottom: none; }
+.building-row__name { display: flex; flex-direction: column; font-size: 14px; font-weight: 600; }
+.building-row__name small { font-weight: 500; color: var(--muted); }
+
+.wizard-panel { padding: 20px 22px 22px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
+.wizard-panel h3 { margin: 0; font: 600 17px/1.3 "Avenir Next", Avenir, system-ui, sans-serif; }
+.day-checkboxes { display: flex; flex-wrap: wrap; gap: 10px; }
+.day-checkbox { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.day-checkbox input { margin: 0; }
+.inspection-actions--split { justify-content: space-between; }
+
+.tags-review-table { display: flex; flex-direction: column; gap: 8px; overflow-x: auto; }
+.tags-review-row { display: grid; grid-template-columns: 1.3fr 1fr 1.6fr 0.7fr 0.9fr auto; gap: 8px; align-items: center; min-width: 640px; }
+.tags-review-row--head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.tags-review-row input, .tags-review-row select { height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 13px; }
+.tags-review-row .remove-tag-row { width: 32px; height: 32px; }
+.tags-review-row .remove-tag-row .icon { width: 14px; }

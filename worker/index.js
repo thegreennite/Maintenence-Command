@@ -11,6 +11,14 @@ import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit } f
 import { handleManagerInspection, handleManagerParametersSave } from "./manager.js";
 import { handlePropertyInspections } from "./property.js";
 import { handleInspectionPhoto } from "./vision.js";
+import {
+  handleBuildingsList,
+  handleBuildingCreate,
+  handleUnassignedSuperintendents,
+  handleAssignSuperintendent,
+  handleGenerateTags,
+  handleSaveTags,
+} from "./buildings.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 
@@ -107,6 +115,48 @@ export default {
           return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
         }
         return handleManagerParametersSave(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/buildings" && request.method === "GET") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleBuildingsList(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/buildings" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleBuildingCreate(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/superintendents/unassigned" && request.method === "GET") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleUnassignedSuperintendents(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/buildings/assign" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleAssignSuperintendent(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/tags/generate" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleGenerateTags(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/tags/save" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleSaveTags(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/property/inspections" && request.method === "GET") {

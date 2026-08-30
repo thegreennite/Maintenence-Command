@@ -9,6 +9,8 @@ const state = {
   inspection: null,
   managerInspection: null,
   propertyInspections: null,
+  managerBuildings: [],
+  buildingWizard: { step: "closed" },
   selectedExceptionId: null,
   loading: true,
 };
@@ -84,6 +86,24 @@ const api = {
   },
   propertyInspections() {
     return this.request("/property/inspections");
+  },
+  managerBuildings() {
+    return this.request("/manager/buildings");
+  },
+  managerCreateBuilding(payload) {
+    return this.request("/manager/buildings", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerUnassignedSuperintendents() {
+    return this.request("/manager/superintendents/unassigned");
+  },
+  managerAssignSuperintendent(payload) {
+    return this.request("/manager/buildings/assign", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerGenerateTags(payload) {
+    return this.request("/manager/tags/generate", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerSaveTags(payload) {
+    return this.request("/manager/tags/save", { method: "POST", body: JSON.stringify(payload) });
   },
 };
 
@@ -227,6 +247,9 @@ async function loadDashboard() {
   state.inspection = inspectionResponse;
   state.managerInspection = managerInspectionResponse;
   state.propertyInspections = propertyResponse;
+  if (isRegionalManager) {
+    state.managerBuildings = (await api.managerBuildings()).buildings;
+  }
   state.selectedExceptionId = state.dashboard?.exceptions?.[0]?.id || null;
   renderApp();
 }
@@ -327,7 +350,231 @@ function renderManagerDashboard(data) {
         <div class="progress-track"><span style="width:${Number(data.recurring.percentage)}%"></span></div>
       </section>
     </div>
-    ${renderManagerInspectionPanel(state.managerInspection)}`;
+    ${renderManagerInspectionPanel(state.managerInspection)}
+    ${renderBuildingsPanel()}`;
+}
+
+function renderBuildingsPanel() {
+  const wizard = state.buildingWizard;
+  return `
+    <section class="card buildings-card" aria-labelledby="buildings-title">
+      <div class="card__header">
+        <div><p class="section-kicker">Central Portfolio</p><h2 id="buildings-title">Buildings</h2></div>
+        ${wizard.step === "closed" ? `<button type="button" class="button button--outline button--small" id="register-building-toggle">+ Register a building</button>` : ""}
+      </div>
+      <div class="buildings-list">
+        ${state.managerBuildings.map(renderBuildingRow).join("")}
+      </div>
+      ${wizard.step !== "closed" ? renderBuildingWizard(wizard) : ""}
+    </section>`;
+}
+
+function renderBuildingRow(building) {
+  return `
+    <div class="building-row">
+      <div class="building-row__name"><strong>${escapeHtml(building.name)}</strong><small>${escapeHtml(building.address || "No address on file")}</small></div>
+      <span class="quiet-label">${building.tag_count} reading${building.tag_count === 1 ? "" : "s"}</span>
+      <span class="quiet-label">${building.superintendent_count} superintendent${building.superintendent_count === 1 ? "" : "s"} assigned</span>
+    </div>`;
+}
+
+function renderBuildingWizard(wizard) {
+  if (wizard.step === "form") return renderBuildingForm();
+  if (wizard.step === "upload") return renderBuildingUploadStep(wizard);
+  if (wizard.step === "review") return renderBuildingReviewStep(wizard);
+  if (wizard.step === "assign") return renderBuildingAssignStep(wizard);
+  return "";
+}
+
+function renderBuildingForm() {
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  return `
+    <form id="building-form" class="wizard-panel">
+      <h3>Register a new building</h3>
+      <label class="inspection-field"><span>Building name</span><input name="name" required autocomplete="off" /></label>
+      <label class="inspection-field"><span>Address <small>(optional)</small></span><input name="address" autocomplete="off" /></label>
+      <div class="inspection-field"><span>Inspection days</span>
+        <div class="day-checkboxes">
+          ${days.map((day) => `<label class="day-checkbox"><input type="checkbox" name="days" value="${day}" ${["Mon", "Tue", "Wed", "Thu", "Fri"].includes(day) ? "checked" : ""} />${day}</label>`).join("")}
+        </div>
+      </div>
+      <div class="inspection-actions">
+        <button type="button" class="button button--outline" id="cancel-building-form">Cancel</button>
+        <button type="submit" class="button button--primary">Create building</button>
+      </div>
+      <p class="form-error" id="building-form-error" hidden role="alert"></p>
+    </form>`;
+}
+
+function renderBuildingUploadStep(wizard) {
+  return `
+    <div class="wizard-panel">
+      <h3>${escapeHtml(wizard.building.name)} — build the checklist</h3>
+      <p class="parameters-intro">Take a photo of this building's paper inspection sheet (one section/page at a time works best) and the AI will propose a digital checklist — you'll review and edit it before it goes live.</p>
+      <label class="button button--outline photo-capture__button" for="building-sheet-photo">${icon("camera")} Upload a photo of the sheet</label>
+      <input type="file" accept="image/*" capture="environment" id="building-sheet-photo" hidden />
+      <p class="photo-capture__status" id="building-sheet-status"></p>
+    </div>`;
+}
+
+function renderBuildingReviewStep(wizard) {
+  return `
+    <form id="tags-review-form" class="wizard-panel">
+      <h3>Review the proposed checklist</h3>
+      <p class="parameters-intro">Edit anything that's wrong, remove rows that shouldn't be there, or add ones the AI missed. Nothing is saved until you activate it.</p>
+      <div class="tags-review-table">
+        <div class="tags-review-row tags-review-row--head">
+          <span>System</span><span>Tag no.</span><span>Reading</span><span>Unit</span><span>Type</span><span></span>
+        </div>
+        ${wizard.proposedTags.map((tag, index) => renderTagReviewRow(tag, index)).join("")}
+      </div>
+      <div class="inspection-actions inspection-actions--split">
+        <button type="button" class="button button--outline button--small" id="add-tag-row">+ Add a row</button>
+        <div class="inspection-actions">
+          <button type="button" class="button button--outline" id="cancel-tags-review">Cancel</button>
+          <button type="submit" class="button button--primary">Activate checklist</button>
+        </div>
+      </div>
+      <p class="form-error" id="tags-review-error" hidden role="alert"></p>
+    </form>`;
+}
+
+function renderTagReviewRow(tag, index) {
+  return `
+    <div class="tags-review-row" data-row-index="${index}">
+      <input type="text" data-field="system_name" value="${escapeHtml(tag.system_name || "")}" placeholder="System" />
+      <input type="text" data-field="tag_no" value="${escapeHtml(tag.tag_no || "")}" placeholder="—" />
+      <input type="text" data-field="reading_type" value="${escapeHtml(tag.reading_type || "")}" placeholder="Reading" />
+      <input type="text" data-field="unit" value="${escapeHtml(tag.unit || "")}" placeholder="—" />
+      <select data-field="value_type">
+        <option value="numeric" ${tag.value_type !== "on_off" ? "selected" : ""}>Numeric</option>
+        <option value="on_off" ${tag.value_type === "on_off" ? "selected" : ""}>On/off</option>
+      </select>
+      <button type="button" class="icon-button remove-tag-row" title="Remove this row" aria-label="Remove this row">${icon("warning")}</button>
+    </div>`;
+}
+
+function renderBuildingAssignStep(wizard) {
+  if (!wizard.unassignedSupers.length) {
+    return `<div class="wizard-panel"><h3>Checklist activated</h3><p class="parameters-intro">No unassigned superintendent accounts are available right now. An admin can assign one to ${escapeHtml(wizard.building.name)} later.</p><div class="inspection-actions"><button type="button" class="button button--primary" id="close-building-wizard">Done</button></div></div>`;
+  }
+  return `
+    <form id="assign-superintendent-form" class="wizard-panel">
+      <h3>Assign a superintendent</h3>
+      <label class="inspection-field"><span>Who covers ${escapeHtml(wizard.building.name)}?</span>
+        <select name="userId" required>
+          <option value="" disabled selected>Select a superintendent</option>
+          ${wizard.unassignedSupers.map((super_) => `<option value="${super_.id}">${escapeHtml(super_.full_name)}</option>`).join("")}
+        </select>
+      </label>
+      <div class="inspection-actions">
+        <button type="button" class="button button--outline" id="skip-assign-superintendent">Skip for now</button>
+        <button type="submit" class="button button--primary">Assign</button>
+      </div>
+      <p class="form-error" id="assign-error" hidden role="alert"></p>
+    </form>`;
+}
+
+function resetBuildingWizard() {
+  state.buildingWizard = { step: "closed" };
+}
+
+async function handleCreateBuilding(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = document.querySelector("#building-form-error");
+  const data = new FormData(form);
+  const days = Array.from(form.querySelectorAll('input[name="days"]:checked')).map((el) => el.value);
+  try {
+    const { building } = await api.managerCreateBuilding({
+      name: data.get("name"),
+      address: data.get("address"),
+      inspectionDays: days,
+    });
+    state.managerBuildings.push({ ...building, tag_count: 0, superintendent_count: 0 });
+    state.buildingWizard = { step: "upload", building };
+    renderApp();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+  }
+}
+
+async function handleBuildingSheetPhoto(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  const status = document.querySelector("#building-sheet-status");
+  status.textContent = "Reading the sheet…";
+  status.className = "photo-capture__status photo-capture__status--busy";
+  try {
+    const imageBase64 = await fileToBase64(file);
+    const { proposedTags } = await api.managerGenerateTags({ imageBase64, mediaType: file.type });
+    if (!proposedTags.length) {
+      status.textContent = "Couldn't confidently read that photo — try a clearer, closer shot of one section.";
+      status.className = "photo-capture__status photo-capture__status--warning";
+      return;
+    }
+    state.buildingWizard = { ...state.buildingWizard, step: "review", proposedTags };
+    renderApp();
+  } catch (requestError) {
+    status.textContent = requestError.message;
+    status.className = "photo-capture__status photo-capture__status--warning";
+  } finally {
+    input.value = "";
+  }
+}
+
+function readTagsFromReviewForm(form) {
+  return Array.from(form.querySelectorAll(".tags-review-row:not(.tags-review-row--head)")).map((row) => ({
+    system_name: row.querySelector('[data-field="system_name"]').value.trim(),
+    tag_no: row.querySelector('[data-field="tag_no"]').value.trim() || null,
+    reading_type: row.querySelector('[data-field="reading_type"]').value.trim(),
+    unit: row.querySelector('[data-field="unit"]').value.trim() || null,
+    value_type: row.querySelector('[data-field="value_type"]').value,
+  }));
+}
+
+async function handleActivateChecklist(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = document.querySelector("#tags-review-error");
+  const tags = readTagsFromReviewForm(form).filter((tag) => tag.system_name && tag.reading_type);
+  if (!tags.length) {
+    error.textContent = "Add at least one reading before activating.";
+    error.hidden = false;
+    return;
+  }
+  try {
+    await api.managerSaveTags({ buildingId: state.buildingWizard.building.id, tags });
+    const { superintendents } = await api.managerUnassignedSuperintendents();
+    state.managerBuildings = state.managerBuildings.map((b) =>
+      b.id === state.buildingWizard.building.id ? { ...b, tag_count: tags.length } : b,
+    );
+    state.buildingWizard = { ...state.buildingWizard, step: "assign", unassignedSupers: superintendents };
+    renderApp();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+  }
+}
+
+async function handleAssignSuperintendentSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = document.querySelector("#assign-error");
+  const userId = new FormData(form).get("userId");
+  try {
+    await api.managerAssignSuperintendent({ buildingId: state.buildingWizard.building.id, userId });
+    state.managerBuildings = state.managerBuildings.map((b) =>
+      b.id === state.buildingWizard.building.id ? { ...b, superintendent_count: b.superintendent_count + 1 } : b,
+    );
+    resetBuildingWizard();
+    renderApp();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+  }
 }
 
 function renderManagerInspectionPanel(data) {
@@ -770,6 +1017,42 @@ function bindDashboardEvents() {
     input.addEventListener("change", handlePhotoCapture);
   });
   document.querySelector("#parameters-form")?.addEventListener("submit", handleParametersSave);
+
+  document.querySelector("#register-building-toggle")?.addEventListener("click", () => {
+    state.buildingWizard = { step: "form" };
+    renderApp();
+  });
+  document.querySelector("#cancel-building-form")?.addEventListener("click", () => {
+    resetBuildingWizard();
+    renderApp();
+  });
+  document.querySelector("#building-form")?.addEventListener("submit", handleCreateBuilding);
+  document.querySelector("#building-sheet-photo")?.addEventListener("change", handleBuildingSheetPhoto);
+  document.querySelector("#cancel-tags-review")?.addEventListener("click", () => {
+    resetBuildingWizard();
+    renderApp();
+  });
+  document.querySelector("#add-tag-row")?.addEventListener("click", () => {
+    state.buildingWizard.proposedTags.push({ system_name: "", tag_no: "", reading_type: "", unit: "", value_type: "numeric" });
+    renderApp();
+  });
+  document.querySelectorAll(".remove-tag-row").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.closest("[data-row-index]").dataset.rowIndex);
+      state.buildingWizard.proposedTags.splice(index, 1);
+      renderApp();
+    });
+  });
+  document.querySelector("#tags-review-form")?.addEventListener("submit", handleActivateChecklist);
+  document.querySelector("#assign-superintendent-form")?.addEventListener("submit", handleAssignSuperintendentSubmit);
+  document.querySelector("#skip-assign-superintendent")?.addEventListener("click", () => {
+    resetBuildingWizard();
+    renderApp();
+  });
+  document.querySelector("#close-building-wizard")?.addEventListener("click", () => {
+    resetBuildingWizard();
+    renderApp();
+  });
 }
 
 async function handleImpersonate(button) {
