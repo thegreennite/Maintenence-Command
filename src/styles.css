@@ -383,7 +383,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 
 /* Self-registration */
 .link-button { border: none; background: none; padding: 0; color: var(--forest-dark); font: inherit; font-weight: 700; font-size: 12.5px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
-.register-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.register-links { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
 .login-panel--wide .login-form-wrap { max-width: 440px; }
 .registration-building-results { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
 .registration-building-result { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: white; cursor: pointer; font: inherit; }
@@ -395,6 +395,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .map-search-results { display: flex; flex-direction: column; gap: 6px; }
 .map-search-result { text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: white; font-size: 13px; cursor: pointer; }
 .map-search-result:hover { border-color: var(--forest); }
+.map-search-result.is-selected { border-color: var(--forest); background: var(--surface-2, #eef2f0); font-weight: 700; }
 .map-picker__canvas { height: 260px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
 .map-picker__hint { margin: 0; font-size: 12px; color: var(--muted); }
 

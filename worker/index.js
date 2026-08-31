@@ -80,7 +80,7 @@ export default {
       }
 
       if (url.pathname === "/api/dashboard" && request.method === "GET") {
-        return json({ dashboard: dashboardForRole(session.role) }, 200, cors.headers);
+        return json({ dashboard: dashboardForRole(session.role, session.full_name) }, 200, cors.headers);
       }
 
       if (url.pathname === "/api/admin/accounts" && request.method === "GET") {

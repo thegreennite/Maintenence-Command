@@ -241,7 +241,6 @@ function renderLogin(message = "") {
           <div class="register-links">
             <span>New here?</span>
             <button type="button" class="link-button" id="register-super-link">Register as Superintendent</button>
-            <span>·</span>
             <button type="button" class="link-button" id="register-pm-link">Register as Property Manager</button>
           </div>
         </div>
@@ -606,7 +605,13 @@ function renderBuildingRow(building) {
       </div>
       <span class="quiet-label">${building.tag_count} reading${building.tag_count === 1 ? "" : "s"}</span>
       <span class="quiet-label">${building.superintendent_count} superintendent${building.superintendent_count === 1 ? "" : "s"} assigned</span>
-      ${isRegistering ? `<button type="button" class="button button--primary button--small push-live-button" data-building-id="${building.id}" ${building.tag_count ? "" : "disabled title=\"Build the checklist first\""}>Push to Super</button>` : ""}
+      ${
+        isRegistering && !building.tag_count
+          ? `<button type="button" class="button button--outline button--small continue-setup-button" data-building-id="${building.id}" data-building-name="${escapeHtml(building.name)}">Continue setup</button>`
+          : isRegistering
+            ? `<button type="button" class="button button--primary button--small push-live-button" data-building-id="${building.id}">Push to Super</button>`
+            : ""
+      }
     </div>`;
 }
 
@@ -626,10 +631,9 @@ function renderBuildingForm() {
       <label class="inspection-field"><span>Building name</span><input name="name" required autocomplete="off" /></label>
       <label class="inspection-field"><span>Address <small>(optional)</small></span><input name="address" id="building-address-input" autocomplete="off" /></label>
       <div class="map-picker">
-        <button type="button" class="button button--outline button--small" id="find-on-map-button">${icon("building")} Find on map</button>
         <div class="map-search-results" id="map-search-results"></div>
         <div class="map-picker__canvas" id="building-map" hidden></div>
-        <p class="map-picker__hint" id="map-picker-hint">Search an address above, then drag the pin to fine-tune the exact spot. Optional — you can still register the building without it.</p>
+        <p class="map-picker__hint" id="map-picker-hint">Type an address above — it locates automatically. Drag the pin after to fine-tune. Optional — you can still register the building without it.</p>
         <input type="hidden" name="latitude" id="building-latitude" />
         <input type="hidden" name="longitude" id="building-longitude" />
       </div>
@@ -678,30 +682,46 @@ function placeBuildingMapPin(lat, lon) {
   }
 }
 
-async function handleFindOnMap() {
-  const q = document.querySelector("#building-address-input").value.trim();
+let addressSearchTimer = null;
+
+function handleAddressInput(event) {
+  const q = event.currentTarget.value.trim();
   const resultsBox = document.querySelector("#map-search-results");
-  if (q.length < 3) {
-    resultsBox.innerHTML = `<p class="map-picker__hint">Type at least a few characters of the address first.</p>`;
+  clearTimeout(addressSearchTimer);
+
+  if (q.length < 4) {
+    resultsBox.innerHTML = "";
     return;
   }
-  resultsBox.innerHTML = `<p class="map-picker__hint">Searching…</p>`;
+
+  // Debounced — this hits a free public geocoder (Nominatim), which asks
+  // callers not to fire a request on every keystroke.
+  addressSearchTimer = setTimeout(() => runAddressSearch(q), 500);
+}
+
+async function runAddressSearch(q) {
+  const resultsBox = document.querySelector("#map-search-results");
+  resultsBox.innerHTML = `<p class="map-picker__hint">Locating…</p>`;
   try {
     const { results } = await api.geocodeSearch(q);
     if (!results.length) {
-      resultsBox.innerHTML = `<p class="map-picker__hint">No matches found — you can still register the building without a map location.</p>`;
+      resultsBox.innerHTML = `<p class="map-picker__hint">No results found.</p>`;
       return;
     }
+    // Auto-place the closest match immediately — no extra click required —
+    // while still listing alternates in case it's the wrong one.
+    placeBuildingMapPin(results[0].lat, results[0].lon);
     resultsBox.innerHTML = results
       .map(
         (r, index) =>
-          `<button type="button" class="map-search-result" data-lat="${r.lat}" data-lon="${r.lon}" data-index="${index}">${escapeHtml(r.label)}</button>`,
+          `<button type="button" class="map-search-result ${index === 0 ? "is-selected" : ""}" data-lat="${r.lat}" data-lon="${r.lon}">${escapeHtml(r.label)}</button>`,
       )
       .join("");
     resultsBox.querySelectorAll(".map-search-result").forEach((button) => {
       button.addEventListener("click", () => {
         placeBuildingMapPin(Number(button.dataset.lat), Number(button.dataset.lon));
-        resultsBox.innerHTML = "";
+        resultsBox.querySelectorAll(".map-search-result").forEach((b) => b.classList.remove("is-selected"));
+        button.classList.add("is-selected");
       });
     });
   } catch (error) {
@@ -1442,7 +1462,7 @@ function bindDashboardEvents() {
     state.buildingWizard = { step: "form" };
     renderApp();
   });
-  document.querySelector("#find-on-map-button")?.addEventListener("click", handleFindOnMap);
+  document.querySelector("#building-address-input")?.addEventListener("input", handleAddressInput);
   document.querySelector("#cancel-building-form")?.addEventListener("click", () => {
     resetBuildingWizard();
     renderApp();
@@ -1486,6 +1506,17 @@ function bindDashboardEvents() {
   });
   document.querySelectorAll(".push-live-button").forEach((button) => {
     button.addEventListener("click", () => handlePushLive(button));
+  });
+  document.querySelectorAll(".continue-setup-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      buildingMap = null;
+      buildingMarker = null;
+      state.buildingWizard = {
+        step: "upload",
+        building: { id: Number(button.dataset.buildingId), name: button.dataset.buildingName },
+      };
+      renderApp();
+    });
   });
 }
 

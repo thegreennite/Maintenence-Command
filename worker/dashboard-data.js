@@ -5,10 +5,20 @@ export const roleLabels = {
   property_manager: "Property Manager",
 };
 
+function todayEyebrow() {
+  return new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+function timeOfDayGreeting(firstName) {
+  const hour = new Date().getHours();
+  const part = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+  return `Good ${part}, ${firstName}`;
+}
+
 const managerDashboard = {
   kind: "regional_manager",
-  eyebrow: "Friday, August 28",
-  title: "Good morning, Alex",
+  eyebrow: "",
+  title: "",
   summary: "Your portfolio is steady. Three commitments need a closer look today.",
   pulse: [
     { label: "Open commitments", value: "24", delta: "Across 8 properties", tone: "neutral" },
@@ -74,8 +84,11 @@ const shellData = {
   },
 };
 
-export function dashboardForRole(role) {
-  if (role === "regional_manager") return managerDashboard;
+export function dashboardForRole(role, fullName) {
+  if (role === "regional_manager") {
+    const firstName = (fullName || "there").split(" ")[0];
+    return { ...managerDashboard, eyebrow: todayEyebrow(), title: timeOfDayGreeting(firstName) };
+  }
   if (role in shellData) return shellData[role];
   if (role === "admin") {
     return {
