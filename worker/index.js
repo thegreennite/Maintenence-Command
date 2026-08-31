@@ -8,17 +8,25 @@ import {
 } from "./security.js";
 import { dashboardForRole, roleLabels } from "./dashboard-data.js";
 import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit } from "./inspections.js";
-import { handleManagerInspection, handleManagerParametersSave } from "./manager.js";
+import { handleManagerInspection, handleManagerParametersSave, handleManagerSuperintendents } from "./manager.js";
 import { handlePropertyInspections } from "./property.js";
 import { handleInspectionPhoto } from "./vision.js";
 import {
   handleBuildingsList,
   handleBuildingCreate,
+  handlePushLive,
   handleUnassignedSuperintendents,
   handleAssignSuperintendent,
   handleGenerateTags,
   handleSaveTags,
 } from "./buildings.js";
+import { handleGeocodeSearch } from "./geocode.js";
+import {
+  handleBuildingSearchForRegistration,
+  handleSelfRegister,
+  handlePendingRequests,
+  handlePendingRequestDecision,
+} from "./registration.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 
@@ -46,6 +54,18 @@ export default {
     try {
       if (url.pathname === "/api/auth/login" && request.method === "POST") {
         return handleLogin(request, env, cors.headers);
+      }
+
+      // Public: no session required — someone filling out the sign-up form
+      // doesn't have one yet.
+      if (url.pathname === "/api/register/buildings/search" && request.method === "GET") {
+        return handleBuildingSearchForRegistration(request, env, cors.headers);
+      }
+      if (url.pathname === "/api/register" && request.method === "POST") {
+        return handleSelfRegister(request, env, cors.headers);
+      }
+      if (url.pathname === "/api/geocode/search" && request.method === "GET") {
+        return handleGeocodeSearch(request, cors.headers);
       }
 
       if (url.pathname === "/api/auth/logout" && request.method === "POST") {
@@ -159,6 +179,41 @@ export default {
         return handleSaveTags(request, session, env, cors.headers);
       }
 
+      if (url.pathname === "/api/manager/buildings/push-live" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handlePushLive(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/superintendents" && request.method === "GET") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleManagerSuperintendents(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/pending-requests" && request.method === "GET") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handlePendingRequests(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/pending-requests/approve" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handlePendingRequestDecision(request, session, env, cors.headers, true);
+      }
+
+      if (url.pathname === "/api/manager/pending-requests/deny" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handlePendingRequestDecision(request, session, env, cors.headers, false);
+      }
+
       if (url.pathname === "/api/property/inspections" && request.method === "GET") {
         if (session.role !== "property_manager") {
           return json({ error: "Property Manager access required" }, 403, cors.headers);
@@ -183,9 +238,12 @@ async function handleLogin(request, env, corsHeaders) {
     return json({ error: "Username and password are required" }, 400, corsHeaders);
   }
 
+  // Look up by username regardless of is_active — a pending/denied account
+  // still needs to verify its password before we say anything about status,
+  // so a wrong-password guess against a real email doesn't confirm it exists.
   const user = await env.DB.prepare(
-    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region
-     FROM users WHERE username = ? AND is_active = 1`,
+    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, status
+     FROM users WHERE username = ?`,
   )
     .bind(username)
     .first();
@@ -195,6 +253,13 @@ async function handleLogin(request, env, corsHeaders) {
     : false;
 
   if (!valid) return json({ error: "Invalid username or password" }, 401, corsHeaders);
+
+  if (user.status === "pending") {
+    return json({ error: "Your account is still pending approval from your operations manager." }, 403, corsHeaders);
+  }
+  if (user.status === "denied") {
+    return json({ error: "Your registration request was not approved. Contact your operations manager." }, 403, corsHeaders);
+  }
 
   const token = createSessionToken();
   const tokenHash = await hashToken(token);
@@ -251,18 +316,31 @@ async function handleAccounts(session, env, corsHeaders) {
 }
 
 async function handleImpersonate(request, session, env, corsHeaders) {
-  if (session.actor_role !== "admin") {
-    return json({ error: "Administrator access required" }, 403, corsHeaders);
+  // Admin can switch into any account. A Regional Manager can only switch
+  // into a Superintendent within their own region — not another manager,
+  // not a Property Manager, not anyone outside the buildings they oversee.
+  const isAdmin = session.actor_role === "admin";
+  const isManager = session.actor_role === "regional_manager";
+  if (!isAdmin && !isManager) {
+    return json({ error: "Not permitted" }, 403, corsHeaders);
   }
 
   const body = await readJson(request);
   const userId = Number.parseInt(body.userId, 10);
-  const target = await env.DB.prepare(
-    `SELECT id, username, full_name, job_title, role, region
-     FROM users WHERE id = ? AND is_active = 1 AND role != 'admin'`,
-  )
-    .bind(userId)
-    .first();
+
+  const target = isAdmin
+    ? await env.DB.prepare(
+        `SELECT id, username, full_name, job_title, role, region
+         FROM users WHERE id = ? AND is_active = 1 AND role != 'admin'`,
+      )
+        .bind(userId)
+        .first()
+    : await env.DB.prepare(
+        `SELECT id, username, full_name, job_title, role, region
+         FROM users WHERE id = ? AND is_active = 1 AND role = 'superintendent' AND region = ?`,
+      )
+        .bind(userId, session.actor_region)
+        .first();
 
   if (!target) return json({ error: "Account not found" }, 404, corsHeaders);
 
@@ -282,16 +360,16 @@ async function handleImpersonate(request, session, env, corsHeaders) {
 }
 
 async function handleAdminReturn(session, env, corsHeaders) {
-  if (session.actor_role !== "admin") {
-    return json({ error: "Administrator access required" }, 403, corsHeaders);
+  if (session.actor_role !== "admin" && session.actor_role !== "regional_manager") {
+    return json({ error: "Not permitted" }, 403, corsHeaders);
   }
 
   await env.DB.prepare("UPDATE sessions SET user_id = actor_user_id, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
     .bind(session.session_id)
     .run();
 
-  const admin = actorUser(session);
-  return json({ user: admin, actor: admin, isImpersonating: false }, 200, corsHeaders);
+  const actor = actorUser(session);
+  return json({ user: actor, actor, isImpersonating: false }, 200, corsHeaders);
 }
 
 async function requireSession(request, env) {
@@ -299,7 +377,7 @@ async function requireSession(request, env) {
   if (!token) return null;
 
   const session = await env.DB.prepare(
-    `SELECT s.id AS session_id, s.expires_at,
+    `SELECT s.id AS session_id, s.expires_at, s.last_seen_at,
        u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id,
        actor.id AS actor_id, actor.username AS actor_username,
        actor.full_name AS actor_full_name, actor.job_title AS actor_job_title,
@@ -311,6 +389,17 @@ async function requireSession(request, env) {
   )
     .bind(await hashToken(token), new Date().toISOString())
     .first();
+
+  // Inactivity timeout: even within the absolute session lifetime, an hour
+  // with no requests locks the account out and requires signing back in.
+  const INACTIVITY_LIMIT_MS = 60 * 60 * 1000;
+  if (session) {
+    const idleMs = Date.now() - new Date(session.last_seen_at + "Z").getTime();
+    if (idleMs > INACTIVITY_LIMIT_MS) {
+      await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(session.session_id).run();
+      return null;
+    }
+  }
 
   if (session) {
     await env.DB.prepare("UPDATE sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")

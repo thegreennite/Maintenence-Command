@@ -44,6 +44,18 @@ async function resolveBuilding(env, session, buildingId) {
     .first();
 }
 
+export async function handleManagerSuperintendents(session, env, corsHeaders) {
+  const result = await env.DB.prepare(
+    `SELECT u.id, u.full_name, b.name AS building_name
+     FROM users u JOIN buildings b ON b.id = u.building_id
+     WHERE u.role = 'superintendent' AND u.region = ? AND u.is_active = 1
+     ORDER BY u.full_name`,
+  )
+    .bind(session.region)
+    .all();
+  return jsonOk({ superintendents: result.results }, corsHeaders);
+}
+
 export async function handleManagerInspection(request, session, env, corsHeaders) {
   const url = new URL(request.url);
   const buildingId = url.searchParams.get("buildingId");

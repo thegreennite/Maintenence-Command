@@ -8,12 +8,31 @@ function today() {
 
 async function loadTags(env, buildingId) {
   const result = await env.DB.prepare(
-    `SELECT id, system_name, tag_no, reading_type, unit, sort_order
-     FROM inspection_tags WHERE building_id = ? ORDER BY sort_order`,
+    `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.value_type,
+       p.min_value, p.max_value, p.expected_value
+     FROM inspection_tags t
+     LEFT JOIN inspection_parameters p ON p.tag_id = t.id
+     WHERE t.building_id = ? ORDER BY t.sort_order`,
   )
     .bind(buildingId)
     .all();
-  return result.results;
+  // Included so the app can nudge "does that look right?" the moment a
+  // superintendent types something outside the expected range, before it
+  // ever reaches the manager — same normal-range info a technician would
+  // reference off a spec sheet, not something worth hiding from them.
+  return result.results.map((row) => ({
+    id: row.id,
+    system_name: row.system_name,
+    tag_no: row.tag_no,
+    reading_type: row.reading_type,
+    unit: row.unit,
+    sort_order: row.sort_order,
+    value_type: row.value_type,
+    parameter:
+      row.min_value != null || row.max_value != null || row.expected_value != null
+        ? { min: row.min_value, max: row.max_value, expected: row.expected_value }
+        : null,
+  }));
 }
 
 async function loadSubmission(env, buildingId, date) {
@@ -42,12 +61,20 @@ export async function handleInspectionToday(session, env, corsHeaders) {
   }
 
   const [building, tags, { submission, readings }] = await Promise.all([
-    env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE id = ?")
+    env.DB.prepare("SELECT id, name, region, inspection_days, status FROM buildings WHERE id = ?")
       .bind(buildingId)
       .first(),
     loadTags(env, buildingId),
     loadSubmission(env, buildingId, today()),
   ]);
+
+  if (building?.status !== "active") {
+    return jsonError(
+      "This building is still being set up by your operations manager and isn't live yet.",
+      409,
+      corsHeaders,
+    );
+  }
 
   return jsonOk(
     {
@@ -67,6 +94,13 @@ export async function handleInspectionToday(session, env, corsHeaders) {
 async function upsertDraft(session, env, { notes, readings }) {
   const buildingId = session.building_id;
   const date = today();
+
+  const building = await env.DB.prepare("SELECT status FROM buildings WHERE id = ?").bind(buildingId).first();
+  if (building?.status !== "active") {
+    const err = new Error("This building isn't live yet.");
+    err.status = 409;
+    throw err;
+  }
 
   const existing = await env.DB.prepare(
     `SELECT id, status FROM inspection_submissions WHERE building_id = ? AND inspection_date = ?`,

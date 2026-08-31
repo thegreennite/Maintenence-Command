@@ -1,4 +1,13 @@
 import "./styles.css";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
+// Leaflet's default marker icon references image files by URL that Vite's
+// bundler doesn't resolve automatically — point it at the bundled assets
+// explicitly, or every marker silently renders as a broken image.
+import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
+import markerIcon from "leaflet/dist/images/marker-icon.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
+L.Icon.Default.mergeOptions({ iconRetinaUrl: markerIcon2x, iconUrl: markerIcon, shadowUrl: markerShadow });
 
 const app = document.querySelector("#app");
 
@@ -13,6 +22,12 @@ const state = {
   buildingWizard: { step: "closed" },
   selectedExceptionId: null,
   loading: true,
+  confirmedOutOfRange: false,
+  pendingSubmitForm: null,
+  authScreen: "login",
+  registration: { role: null, step: "building", building: null, buildingResults: [], buildingSearched: false },
+  pendingRequests: [],
+  managerSuperintendents: [],
 };
 
 // In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
@@ -104,6 +119,30 @@ const api = {
   },
   managerSaveTags(payload) {
     return this.request("/manager/tags/save", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerPushLive(payload) {
+    return this.request("/manager/buildings/push-live", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerSuperintendents() {
+    return this.request("/manager/superintendents");
+  },
+  managerPendingRequests() {
+    return this.request("/manager/pending-requests");
+  },
+  managerApproveRequest(userId) {
+    return this.request("/manager/pending-requests/approve", { method: "POST", body: JSON.stringify({ userId }) });
+  },
+  managerDenyRequest(userId) {
+    return this.request("/manager/pending-requests/deny", { method: "POST", body: JSON.stringify({ userId }) });
+  },
+  searchRegistrationBuildings(q) {
+    return this.request(`/register/buildings/search?q=${encodeURIComponent(q)}`);
+  },
+  selfRegister(payload) {
+    return this.request("/register", { method: "POST", body: JSON.stringify(payload) });
+  },
+  geocodeSearch(q) {
+    return this.request(`/geocode/search?q=${encodeURIComponent(q)}`);
   },
 };
 
@@ -199,12 +238,144 @@ function renderLogin(message = "") {
             </button>
           </form>
           <p class="security-note">${icon("shield")} Protected role-based access</p>
+          <div class="register-links">
+            <span>New here?</span>
+            <button type="button" class="link-button" id="register-super-link">Register as Superintendent</button>
+            <span>·</span>
+            <button type="button" class="link-button" id="register-pm-link">Register as Property Manager</button>
+          </div>
         </div>
       </section>
     </main>`;
 
+  document.querySelector("#register-super-link")?.addEventListener("click", () => startRegistration("superintendent"));
+  document.querySelector("#register-pm-link")?.addEventListener("click", () => startRegistration("property_manager"));
+
   document.querySelector("#login-form").addEventListener("submit", handleLogin);
   document.querySelector('input[name="username"]').focus();
+}
+
+const ROLE_LABELS_FOR_REGISTRATION = { superintendent: "Superintendent", property_manager: "Property Manager" };
+
+function startRegistration(role) {
+  state.registration = { role, step: "building", building: null, buildingResults: [], buildingSearched: false };
+  renderRegister();
+}
+
+function renderRegister() {
+  const reg = state.registration;
+  setDocumentTitle(`Register as ${ROLE_LABELS_FOR_REGISTRATION[reg.role]}`);
+  app.innerHTML = `
+    <main class="login-page login-page--register">
+      <section class="login-panel login-panel--wide">
+        <div class="login-form-wrap">
+          <div class="mobile-brand brand">
+            <span class="brand-mark">${icon("command")}</span>
+            <span>FHG <strong>Command</strong></span>
+          </div>
+          <p class="eyebrow">Register as ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}</p>
+          <h2>${reg.step === "building" ? "Which building do you cover?" : reg.step === "profile" ? "Create your profile" : "Request sent"}</h2>
+          ${reg.step === "building" ? renderRegisterBuildingStep(reg) : reg.step === "profile" ? renderRegisterProfileStep(reg) : renderRegisterDoneStep(reg)}
+          <button type="button" class="link-button" id="back-to-login">← Back to sign in</button>
+        </div>
+      </section>
+    </main>`;
+
+  document.querySelector("#back-to-login")?.addEventListener("click", () => renderLogin());
+  document.querySelector("#registration-building-search")?.addEventListener("input", handleRegistrationBuildingSearch);
+  document.querySelectorAll(".registration-building-result").forEach((button) => {
+    button.addEventListener("click", () => selectRegistrationBuilding(Number(button.dataset.buildingId), button.dataset.buildingName));
+  });
+  document.querySelector("#registration-profile-form")?.addEventListener("submit", handleSelfRegisterSubmit);
+}
+
+function renderRegisterBuildingStep(reg) {
+  return `
+    <p class="form-intro">Search for your building by name. If your operations manager hasn't registered it yet, you won't be able to create a profile until they do.</p>
+    <label class="inspection-field"><span>Building name</span><input id="registration-building-search" autocomplete="off" placeholder="Start typing…" /></label>
+    <div class="registration-building-results">
+      ${reg.buildingResults
+        .map(
+          (b) =>
+            `<button type="button" class="registration-building-result" data-building-id="${b.id}" data-building-name="${escapeHtml(b.name)}"><strong>${escapeHtml(b.name)}</strong>${b.address ? `<small>${escapeHtml(b.address)}</small>` : ""}</button>`,
+        )
+        .join("")}
+    </div>
+    ${
+      reg.buildingSearched && !reg.buildingResults.length
+        ? `<p class="form-error" role="alert">Please talk to your operations manager to register the building before you can create a profile.</p>`
+        : ""
+    }`;
+}
+
+function renderRegisterProfileStep(reg) {
+  return `
+    <p class="form-intro">Registering for <strong>${escapeHtml(reg.building.name)}</strong>. Once you submit, your operations manager will need to approve you before you can sign in.</p>
+    <form id="registration-profile-form" class="login-form">
+      <label><span>Full name</span><input name="fullName" required autocomplete="name" /></label>
+      <label><span>Email</span><input name="email" type="email" required autocomplete="email" /></label>
+      <label><span>Phone <small>(optional)</small></span><input name="phone" type="tel" autocomplete="tel" /></label>
+      <label><span>Create a password</span><input name="password" type="password" minlength="8" required autocomplete="new-password" /></label>
+      <label><span>Profile picture <small>(optional)</small></span><input name="profilePhoto" type="file" accept="image/*" /></label>
+      <p class="form-error" id="registration-error" hidden role="alert"></p>
+      <button class="button button--primary button--full" type="submit"><span>Submit request</span>${icon("arrow")}</button>
+    </form>`;
+}
+
+function renderRegisterDoneStep() {
+  return `<div class="finding"><p>${icon("check")} Your request has been sent to your operations manager for approval. You'll be able to sign in once they approve it.</p></div>`;
+}
+
+async function handleRegistrationBuildingSearch(event) {
+  const q = event.currentTarget.value.trim();
+  if (q.length < 2) {
+    state.registration.buildingResults = [];
+    state.registration.buildingSearched = false;
+    renderRegister();
+    document.querySelector("#registration-building-search").focus();
+    return;
+  }
+  const { buildings } = await api.searchRegistrationBuildings(q);
+  state.registration.buildingResults = buildings;
+  state.registration.buildingSearched = true;
+  renderRegister();
+  const input = document.querySelector("#registration-building-search");
+  input.focus();
+  input.value = q;
+  input.setSelectionRange(q.length, q.length);
+}
+
+function selectRegistrationBuilding(id, name) {
+  state.registration = { ...state.registration, step: "profile", building: { id, name } };
+  renderRegister();
+}
+
+async function handleSelfRegisterSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const error = document.querySelector("#registration-error");
+  const data = new FormData(form);
+  button.disabled = true;
+  try {
+    const photoFile = data.get("profilePhoto");
+    const profilePhoto = photoFile && photoFile.size ? await fileToBase64(photoFile) : null;
+    await api.selfRegister({
+      role: state.registration.role,
+      buildingId: state.registration.building.id,
+      fullName: data.get("fullName"),
+      email: data.get("email"),
+      phone: data.get("phone"),
+      password: data.get("password"),
+      profilePhoto,
+    });
+    state.registration.step = "done";
+    renderRegister();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+    button.disabled = false;
+  }
 }
 
 async function handleLogin(event) {
@@ -248,7 +419,14 @@ async function loadDashboard() {
   state.managerInspection = managerInspectionResponse;
   state.propertyInspections = propertyResponse;
   if (isRegionalManager) {
-    state.managerBuildings = (await api.managerBuildings()).buildings;
+    const [buildingsResponse, pendingResponse, superintendentsResponse] = await Promise.all([
+      api.managerBuildings(),
+      api.managerPendingRequests(),
+      api.managerSuperintendents(),
+    ]);
+    state.managerBuildings = buildingsResponse.buildings;
+    state.pendingRequests = pendingResponse.requests;
+    state.managerSuperintendents = superintendentsResponse.superintendents;
   }
   state.selectedExceptionId = state.dashboard?.exceptions?.[0]?.id || null;
   renderApp();
@@ -277,7 +455,7 @@ function renderApp() {
         isImpersonating
           ? `<aside class="impersonation-bar">
               <span>${icon("shield")} <strong>${escapeHtml(actor.fullName)}</strong> is viewing as ${escapeHtml(user.fullName)}</span>
-              <button class="button button--small button--light" id="return-admin">Return to admin</button>
+              <button class="button button--small button--light" id="return-admin">Return to ${escapeHtml(actor.fullName.split(" ")[0])}</button>
             </aside>`
           : ""
       }
@@ -351,7 +529,56 @@ function renderManagerDashboard(data) {
       </section>
     </div>
     ${renderManagerInspectionPanel(state.managerInspection)}
-    ${renderBuildingsPanel()}`;
+    ${renderPendingRequestsPanel()}
+    ${renderBuildingsPanel()}
+    ${renderSuperintendentSwitcherPanel()}`;
+}
+
+function renderPendingRequestsPanel() {
+  if (!state.pendingRequests.length) return "";
+  return `
+    <section class="card" aria-labelledby="pending-title">
+      <div class="card__header">
+        <div><p class="section-kicker">Awaiting your approval</p><h2 id="pending-title">Pending requests</h2></div>
+        <span class="count-badge">${state.pendingRequests.length}</span>
+      </div>
+      <div class="buildings-list">
+        ${state.pendingRequests.map(renderPendingRequestRow).join("")}
+      </div>
+    </section>`;
+}
+
+function renderPendingRequestRow(req) {
+  return `
+    <div class="building-row" data-request-id="${req.id}">
+      <div class="building-row__name">
+        <strong>${escapeHtml(req.full_name)}</strong>
+        <small>${ROLE_LABELS_FOR_REGISTRATION[req.role] || req.role} · ${escapeHtml(req.building_name)} · ${escapeHtml(req.email)}${req.phone ? " · " + escapeHtml(req.phone) : ""}</small>
+      </div>
+      <div class="inspection-actions">
+        <button type="button" class="button button--outline button--small deny-request" data-user-id="${req.id}">Deny</button>
+        <button type="button" class="button button--primary button--small approve-request" data-user-id="${req.id}">Approve</button>
+      </div>
+    </div>`;
+}
+
+function renderSuperintendentSwitcherPanel() {
+  if (!state.managerSuperintendents.length) return "";
+  return `
+    <section class="card" aria-labelledby="switcher-title">
+      <div class="card__header"><div><p class="section-kicker">Your superintendents</p><h2 id="switcher-title">View as</h2></div></div>
+      <div class="buildings-list">
+        ${state.managerSuperintendents
+          .map(
+            (s) => `
+          <div class="building-row">
+            <div class="building-row__name"><strong>${escapeHtml(s.full_name)}</strong><small>${escapeHtml(s.building_name)}</small></div>
+            <button type="button" class="button button--outline button--small view-as-superintendent" data-user-id="${s.id}">View as ${escapeHtml(s.full_name.split(" ")[0])}</button>
+          </div>`,
+          )
+          .join("")}
+      </div>
+    </section>`;
 }
 
 function renderBuildingsPanel() {
@@ -370,11 +597,16 @@ function renderBuildingsPanel() {
 }
 
 function renderBuildingRow(building) {
+  const isRegistering = building.status === "registering";
   return `
     <div class="building-row">
-      <div class="building-row__name"><strong>${escapeHtml(building.name)}</strong><small>${escapeHtml(building.address || "No address on file")}</small></div>
+      <div class="building-row__name">
+        <strong>${escapeHtml(building.name)} ${isRegistering ? '<span class="status-chip status-chip--registering">Registering</span>' : ""}</strong>
+        <small>${escapeHtml(building.address || "No address on file")}</small>
+      </div>
       <span class="quiet-label">${building.tag_count} reading${building.tag_count === 1 ? "" : "s"}</span>
       <span class="quiet-label">${building.superintendent_count} superintendent${building.superintendent_count === 1 ? "" : "s"} assigned</span>
+      ${isRegistering ? `<button type="button" class="button button--primary button--small push-live-button" data-building-id="${building.id}" ${building.tag_count ? "" : "disabled title=\"Build the checklist first\""}>Push to Super</button>` : ""}
     </div>`;
 }
 
@@ -392,7 +624,15 @@ function renderBuildingForm() {
     <form id="building-form" class="wizard-panel">
       <h3>Register a new building</h3>
       <label class="inspection-field"><span>Building name</span><input name="name" required autocomplete="off" /></label>
-      <label class="inspection-field"><span>Address <small>(optional)</small></span><input name="address" autocomplete="off" /></label>
+      <label class="inspection-field"><span>Address <small>(optional)</small></span><input name="address" id="building-address-input" autocomplete="off" /></label>
+      <div class="map-picker">
+        <button type="button" class="button button--outline button--small" id="find-on-map-button">${icon("building")} Find on map</button>
+        <div class="map-search-results" id="map-search-results"></div>
+        <div class="map-picker__canvas" id="building-map" hidden></div>
+        <p class="map-picker__hint" id="map-picker-hint">Search an address above, then drag the pin to fine-tune the exact spot. Optional — you can still register the building without it.</p>
+        <input type="hidden" name="latitude" id="building-latitude" />
+        <input type="hidden" name="longitude" id="building-longitude" />
+      </div>
       <div class="inspection-field"><span>Inspection days</span>
         <div class="day-checkboxes">
           ${days.map((day) => `<label class="day-checkbox"><input type="checkbox" name="days" value="${day}" ${["Mon", "Tue", "Wed", "Thu", "Fri"].includes(day) ? "checked" : ""} />${day}</label>`).join("")}
@@ -404,6 +644,69 @@ function renderBuildingForm() {
       </div>
       <p class="form-error" id="building-form-error" hidden role="alert"></p>
     </form>`;
+}
+
+// Leaflet needs a live DOM node it owns — kept out of `state` and never
+// touched by a full re-render, since renderApp() rebuilding the form's
+// innerHTML out from under an initialized map would break it.
+let buildingMap = null;
+let buildingMarker = null;
+
+function placeBuildingMapPin(lat, lon) {
+  document.querySelector("#building-latitude").value = lat;
+  document.querySelector("#building-longitude").value = lon;
+
+  const canvas = document.querySelector("#building-map");
+  canvas.hidden = false;
+
+  if (!buildingMap) {
+    buildingMap = L.map(canvas).setView([lat, lon], 16);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+      maxZoom: 19,
+    }).addTo(buildingMap);
+    buildingMarker = L.marker([lat, lon], { draggable: true }).addTo(buildingMap);
+    buildingMarker.on("dragend", () => {
+      const { lat: newLat, lng: newLon } = buildingMarker.getLatLng();
+      document.querySelector("#building-latitude").value = newLat;
+      document.querySelector("#building-longitude").value = newLon;
+    });
+  } else {
+    buildingMap.setView([lat, lon], 16);
+    buildingMarker.setLatLng([lat, lon]);
+    buildingMap.invalidateSize();
+  }
+}
+
+async function handleFindOnMap() {
+  const q = document.querySelector("#building-address-input").value.trim();
+  const resultsBox = document.querySelector("#map-search-results");
+  if (q.length < 3) {
+    resultsBox.innerHTML = `<p class="map-picker__hint">Type at least a few characters of the address first.</p>`;
+    return;
+  }
+  resultsBox.innerHTML = `<p class="map-picker__hint">Searching…</p>`;
+  try {
+    const { results } = await api.geocodeSearch(q);
+    if (!results.length) {
+      resultsBox.innerHTML = `<p class="map-picker__hint">No matches found — you can still register the building without a map location.</p>`;
+      return;
+    }
+    resultsBox.innerHTML = results
+      .map(
+        (r, index) =>
+          `<button type="button" class="map-search-result" data-lat="${r.lat}" data-lon="${r.lon}" data-index="${index}">${escapeHtml(r.label)}</button>`,
+      )
+      .join("");
+    resultsBox.querySelectorAll(".map-search-result").forEach((button) => {
+      button.addEventListener("click", () => {
+        placeBuildingMapPin(Number(button.dataset.lat), Number(button.dataset.lon));
+        resultsBox.innerHTML = "";
+      });
+    });
+  } catch (error) {
+    resultsBox.innerHTML = `<p class="map-picker__hint">${escapeHtml(error.message)}</p>`;
+  }
 }
 
 function renderBuildingUploadStep(wizard) {
@@ -477,6 +780,8 @@ function renderBuildingAssignStep(wizard) {
 
 function resetBuildingWizard() {
   state.buildingWizard = { step: "closed" };
+  buildingMap = null;
+  buildingMarker = null;
 }
 
 async function handleCreateBuilding(event) {
@@ -486,10 +791,14 @@ async function handleCreateBuilding(event) {
   const data = new FormData(form);
   const days = Array.from(form.querySelectorAll('input[name="days"]:checked')).map((el) => el.value);
   try {
+    const latitude = data.get("latitude") ? Number.parseFloat(data.get("latitude")) : null;
+    const longitude = data.get("longitude") ? Number.parseFloat(data.get("longitude")) : null;
     const { building } = await api.managerCreateBuilding({
       name: data.get("name"),
       address: data.get("address"),
       inspectionDays: days,
+      latitude,
+      longitude,
     });
     state.managerBuildings.push({ ...building, tag_count: 0, superintendent_count: 0 });
     state.buildingWizard = { step: "upload", building };
@@ -933,22 +1242,131 @@ async function handleInspectionSave(event) {
   }
 }
 
+// Same normal-range logic as the manager's flagging (worker/manager.js) —
+// duplicated client-side on purpose, so a superintendent gets caught before
+// submitting rather than finding out from the manager afterward.
+function clientFlagFor(tag, rawValue) {
+  const parameter = tag.parameter;
+  if (!parameter || rawValue == null || rawValue === "") return null;
+
+  if (tag.value_type === "on_off") {
+    if (!parameter.expected) return null;
+    return rawValue.trim().toLowerCase() === parameter.expected.trim().toLowerCase() ? null : "red";
+  }
+
+  if (parameter.min == null || parameter.max == null) return null;
+  const num = Number.parseFloat(rawValue);
+  if (Number.isNaN(num)) return "red";
+  if (num >= parameter.min && num <= parameter.max) return null;
+
+  const buffer = Math.max((parameter.max - parameter.min) * 0.1, 1);
+  return num >= parameter.min - buffer && num <= parameter.max + buffer ? "yellow" : "red";
+}
+
+function findFlaggedReadings(readings) {
+  return state.inspection.tags
+    .map((tag) => ({ tag, value: readings[tag.id], flag: clientFlagFor(tag, readings[tag.id]) }))
+    .filter((item) => item.flag);
+}
+
 async function handleInspectionSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const { readings } = collectInspectionForm(form);
+  const flagged = findFlaggedReadings(readings);
+
+  if (flagged.length && !state.confirmedOutOfRange) {
+    state.pendingSubmitForm = form;
+    renderOutOfRangeModal(flagged);
+    return;
+  }
+
+  await submitInspection(form);
+}
+
+async function submitInspection(form) {
   const button = document.querySelector("#submit-inspection-button");
   const error = document.querySelector("#inspection-error");
-  button.disabled = true;
-  button.textContent = "Submitting…";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Submitting…";
+  }
   try {
     state.inspection = await api.inspectionSubmit(collectInspectionForm(form));
+    state.confirmedOutOfRange = false;
     renderApp();
   } catch (requestError) {
-    error.textContent = requestError.message;
-    error.hidden = false;
-    button.disabled = false;
-    button.textContent = "Submit inspection";
+    if (error) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+    }
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Submit inspection";
+    }
   }
+}
+
+function renderOutOfRangeModal(flagged) {
+  const existing = document.querySelector("#out-of-range-modal");
+  if (existing) existing.remove();
+
+  const wrap = document.createElement("div");
+  wrap.id = "out-of-range-modal";
+  wrap.className = "modal-overlay";
+  wrap.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="out-of-range-title">
+      <h3 id="out-of-range-title">${icon("warning")} Double-check before submitting</h3>
+      <p>${flagged.length === 1 ? "This reading is" : "These readings are"} outside the normal range. Confirm each one before it goes to your operations manager.</p>
+      <div class="out-of-range-list">
+        ${flagged
+          .map(
+            (item) => `
+          <div class="out-of-range-item" data-tag-id="${item.tag.id}">
+            <div class="out-of-range-item__label"><strong>${escapeHtml([item.tag.tag_no, item.tag.reading_type].filter(Boolean).join(" — "))}</strong><span>You entered: ${escapeHtml(String(item.value))}${item.tag.unit ? " " + escapeHtml(item.tag.unit) : ""}</span></div>
+            <div class="out-of-range-item__actions">
+              <button type="button" class="button button--small button--outline" data-choice="fix">Let me fix it</button>
+              <button type="button" class="button button--small button--light" data-choice="normal">It's normal</button>
+              <button type="button" class="button button--small button--danger" data-choice="abnormal">It's abnormal</button>
+            </div>
+          </div>`,
+          )
+          .join("")}
+      </div>
+      <div class="inspection-actions">
+        <button type="button" class="button button--outline" id="out-of-range-cancel">Cancel</button>
+        <button type="button" class="button button--primary" id="out-of-range-confirm" disabled>Confirm &amp; submit</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  const decisions = new Map();
+  const confirmButton = wrap.querySelector("#out-of-range-confirm");
+
+  wrap.querySelectorAll(".out-of-range-item").forEach((item) => {
+    const tagId = item.dataset.tagId;
+    item.querySelectorAll("[data-choice]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const choice = button.dataset.choice;
+        if (choice === "fix") {
+          wrap.remove();
+          document.querySelector(`[data-field-tag-id="${tagId}"] input`)?.focus();
+          return;
+        }
+        decisions.set(tagId, choice);
+        item.querySelectorAll("[data-choice]").forEach((b) => b.classList.remove("is-selected"));
+        button.classList.add("is-selected");
+        confirmButton.disabled = decisions.size < flagged.length;
+      });
+    });
+  });
+
+  wrap.querySelector("#out-of-range-cancel").addEventListener("click", () => wrap.remove());
+  confirmButton.addEventListener("click", async () => {
+    state.confirmedOutOfRange = true;
+    wrap.remove();
+    await submitInspection(state.pendingSubmitForm);
+  });
 }
 
 function renderPropertyView(data) {
@@ -1019,9 +1437,12 @@ function bindDashboardEvents() {
   document.querySelector("#parameters-form")?.addEventListener("submit", handleParametersSave);
 
   document.querySelector("#register-building-toggle")?.addEventListener("click", () => {
+    buildingMap = null;
+    buildingMarker = null;
     state.buildingWizard = { step: "form" };
     renderApp();
   });
+  document.querySelector("#find-on-map-button")?.addEventListener("click", handleFindOnMap);
   document.querySelector("#cancel-building-form")?.addEventListener("click", () => {
     resetBuildingWizard();
     renderApp();
@@ -1053,6 +1474,48 @@ function bindDashboardEvents() {
     resetBuildingWizard();
     renderApp();
   });
+
+  document.querySelectorAll(".approve-request").forEach((button) => {
+    button.addEventListener("click", () => handlePendingRequestDecision(button, true));
+  });
+  document.querySelectorAll(".deny-request").forEach((button) => {
+    button.addEventListener("click", () => handlePendingRequestDecision(button, false));
+  });
+  document.querySelectorAll(".view-as-superintendent").forEach((button) => {
+    button.addEventListener("click", () => handleImpersonate(button));
+  });
+  document.querySelectorAll(".push-live-button").forEach((button) => {
+    button.addEventListener("click", () => handlePushLive(button));
+  });
+}
+
+async function handlePendingRequestDecision(button, approve) {
+  button.disabled = true;
+  const userId = Number(button.dataset.userId);
+  try {
+    await (approve ? api.managerApproveRequest(userId) : api.managerDenyRequest(userId));
+    state.pendingRequests = state.pendingRequests.filter((req) => req.id !== userId);
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handlePushLive(button) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Pushing live…";
+  try {
+    const buildingId = Number(button.dataset.buildingId);
+    await api.managerPushLive({ buildingId });
+    state.managerBuildings = state.managerBuildings.map((b) => (b.id === buildingId ? { ...b, status: "active" } : b));
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    button.title = error.message;
+  }
 }
 
 async function handleImpersonate(button) {

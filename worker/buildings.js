@@ -8,9 +8,9 @@ const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export async function handleBuildingsList(session, env, corsHeaders) {
   const result = await env.DB.prepare(
-    `SELECT b.id, b.name, b.address, b.region, b.inspection_days,
+    `SELECT b.id, b.name, b.address, b.region, b.inspection_days, b.status, b.latitude, b.longitude,
        (SELECT COUNT(*) FROM inspection_tags t WHERE t.building_id = b.id) AS tag_count,
-       (SELECT COUNT(*) FROM users u WHERE u.building_id = b.id AND u.role = 'superintendent') AS superintendent_count
+       (SELECT COUNT(*) FROM users u WHERE u.building_id = b.id AND u.role = 'superintendent' AND u.status = 'active') AS superintendent_count
      FROM buildings b WHERE b.region = ? ORDER BY b.id`,
   )
     .bind(session.region)
@@ -25,6 +25,8 @@ export async function handleBuildingCreate(request, session, env, corsHeaders) {
   const days = Array.isArray(body.inspectionDays)
     ? body.inspectionDays.filter((day) => DAY_NAMES.includes(day))
     : [];
+  const latitude = Number.isFinite(body.latitude) ? body.latitude : null;
+  const longitude = Number.isFinite(body.longitude) ? body.longitude : null;
 
   if (!name) return jsonError("A building name is required.", 400, corsHeaders);
   if (!days.length) return jsonError("Select at least one inspection day.", 400, corsHeaders);
@@ -32,18 +34,40 @@ export async function handleBuildingCreate(request, session, env, corsHeaders) {
   const inspectionDays = DAY_NAMES.filter((day) => days.includes(day)).join(",");
 
   const inserted = await env.DB.prepare(
-    "INSERT INTO buildings (name, address, region, inspection_days, created_by) VALUES (?, ?, ?, ?, ?)",
+    `INSERT INTO buildings (name, address, region, inspection_days, created_by, latitude, longitude, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'registering')`,
   )
-    .bind(name, address || null, session.region, inspectionDays, session.id)
+    .bind(name, address || null, session.region, inspectionDays, session.id, latitude, longitude)
     .run();
 
   const building = await env.DB.prepare(
-    "SELECT id, name, address, region, inspection_days FROM buildings WHERE id = ?",
+    "SELECT id, name, address, region, inspection_days, status, latitude, longitude FROM buildings WHERE id = ?",
   )
     .bind(inserted.meta.last_row_id)
     .first();
 
   return jsonOk({ building }, corsHeaders);
+}
+
+export async function handlePushLive(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const buildingId = Number.parseInt(body.buildingId, 10);
+
+  const building = await env.DB.prepare("SELECT id, status FROM buildings WHERE id = ? AND region = ?")
+    .bind(buildingId, session.region)
+    .first();
+  if (!building) return jsonError("Building not found.", 404, corsHeaders);
+  if (building.status === "active") return jsonOk({ ok: true, alreadyLive: true }, corsHeaders);
+
+  const tagCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM inspection_tags WHERE building_id = ?")
+    .bind(buildingId)
+    .first();
+  if (!tagCount.count) {
+    return jsonError("Build the checklist before pushing this building live.", 409, corsHeaders);
+  }
+
+  await env.DB.prepare("UPDATE buildings SET status = 'active' WHERE id = ?").bind(buildingId).run();
+  return jsonOk({ ok: true }, corsHeaders);
 }
 
 export async function handleUnassignedSuperintendents(session, env, corsHeaders) {
