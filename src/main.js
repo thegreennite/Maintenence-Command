@@ -1,13 +1,26 @@
 import "./styles.css";
-import "leaflet/dist/leaflet.css";
-import L from "leaflet";
-// Leaflet's default marker icon references image files by URL that Vite's
-// bundler doesn't resolve automatically — point it at the bundled assets
-// explicitly, or every marker silently renders as a broken image.
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
-L.Icon.Default.mergeOptions({ iconRetinaUrl: markerIcon2x, iconUrl: markerIcon, shadowUrl: markerShadow });
+
+// Google Maps JS API loads as a global script, not an npm module — lazily
+// injected the first time a map is actually shown, and cached so repeat
+// visits to the building form don't reload it.
+let googleMapsLoadPromise = null;
+function loadGoogleMaps() {
+  if (googleMapsLoadPromise) return googleMapsLoadPromise;
+  googleMapsLoadPromise = new Promise((resolve, reject) => {
+    const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+    if (!key) {
+      reject(new Error("Map isn't configured on this deployment yet."));
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&libraries=marker&loading=async&callback=__fhgMapsReady`;
+    script.async = true;
+    window.__fhgMapsReady = () => resolve(window.google.maps);
+    script.onerror = () => reject(new Error("Couldn't load Google Maps."));
+    document.head.appendChild(script);
+  });
+  return googleMapsLoadPromise;
+}
 
 const app = document.querySelector("#app");
 
@@ -650,35 +663,43 @@ function renderBuildingForm() {
     </form>`;
 }
 
-// Leaflet needs a live DOM node it owns — kept out of `state` and never
-// touched by a full re-render, since renderApp() rebuilding the form's
-// innerHTML out from under an initialized map would break it.
+// The map instance needs a live DOM node it owns — kept out of `state` and
+// never touched by a full re-render, since renderApp() rebuilding the
+// form's innerHTML out from under an initialized map would break it.
 let buildingMap = null;
 let buildingMarker = null;
 
-function placeBuildingMapPin(lat, lon) {
+async function placeBuildingMapPin(lat, lon) {
   document.querySelector("#building-latitude").value = lat;
   document.querySelector("#building-longitude").value = lon;
 
   const canvas = document.querySelector("#building-map");
   canvas.hidden = false;
 
+  let maps;
+  try {
+    maps = await loadGoogleMaps();
+  } catch (error) {
+    document.querySelector("#map-picker-hint").textContent = error.message;
+    return;
+  }
+  // The form may have been cancelled/re-rendered while the script loaded —
+  // don't touch a canvas node that's no longer in the live wizard.
+  if (!document.body.contains(canvas)) return;
+
+  const position = { lat, lng: lon };
   if (!buildingMap) {
-    buildingMap = L.map(canvas).setView([lat, lon], 16);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
-      maxZoom: 19,
-    }).addTo(buildingMap);
-    buildingMarker = L.marker([lat, lon], { draggable: true }).addTo(buildingMap);
-    buildingMarker.on("dragend", () => {
-      const { lat: newLat, lng: newLon } = buildingMarker.getLatLng();
-      document.querySelector("#building-latitude").value = newLat;
-      document.querySelector("#building-longitude").value = newLon;
+    buildingMap = new maps.Map(canvas, { center: position, zoom: 16 });
+    buildingMarker = new maps.Marker({ position, map: buildingMap, draggable: true });
+    buildingMarker.addListener("dragend", () => {
+      const newPosition = buildingMarker.getPosition();
+      document.querySelector("#building-latitude").value = newPosition.lat();
+      document.querySelector("#building-longitude").value = newPosition.lng();
     });
   } else {
-    buildingMap.setView([lat, lon], 16);
-    buildingMarker.setLatLng([lat, lon]);
-    buildingMap.invalidateSize();
+    buildingMap.setCenter(position);
+    buildingMarker.setPosition(position);
+    maps.event.trigger(buildingMap, "resize");
   }
 }
 

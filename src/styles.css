@@ -390,7 +390,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .registration-building-result:hover { border-color: var(--forest); }
 .registration-building-result small { color: var(--muted); }
 
-/* Map picker (Leaflet + OpenStreetMap) */
+/* Map picker (Google Maps) */
 .map-picker { display: flex; flex-direction: column; gap: 8px; }
 .map-search-results { display: flex; flex-direction: column; gap: 6px; }
 .map-search-result { text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: white; font-size: 13px; cursor: pointer; }

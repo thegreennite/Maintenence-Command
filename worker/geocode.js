@@ -1,40 +1,50 @@
-// Address search for the building-registration map picker, proxied through
-// the Worker so we can set a proper User-Agent (Nominatim's usage policy
-// requires one identifying the app — browsers won't let client-side code
-// set that header) and keep the free OpenStreetMap geocoder's request
-// pattern well-behaved rather than hitting it straight from the browser.
+// Address search for the building-registration map picker. Proxied through
+// the Worker so the Maps key used for search stays server-side (the
+// separate client-exposed key that renders the map itself is restricted by
+// HTTP referrer, which is the normal Google Maps security model).
 
-const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+const PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
 
-export async function handleGeocodeSearch(request, corsHeaders) {
+export async function handleGeocodeSearch(request, env, corsHeaders) {
   const url = new URL(request.url);
   const q = (url.searchParams.get("q") || "").trim();
   if (q.length < 3) return jsonOk({ results: [] }, corsHeaders);
 
-  const upstream = new URL(NOMINATIM_URL);
-  upstream.searchParams.set("q", q);
-  upstream.searchParams.set("format", "jsonv2");
-  upstream.searchParams.set("limit", "5");
+  if (!env.GOOGLE_MAPS_API_KEY) {
+    return jsonError("Map search isn't configured on this deployment yet.", 503, corsHeaders);
+  }
 
   let response;
   try {
-    response = await fetch(upstream, {
-      headers: { "User-Agent": "FHG-Command/1.0 (building registration; contact: ops@forest-hill-group.example)" },
+    response = await fetch(PLACES_SEARCH_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": env.GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location",
+      },
+      body: JSON.stringify({ textQuery: q }),
     });
   } catch (error) {
-    console.error("Nominatim request failed", error);
+    console.error("Places API request failed", error);
     return jsonError("The map search is unavailable right now.", 502, corsHeaders);
   }
 
-  if (!response.ok) return jsonError("The map search is unavailable right now.", 502, corsHeaders);
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    console.error("Places API error", response.status, errText);
+    return jsonError("The map search is unavailable right now.", 502, corsHeaders);
+  }
 
-  const data = await response.json().catch(() => []);
-  const results = (Array.isArray(data) ? data : []).map((item) => ({
-    label: item.display_name,
-    lat: Number.parseFloat(item.lat),
-    lon: Number.parseFloat(item.lon),
-  }));
-
+  const data = await response.json().catch(() => ({}));
+  const results = (data.places || []).map((place) => {
+    const name = place.displayName?.text || "";
+    const address = place.formattedAddress || "";
+    // formattedAddress often already starts with the place name (e.g. a
+    // street address search) -- only prepend it when it adds something new.
+    const label = name && !address.startsWith(name) ? `${name}, ${address}` : address || name;
+    return { label, lat: place.location?.latitude, lon: place.location?.longitude };
+  });
   return jsonOk({ results }, corsHeaders);
 }
 

@@ -17,8 +17,5 @@
   "devDependencies": {
     "vite": "7.3.6",
     "wrangler": "4.127.0"
-  },
-  "dependencies": {
-    "leaflet": "^1.9.4"
   }
 }

@@ -65,7 +65,7 @@ export default {
         return handleSelfRegister(request, env, cors.headers);
       }
       if (url.pathname === "/api/geocode/search" && request.method === "GET") {
-        return handleGeocodeSearch(request, cors.headers);
+        return handleGeocodeSearch(request, env, cors.headers);
       }
 
       if (url.pathname === "/api/auth/logout" && request.method === "POST") {
