@@ -21,6 +21,7 @@ import {
   handleSaveTags,
 } from "./buildings.js";
 import { handleGeocodeSearch } from "./geocode.js";
+import { handleFlagIssue, handleManagerWorkOrders, handleResolveWorkOrder } from "./work-orders.js";
 import {
   handleBuildingSearchForRegistration,
   handleSelfRegister,
@@ -114,6 +115,27 @@ export default {
           return json({ error: "Superintendent access required" }, 403, cors.headers);
         }
         return handleInspectionSubmit(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/inspections/flag-issue" && request.method === "POST") {
+        if (session.role !== "superintendent") {
+          return json({ error: "Superintendent access required" }, 403, cors.headers);
+        }
+        return handleFlagIssue(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/work-orders" && request.method === "GET") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleManagerWorkOrders(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/work-orders/resolve" && request.method === "POST") {
+        if (session.role !== "regional_manager") {
+          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        }
+        return handleResolveWorkOrder(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/inspections/photo" && request.method === "POST") {

@@ -2,6 +2,8 @@
 // just prove submit -> save -> view against a real building and a real
 // checklist pulled from an actual Forest Hill inspection sheet.
 
+import { createReadingWorkOrder } from "./work-orders.js";
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -173,6 +175,14 @@ export async function handleInspectionSubmit(request, session, env, corsHeaders)
   )
     .bind(submissionId)
     .run();
+
+  const confirmedAbnormalTagIds = Array.isArray(body.confirmedAbnormalTagIds) ? body.confirmedAbnormalTagIds : [];
+  for (const rawTagId of confirmedAbnormalTagIds) {
+    const tagId = Number.parseInt(rawTagId, 10);
+    const value = body.readings?.[tagId] ?? body.readings?.[String(tagId)];
+    if (!tagId || value == null) continue;
+    await createReadingWorkOrder(env, { buildingId: session.building_id, tagId, value, createdBy: session.id });
+  }
 
   return handleInspectionToday(session, env, corsHeaders);
 }

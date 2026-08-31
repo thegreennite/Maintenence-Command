@@ -36,11 +36,15 @@ const state = {
   selectedExceptionId: null,
   loading: true,
   confirmedOutOfRange: false,
+  confirmedAbnormalTagIds: [],
   pendingSubmitForm: null,
   authScreen: "login",
   registration: { role: null, step: "building", building: null, buildingResults: [], buildingSearched: false },
   pendingRequests: [],
   managerSuperintendents: [],
+  workOrders: [],
+  flagIssueOpen: false,
+  flagIssueJustSent: false,
 };
 
 // In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
@@ -156,6 +160,15 @@ const api = {
   },
   geocodeSearch(q) {
     return this.request(`/geocode/search?q=${encodeURIComponent(q)}`);
+  },
+  flagIssue(payload) {
+    return this.request("/inspections/flag-issue", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerWorkOrders() {
+    return this.request("/manager/work-orders");
+  },
+  resolveWorkOrder(workOrderId) {
+    return this.request("/manager/work-orders/resolve", { method: "POST", body: JSON.stringify({ workOrderId }) });
   },
 };
 
@@ -431,16 +444,18 @@ async function loadDashboard() {
   state.managerInspection = managerInspectionResponse;
   state.propertyInspections = propertyResponse;
   if (isRegionalManager) {
-    const [buildingsResponse, pendingResponse, superintendentsResponse] = await Promise.all([
+    const [buildingsResponse, pendingResponse, superintendentsResponse, workOrdersResponse] = await Promise.all([
       api.managerBuildings(),
       api.managerPendingRequests(),
       api.managerSuperintendents(),
+      api.managerWorkOrders(),
     ]);
     state.managerBuildings = buildingsResponse.buildings;
     state.pendingRequests = pendingResponse.requests;
     state.managerSuperintendents = superintendentsResponse.superintendents;
+    state.workOrders = workOrdersResponse.workOrders;
+    state.selectedExceptionId = state.workOrders.find((w) => w.status === "open")?.id || null;
   }
-  state.selectedExceptionId = state.dashboard?.exceptions?.[0]?.id || null;
   renderApp();
 }
 
@@ -490,7 +505,7 @@ function renderDashboard(data) {
       : data.kind === "admin"
         ? renderAdminDashboard(data)
         : data.kind === "superintendent"
-          ? renderInspectionView(state.inspection)
+          ? renderInspectionView(state.inspection) + renderFlagIssuePanel()
           : data.kind === "property_manager"
             ? renderPropertyView(state.propertyInspections)
             : renderRoleShell(data);
@@ -516,13 +531,7 @@ function renderManagerDashboard(data) {
       </div>
     </section>
     <div class="operations-grid">
-      <section class="card exception-card" aria-labelledby="exception-title">
-        <div class="card__header"><div><p class="section-kicker">Exception Queue</p><h2 id="exception-title">Needs your attention</h2></div><span class="count-badge">${data.exceptions.length}</span></div>
-        <div class="exception-list">
-          ${data.exceptions.map(renderException).join("")}
-        </div>
-      </section>
-      ${renderExceptionDetail(data)}
+      ${renderExceptionQueue()}
       <section class="card coverage-card" aria-labelledby="coverage-title">
         <div class="card__header"><div><p class="section-kicker">Today’s Coverage</p><h2 id="coverage-title">People on point</h2></div><span class="quiet-label">Central portfolio</span></div>
         <div class="coverage-list">
@@ -1034,25 +1043,64 @@ function renderMetric(metric) {
   </article>`;
 }
 
+function timeAgo(isoValue) {
+  if (!isoValue) return "";
+  const ms = Date.now() - new Date(isoValue + "Z").getTime();
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hr${hours === 1 ? "" : "s"} ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function renderExceptionQueue() {
+  const open = state.workOrders.filter((w) => w.status === "open");
+  if (!open.length) {
+    return `<section class="card exception-card" aria-labelledby="exception-title">
+      <div class="card__header"><div><p class="section-kicker">Exception Queue</p><h2 id="exception-title">Needs your attention</h2></div><span class="count-badge">0</span></div>
+      <p class="empty-state-inline">${icon("check")} Nothing open right now.</p>
+    </section>`;
+  }
+  return `
+    <section class="card exception-card" aria-labelledby="exception-title">
+      <div class="card__header"><div><p class="section-kicker">Exception Queue</p><h2 id="exception-title">Needs your attention</h2></div><span class="count-badge">${open.length}</span></div>
+      <div class="exception-list">
+        ${open.map(renderException).join("")}
+      </div>
+    </section>
+    ${renderExceptionDetail(open)}`;
+}
+
 function renderException(item) {
   const selected = item.id === state.selectedExceptionId;
-  return `<button class="exception-item ${selected ? "is-selected" : ""}" data-exception-id="${escapeHtml(item.id)}" aria-pressed="${selected}">
-    <span class="urgency-bar urgency-bar--${escapeHtml(item.tone)}"></span>
-    <span class="exception-copy"><span class="exception-meta"><strong>${escapeHtml(item.id)}</strong><span class="due due--${escapeHtml(item.tone)}">${icon("clock")}${escapeHtml(item.due)}</span></span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.property)} · ${escapeHtml(item.owner)}</small></span>
+  const tone = item.source === "reading" ? "danger" : "warning";
+  return `<button class="exception-item ${selected ? "is-selected" : ""}" data-exception-id="${item.id}" aria-pressed="${selected}">
+    <span class="urgency-bar urgency-bar--${tone}"></span>
+    <span class="exception-copy"><span class="exception-meta"><strong>${escapeHtml(item.category ? CATEGORY_ICON_LABEL[item.category] || item.category : "Reading")}</strong><span class="due due--${tone}">${icon("clock")}${timeAgo(item.created_at)}</span></span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.building_name)} · ${escapeHtml(item.reported_by || "Unknown")}</small></span>
     ${icon("arrow")}
   </button>`;
 }
 
-function renderExceptionDetail(data) {
-  const item = data.exceptions.find((exception) => exception.id === state.selectedExceptionId) || data.exceptions[0];
+const CATEGORY_ICON_LABEL = {
+  inventory: "Inventory",
+  chemicals: "Chemicals",
+  schedule: "Schedule",
+  method: "Method",
+  other: "Flagged",
+};
+
+function renderExceptionDetail(open) {
+  const item = open.find((w) => w.id === state.selectedExceptionId) || open[0];
   if (!item) return "";
-  return `<aside class="card detail-card detail-card--${escapeHtml(item.tone)}" aria-labelledby="detail-title">
+  const tone = item.source === "reading" ? "danger" : "warning";
+  return `<aside class="card detail-card detail-card--${tone}" aria-labelledby="detail-title">
     <div class="detail-card__flag">${icon("warning")} Priority detail</div>
-    <p class="eyebrow">${escapeHtml(item.id)} · ${escapeHtml(item.property)}</p>
+    <p class="eyebrow">${escapeHtml(item.building_name)} · ${timeAgo(item.created_at)}</p>
     <h2 id="detail-title">${escapeHtml(item.title)}</h2>
-    <p class="detail-copy">${escapeHtml(item.detail)}</p>
-    <dl class="detail-facts"><div><dt>Owner</dt><dd>${escapeHtml(item.owner)}</dd></div><div><dt>Response due</dt><dd>${escapeHtml(item.due)}</dd></div></dl>
-    <button class="button button--dark" type="button">Open work item ${icon("arrow")}</button>
+    <p class="detail-copy">${escapeHtml(item.description || "")}</p>
+    <dl class="detail-facts"><div><dt>Reported by</dt><dd>${escapeHtml(item.reported_by || "Unknown")}</dd></div><div><dt>Source</dt><dd>${item.source === "reading" ? "Inspection reading" : CATEGORY_ICON_LABEL[item.category] || "Flagged issue"}</dd></div></dl>
+    <button class="button button--dark resolve-work-order" type="button" data-work-order-id="${item.id}">Mark resolved ${icon("check")}</button>
   </aside>`;
 }
 
@@ -1125,6 +1173,67 @@ function renderInspectionView(data) {
         }
       </form>
     </section>`;
+}
+
+const ISSUE_CATEGORIES = {
+  inventory: "Inventory",
+  chemicals: "Chemicals / supplies",
+  schedule: "Schedule question",
+  method: "Method / procedure question",
+  other: "Something else",
+};
+
+function renderFlagIssuePanel() {
+  if (!state.flagIssueOpen) {
+    return `<section class="card flag-issue-card">
+      <div class="card__header">
+        <div><p class="section-kicker">Need help with something else?</p><h2>Not about a reading</h2></div>
+        <button type="button" class="button button--outline button--small" id="open-flag-issue">Flag an issue</button>
+      </div>
+      ${
+        state.flagIssueJustSent
+          ? `<p class="parameters-intro">${icon("check")} Sent to your operations manager.</p>`
+          : `<p class="parameters-intro">Inventory, low chemicals, a schedule question, or how to clean something — anything that needs your operations manager's attention and isn't something a coworker can answer.</p>`
+      }
+    </section>`;
+  }
+  return `<section class="card flag-issue-card">
+    <form id="flag-issue-form" class="wizard-panel">
+      <h3>Flag an issue for your operations manager</h3>
+      <div class="inspection-field"><span>What kind of issue?</span>
+        <select name="category">
+          ${Object.entries(ISSUE_CATEGORIES)
+            .map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`)
+            .join("")}
+        </select>
+      </div>
+      <label class="inspection-field"><span>Describe it</span><textarea name="description" rows="3" required placeholder="Be specific — what's needed, and how urgent it is."></textarea></label>
+      <div class="inspection-actions">
+        <button type="button" class="button button--outline" id="cancel-flag-issue">Cancel</button>
+        <button type="submit" class="button button--primary">Send to operations manager</button>
+      </div>
+      <p class="form-error" id="flag-issue-error" hidden role="alert"></p>
+    </form>
+  </section>`;
+}
+
+async function handleFlagIssueSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const error = document.querySelector("#flag-issue-error");
+  const data = new FormData(form);
+  button.disabled = true;
+  try {
+    await api.flagIssue({ category: data.get("category"), description: data.get("description") });
+    state.flagIssueOpen = false;
+    state.flagIssueJustSent = true;
+    renderApp();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+    button.disabled = false;
+  }
 }
 
 function renderInspectionStatusBadge(data) {
@@ -1333,8 +1442,12 @@ async function submitInspection(form) {
     button.textContent = "Submitting…";
   }
   try {
-    state.inspection = await api.inspectionSubmit(collectInspectionForm(form));
+    state.inspection = await api.inspectionSubmit({
+      ...collectInspectionForm(form),
+      confirmedAbnormalTagIds: state.confirmedAbnormalTagIds || [],
+    });
     state.confirmedOutOfRange = false;
+    state.confirmedAbnormalTagIds = [];
     renderApp();
   } catch (requestError) {
     if (error) {
@@ -1405,6 +1518,9 @@ function renderOutOfRangeModal(flagged) {
   wrap.querySelector("#out-of-range-cancel").addEventListener("click", () => wrap.remove());
   confirmButton.addEventListener("click", async () => {
     state.confirmedOutOfRange = true;
+    state.confirmedAbnormalTagIds = Array.from(decisions.entries())
+      .filter(([, choice]) => choice === "abnormal")
+      .map(([tagId]) => Number(tagId));
     wrap.remove();
     await submitInspection(state.pendingSubmitForm);
   });
@@ -1463,10 +1579,23 @@ function renderErrorState() {
 function bindDashboardEvents() {
   document.querySelectorAll("[data-exception-id]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.selectedExceptionId = button.dataset.exceptionId;
+      state.selectedExceptionId = Number(button.dataset.exceptionId);
       renderApp();
     });
   });
+  document.querySelectorAll(".resolve-work-order").forEach((button) => {
+    button.addEventListener("click", () => handleResolveWorkOrder(button));
+  });
+  document.querySelector("#open-flag-issue")?.addEventListener("click", () => {
+    state.flagIssueOpen = true;
+    state.flagIssueJustSent = false;
+    renderApp();
+  });
+  document.querySelector("#cancel-flag-issue")?.addEventListener("click", () => {
+    state.flagIssueOpen = false;
+    renderApp();
+  });
+  document.querySelector("#flag-issue-form")?.addEventListener("submit", handleFlagIssueSubmit);
   document.querySelectorAll(".impersonate-button").forEach((button) => {
     button.addEventListener("click", () => handleImpersonate(button));
   });
@@ -1550,6 +1679,24 @@ async function handlePendingRequestDecision(button, approve) {
     renderApp();
   } catch (error) {
     button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleResolveWorkOrder(button) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Resolving…";
+  try {
+    const workOrderId = Number(button.dataset.workOrderId);
+    await api.resolveWorkOrder(workOrderId);
+    state.workOrders = state.workOrders.map((w) => (w.id === workOrderId ? { ...w, status: "resolved" } : w));
+    const remaining = state.workOrders.filter((w) => w.status === "open");
+    state.selectedExceptionId = remaining[0]?.id || null;
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = originalLabel;
     button.title = error.message;
   }
 }
