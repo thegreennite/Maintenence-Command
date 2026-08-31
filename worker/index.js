@@ -22,6 +22,7 @@ import {
 } from "./buildings.js";
 import { handleGeocodeSearch } from "./geocode.js";
 import { handleFlagIssue, handleManagerWorkOrders, handleResolveWorkOrder } from "./work-orders.js";
+import { handleAdminStats } from "./admin-stats.js";
 import {
   handleBuildingSearchForRegistration,
   handleSelfRegister,
@@ -86,6 +87,13 @@ export default {
 
       if (url.pathname === "/api/admin/accounts" && request.method === "GET") {
         return handleAccounts(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/admin/stats" && request.method === "GET") {
+        if (session.role !== "admin") {
+          return json({ error: "Administrator access required" }, 403, cors.headers);
+        }
+        return handleAdminStats(env, cors.headers);
       }
 
       if (url.pathname === "/api/admin/impersonate" && request.method === "POST") {

@@ -11,6 +11,10 @@ migrations_dir = "migrations"
 [vars]
 ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,https://fhg-command.pages.dev"
 SESSION_TTL_HOURS = "12"
+# Not secret -- the account ID and this Worker's own D1 database ID, needed
+# so the admin stats endpoint can query Cloudflare's API about itself.
+CLOUDFLARE_ACCOUNT_ID = "c0f148161abb7df271064bb6f37f7227"
+D1_DATABASE_ID = "96ae85a7-61f5-493e-847b-51a17aa39465"
 
 [observability]
 enabled = true

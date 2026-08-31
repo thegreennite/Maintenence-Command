@@ -89,6 +89,9 @@ const api = {
   accounts() {
     return this.request("/admin/accounts");
   },
+  adminStats() {
+    return this.request("/admin/stats");
+  },
   impersonate(userId) {
     return this.request("/admin/impersonate", {
       method: "POST",
@@ -427,6 +430,7 @@ async function handleLogin(event) {
 async function loadDashboard() {
   renderLoading();
   const isAdminActor = state.session?.actor?.role === "admin";
+  const isAdminViewing = state.session?.user?.role === "admin";
   const isSuperintendent = state.session?.user?.role === "superintendent";
   const isRegionalManager = state.session?.user?.role === "regional_manager";
   const isPropertyManager = state.session?.user?.role === "property_manager";
@@ -438,6 +442,7 @@ async function loadDashboard() {
       isRegionalManager ? api.managerInspection() : Promise.resolve(null),
       isPropertyManager ? api.propertyInspections() : Promise.resolve(null),
     ]);
+  state.adminStats = isAdminViewing ? await api.adminStats().catch(() => null) : null;
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
   state.inspection = inspectionResponse;
@@ -864,11 +869,12 @@ async function handleBuildingSheetPhoto(event) {
   const file = input.files?.[0];
   if (!file) return;
   const status = document.querySelector("#building-sheet-status");
-  status.textContent = "Reading the sheet…";
   status.className = "photo-capture__status photo-capture__status--busy";
+  const stopAnimation = startReadingAnimation(status, { estimateSeconds: 8 });
   try {
     const imageBase64 = await fileToBase64(file);
     const { proposedTags } = await api.managerGenerateTags({ imageBase64, mediaType: file.type });
+    stopAnimation();
     if (!proposedTags.length) {
       status.textContent = "Couldn't confidently read that photo — try a clearer, closer shot of one section.";
       status.className = "photo-capture__status photo-capture__status--warning";
@@ -877,6 +883,7 @@ async function handleBuildingSheetPhoto(event) {
     state.buildingWizard = { ...state.buildingWizard, step: "review", proposedTags };
     renderApp();
   } catch (requestError) {
+    stopAnimation();
     status.textContent = requestError.message;
     status.className = "photo-capture__status photo-capture__status--warning";
   } finally {
@@ -1121,7 +1128,57 @@ function renderAdminDashboard(data) {
       <div class="account-grid">
         ${state.accounts.map(renderAccount).join("")}
       </div>
+    </section>
+    ${renderStatsPanel()}`;
+}
+
+function renderStatsPanel() {
+  if (!state.adminStats) {
+    return `<section class="card"><div class="card__header"><div><p class="section-kicker">Infrastructure</p><h2>Connections &amp; usage</h2></div></div><p class="empty-state-inline">Couldn't load live usage right now.</p></section>`;
+  }
+  const { connections, usage } = state.adminStats;
+  return `
+    <section class="card" aria-labelledby="connections-title">
+      <div class="card__header"><div><p class="section-kicker">Infrastructure</p><h2 id="connections-title">What's connected</h2></div></div>
+      <div class="buildings-list">
+        ${connections.map(renderConnectionRow).join("")}
+      </div>
+    </section>
+    <section class="card" aria-labelledby="usage-title">
+      <div class="card__header"><div><p class="section-kicker">Live usage</p><h2 id="usage-title">Free tier vs. today</h2></div><span class="quiet-label">Cloudflare only — updates on page load</span></div>
+      <div class="usage-bars">
+        ${renderUsageBar(usage.workers)}
+        ${renderUsageBar(usage.d1?.storage)}
+        ${renderUsageBar(usage.d1?.rowsRead)}
+        ${renderUsageBar(usage.d1?.rowsWritten)}
+        ${renderUsageBar(usage.pages)}
+      </div>
+      <p class="map-picker__hint">Gemini and Google Maps usage aren't pulled live here yet — check console.cloud.google.com for those.</p>
     </section>`;
+}
+
+function renderConnectionRow(conn) {
+  const isLive = conn.status === "connected";
+  return `<div class="building-row">
+    <div class="building-row__name"><strong>${escapeHtml(conn.name)}</strong><small>${escapeHtml(conn.role)}${conn.note ? " — " + escapeHtml(conn.note) : ""}</small></div>
+    <span class="status-chip ${isLive ? "status-chip--live" : "status-chip--registering"}">${isLive ? "Connected" : "Not set up"}</span>
+  </div>`;
+}
+
+function renderUsageBar(metric) {
+  if (!metric || metric.error) return "";
+  const tone = metric.percent >= 90 ? "danger" : metric.percent >= 60 ? "warning" : "success";
+  // The real percent is what's shown in the label — this is just a visual
+  // floor so real, nonzero usage doesn't render as an invisible sliver.
+  const barWidth = metric.percent > 0 ? Math.max(metric.percent, 1.5) : 0;
+  return `<div class="usage-bar">
+    <div class="usage-bar__label"><span>${escapeHtml(metric.label)}</span><span class="quiet-label">${formatNumber(metric.used)} / ${formatNumber(metric.limit)} ${escapeHtml(metric.unit)} · ${escapeHtml(metric.period)} · ${metric.percent}%</span></div>
+    <div class="usage-bar__track"><span class="usage-bar__fill usage-bar__fill--${tone}" style="width:${barWidth}%"></span></div>
+  </div>`;
+}
+
+function formatNumber(n) {
+  return new Intl.NumberFormat("en-US").format(n);
 }
 
 function renderAccount(account) {
@@ -1288,6 +1345,33 @@ function slugify(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+// A rotating, mildly-funny status so a ~7-9s AI call doesn't read as
+// "did this break?" — cycles a message every ~1.5s and counts up real
+// elapsed seconds so the humor doesn't outstay a genuinely slow response.
+const READING_JOKES = [
+  "Squinting at your handwriting…",
+  "Arguing with a boiler about its own pressure…",
+  "Counting gauges (there are a lot of gauges)…",
+  "Politely asking the AI to focus…",
+  "Cross-referencing pipe labels…",
+  "Zooming in on a smudge, hoping it's a number…",
+  "Double-checking it's not just a coffee stain…",
+  "Almost there, we promise…",
+];
+
+function startReadingAnimation(statusEl, { estimateSeconds = 8 } = {}) {
+  const start = Date.now();
+  let index = 0;
+  const tick = () => {
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    statusEl.textContent = `${READING_JOKES[index % READING_JOKES.length]} (usually ~${estimateSeconds}s — ${elapsed}s so far)`;
+    index += 1;
+  };
+  tick();
+  const interval = setInterval(tick, 1500);
+  return () => clearInterval(interval);
+}
+
 async function fileToBase64(file) {
   const buffer = await file.arrayBuffer();
   let binary = "";
@@ -1309,11 +1393,12 @@ async function handlePhotoCapture(event) {
     (el) => Number(el.dataset.tagId),
   );
 
-  status.textContent = "Reading photo…";
   status.className = "photo-capture__status photo-capture__status--busy";
+  const stopAnimation = startReadingAnimation(status, { estimateSeconds: 6 });
   try {
     const imageBase64 = await fileToBase64(file);
     const response = await api.inspectionPhoto({ tagIds, imageBase64, mediaType: file.type });
+    stopAnimation();
     let filled = 0;
     const unclear = [];
     for (const result of response.results) {
@@ -1335,6 +1420,7 @@ async function handlePhotoCapture(event) {
         : "Couldn't read any of these readings in that photo — try again";
     status.className = `photo-capture__status ${unclear.length || !filled ? "photo-capture__status--warning" : "photo-capture__status--success"}`;
   } catch (error) {
+    stopAnimation();
     status.textContent = error.message;
     status.className = "photo-capture__status photo-capture__status--warning";
   } finally {

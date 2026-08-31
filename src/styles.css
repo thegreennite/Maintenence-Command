@@ -404,3 +404,14 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 /* Status chip on a building row */
 .status-chip { display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: 999px; vertical-align: middle; margin-left: 6px; }
 .status-chip--registering { color: #9c6b0c; background: var(--warning-soft); }
+.status-chip--live { color: #206a45; background: var(--success-soft); }
+
+/* Live usage bars (admin) */
+.usage-bars { display: flex; flex-direction: column; gap: 16px; padding: 20px 22px; }
+.usage-bar { display: flex; flex-direction: column; gap: 6px; }
+.usage-bar__label { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; font-weight: 600; gap: 10px; }
+.usage-bar__track { height: 8px; border-radius: 99px; background: var(--surface-2, #e5eae7); overflow: hidden; }
+.usage-bar__fill { display: block; height: 100%; border-radius: 99px; transition: width .4s ease; }
+.usage-bar__fill--success { background: var(--success); }
+.usage-bar__fill--warning { background: var(--warning); }
+.usage-bar__fill--danger { background: var(--danger); }
