@@ -17,5 +17,8 @@
   "devDependencies": {
     "vite": "7.3.6",
     "wrangler": "4.127.0"
+  },
+  "dependencies": {
+    "jspdf": "^4.2.1"
   }
 }

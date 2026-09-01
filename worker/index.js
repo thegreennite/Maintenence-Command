@@ -10,7 +10,9 @@ import { dashboardForRole, roleLabels } from "./dashboard-data.js";
 import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit } from "./inspections.js";
 import { handleManagerInspection, handleManagerParametersSave, handleManagerSuperintendents } from "./manager.js";
 import { handlePropertyInspections } from "./property.js";
-import { handleInspectionPhoto } from "./vision.js";
+import { handleInspectionPhoto, handleCommandModePhoto } from "./vision.js";
+import { handleListLocations, handleCreateLocation, handleDeleteLocation, handleAssignTagLocation } from "./locations.js";
+import { handleInspectionHistory, handleInspectionDetail } from "./inspection-history.js";
 import {
   handleBuildingsList,
   handleBuildingCreate,
@@ -183,6 +185,13 @@ export default {
         return handleInspectionPhoto(request, session, env, cors.headers);
       }
 
+      if (url.pathname === "/api/inspections/command-photo" && request.method === "POST") {
+        if (session.role !== "superintendent") {
+          return json({ error: "Superintendent access required" }, 403, cors.headers);
+        }
+        return handleCommandModePhoto(request, session, env, cors.headers);
+      }
+
       if (url.pathname === "/api/manager/inspection" && request.method === "GET") {
         if (session.role !== "regional_manager") {
           return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
@@ -293,6 +302,48 @@ export default {
           return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignWorkOrder(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/locations" && request.method === "GET") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleListLocations(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/locations/create" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleCreateLocation(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/locations/delete" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleDeleteLocation(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/tags/location" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleAssignTagLocation(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/buildings/inspection-history" && request.method === "GET") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleInspectionHistory(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/buildings/inspection-detail" && request.method === "GET") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleInspectionDetail(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/superintendents" && request.method === "GET") {

@@ -1,4 +1,5 @@
 import "./styles.css";
+import { jsPDF } from "jspdf";
 
 // Google Maps JS API loads as a global script, not an npm module — lazily
 // injected the first time a map is actually shown, and cached so repeat
@@ -50,6 +51,10 @@ const state = {
   buildingWorld: null,
   buildingWorldEditing: false,
   buildingWorldAssignableUsers: [],
+  buildingWorldLocations: [],
+  buildingWorldManagingLocations: false,
+  buildingWorldHistory: null,
+  commandMode: null,
 };
 
 // In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
@@ -216,6 +221,27 @@ const api = {
   },
   photoViewUrl(key) {
     return `${API_BASE}/api/photos/view?key=${encodeURIComponent(key)}`;
+  },
+  commandModePhoto(payload) {
+    return this.request("/inspections/command-photo", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerLocations(buildingId) {
+    return this.request(`/manager/locations?buildingId=${buildingId}`);
+  },
+  createLocation(payload) {
+    return this.request("/manager/locations/create", { method: "POST", body: JSON.stringify(payload) });
+  },
+  deleteLocation(locationId) {
+    return this.request("/manager/locations/delete", { method: "POST", body: JSON.stringify({ locationId }) });
+  },
+  assignTagLocation(payload) {
+    return this.request("/manager/tags/location", { method: "POST", body: JSON.stringify(payload) });
+  },
+  inspectionHistory(buildingId) {
+    return this.request(`/manager/buildings/inspection-history?buildingId=${buildingId}`);
+  },
+  inspectionDetail(buildingId, date) {
+    return this.request(`/manager/buildings/inspection-detail?buildingId=${buildingId}&date=${date}`);
   },
 };
 
@@ -700,11 +726,18 @@ function renderApp() {
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
   document.querySelector("#return-admin")?.addEventListener("click", handleReturnToAdmin);
   document.querySelector("#open-profile-edit")?.addEventListener("click", () => renderProfileEditModal(user));
-  bindDashboardEvents();
+  if (state.commandMode?.active) {
+    bindCommandModeEvents();
+  } else {
+    bindDashboardEvents();
+  }
 }
 
 function renderDashboard(data) {
   if (!data) return renderErrorState();
+  if (state.commandMode?.active && data.kind === "superintendent") {
+    return renderCommandMode();
+  }
   if (state.buildingWorld && (data.kind === "regional_manager" || data.kind === "admin")) {
     return renderBuildingWorld();
   }
@@ -1386,10 +1419,12 @@ function renderAdminDashboard(data) {
 async function openBuildingWorld(buildingId) {
   state.buildingWorld = { loading: true, buildingId };
   state.buildingWorldEditing = false;
+  state.buildingWorldHistory = null;
   renderApp();
-  const [detail, assignable] = await Promise.all([
+  const [detail, assignable, history] = await Promise.all([
     api.buildingDetail(buildingId).catch(() => null),
     api.assignableUsers().catch(() => ({ users: [] })),
+    api.inspectionHistory(buildingId).catch(() => ({ submissions: [] })),
   ]);
   if (!detail) {
     state.buildingWorld = null;
@@ -1398,6 +1433,7 @@ async function openBuildingWorld(buildingId) {
   }
   state.buildingWorld = { loading: false, buildingId, ...detail };
   state.buildingWorldAssignableUsers = assignable.users;
+  state.buildingWorldHistory = history.submissions;
   renderApp();
 }
 
@@ -1406,7 +1442,133 @@ function closeBuildingWorld() {
   buildingMarker = null;
   state.buildingWorld = null;
   state.buildingWorldEditing = false;
+  state.buildingWorldHistory = null;
   renderApp();
+}
+
+async function refreshBuildingWorldLocations() {
+  const detail = await api.buildingDetail(state.buildingWorld.buildingId).catch(() => null);
+  if (!detail) return;
+  state.buildingWorld.locations = detail.locations;
+  state.buildingWorld.tags = detail.tags;
+  renderApp();
+}
+
+async function handleAddLocation(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const input = form.querySelector('input[name="name"]');
+  const name = input.value.trim();
+  if (!name) return;
+  input.disabled = true;
+  try {
+    await api.createLocation({ buildingId: state.buildingWorld.buildingId, name });
+    input.value = "";
+    await refreshBuildingWorldLocations();
+  } finally {
+    input.disabled = false;
+  }
+}
+
+async function handleRemoveLocation(button) {
+  button.disabled = true;
+  try {
+    await api.deleteLocation(Number(button.dataset.locationId));
+    await refreshBuildingWorldLocations();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleAssignTagLocation(select) {
+  select.disabled = true;
+  try {
+    await api.assignTagLocation({ tagId: Number(select.dataset.tagId), locationId: select.value || null });
+    const tag = state.buildingWorld.tags.find((t) => t.id === Number(select.dataset.tagId));
+    if (tag) tag.location_id = select.value ? Number(select.value) : null;
+  } catch (error) {
+    select.title = error.message;
+  } finally {
+    select.disabled = false;
+  }
+}
+
+// One PDF per submitted day, built client-side from the same readings a
+// manager sees on screen -- no server-side rendering needed, and it works
+// from any browser the moment it's clicked.
+async function handleDownloadInspectionPdf(button) {
+  const buildingId = Number(button.dataset.buildingId);
+  const date = button.dataset.date;
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Building PDF…";
+  try {
+    const detail = await api.inspectionDetail(buildingId, date);
+    const doc = new jsPDF({ unit: "pt", format: "letter" });
+    const margin = 48;
+    let y = margin;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text(detail.building.name, margin, y);
+    y += 22;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.text(`Daily inspection — ${formatInspectionDate(detail.submission.inspection_date)}`, margin, y);
+    y += 16;
+    doc.text(`Submitted by ${detail.submission.superintendent_name || "Unknown"} · ${formatTimestamp(detail.submission.submitted_at)}`, margin, y);
+    y += 24;
+
+    const groups = groupTagsBySystem(detail.readings.map((r) => ({ ...r, id: `${r.system_name}-${r.tag_no}-${r.reading_type}` })));
+    for (const [system, rows] of Object.entries(groups)) {
+      if (y > 700) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text(system, margin, y);
+      y += 16;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      for (const row of rows) {
+        if (y > 730) {
+          doc.addPage();
+          y = margin;
+        }
+        const label = [row.tag_no, row.reading_type].filter(Boolean).join(" — ");
+        const value = row.value ? `${row.value}${row.unit ? ` ${row.unit}` : ""}` : "—";
+        const flaggedNote = row.flagged ? "  [flagged]" : "";
+        doc.text(`${label}`, margin + 10, y);
+        doc.text(`${value}${flaggedNote}`, margin + 320, y);
+        y += 15;
+      }
+      y += 8;
+    }
+
+    if (detail.submission.notes) {
+      if (y > 680) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text("Comments", margin, y);
+      y += 16;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      const lines = doc.splitTextToSize(detail.submission.notes, 500);
+      doc.text(lines, margin, y);
+    }
+
+    doc.save(`${slugify(detail.building.name)}-inspection-${date}.pdf`);
+  } catch (error) {
+    button.title = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 const WORK_ORDER_CATEGORY_LABELS = {
@@ -1498,16 +1660,89 @@ function renderBuildingWorld() {
 
         <section class="card building-world__checklist">
           <div class="card__header"><div><p class="section-kicker">Checklist</p><h2>${world.tags.length} readings</h2></div></div>
+          <div class="location-manager">
+            <span class="quiet-label" style="width:100%;">Locations — where each reading physically is, so command mode can walk supers through in order</span>
+            ${(world.locations || [])
+              .map(
+                (l) => `<span class="location-chip">${escapeHtml(l.name)}<button type="button" class="remove-location" data-location-id="${l.id}" title="Delete location" aria-label="Delete location">${icon("close")}</button></span>`,
+              )
+              .join("")}
+            <form id="add-location-form" class="location-add-form">
+              <input type="text" name="name" placeholder="+ Add a location…" maxlength="60" autocomplete="off" />
+              <button type="submit" class="button button--outline button--small">Add</button>
+            </form>
+          </div>
           <div class="checklist-preview">
             ${Object.entries(groups)
               .map(
-                ([system, tags]) => `<div class="checklist-preview__group"><h4>${escapeHtml(system)}</h4><ul>${tags.map((t) => `<li>${escapeHtml([t.tag_no, t.reading_type].filter(Boolean).join(" — "))}</li>`).join("")}</ul></div>`,
+                ([system, tags]) =>
+                  `<div class="checklist-preview__group"><h4>${escapeHtml(system)}</h4><ul>${tags
+                    .map(
+                      (t) => `<li>
+                        <span>${escapeHtml([t.tag_no, t.reading_type].filter(Boolean).join(" — "))}</span>
+                        <select class="assign-tag-location" data-tag-id="${t.id}">
+                          <option value="">No location</option>
+                          ${(world.locations || []).map((l) => `<option value="${l.id}" ${t.location_id === l.id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
+                        </select>
+                      </li>`,
+                    )
+                    .join("")}</ul></div>`,
               )
               .join("")}
           </div>
         </section>
+
+        <section class="card building-world__checklist">
+          <div class="card__header"><div><p class="section-kicker">Inspection history</p><h2>Submitted, by week</h2></div></div>
+          ${renderInspectionHistory(world.buildingId)}
+        </section>
       </div>
     </section>`;
+}
+
+// ISO week (Monday-start) so "week of the 25th" groups the way a super
+// actually thinks about their schedule, not a Sunday-start calendar week.
+function isoWeekInfo(isoDate) {
+  const date = new Date(`${isoDate}T00:00:00`);
+  const day = (date.getDay() + 6) % 7; // Mon=0 .. Sun=6
+  const monday = new Date(date);
+  monday.setDate(date.getDate() - day);
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+  const key = monday.toISOString().slice(0, 10);
+  const label = `Week of ${monday.toLocaleDateString(undefined, { month: "long", day: "numeric" })} – ${friday.toLocaleDateString(undefined, { month: "long", day: "numeric" })}`;
+  return { key, label };
+}
+
+function renderInspectionHistory(buildingId) {
+  const submissions = state.buildingWorldHistory;
+  if (submissions == null) return `<p class="empty-state-inline" style="padding: 18px 22px;">Loading…</p>`;
+  if (!submissions.length) return `<p class="quiet-label" style="padding: 4px 22px 18px;">No submitted inspections yet.</p>`;
+
+  const weeks = {};
+  for (const s of submissions) {
+    const { key, label } = isoWeekInfo(s.inspection_date);
+    if (!weeks[key]) weeks[key] = { label, items: [] };
+    weeks[key].items.push(s);
+  }
+  const orderedKeys = Object.keys(weeks).sort().reverse();
+
+  return orderedKeys
+    .map(
+      (key, index) => `
+        <details class="history-week" ${index === 0 ? "open" : ""}>
+          <summary>${escapeHtml(weeks[key].label)}<span class="quiet-label">${weeks[key].items.length} day${weeks[key].items.length === 1 ? "" : "s"}</span></summary>
+          ${weeks[key].items
+            .map(
+              (s) => `<div class="history-day">
+                <span><strong>${escapeHtml(formatInspectionDate(s.inspection_date))}</strong> <span class="quiet-label">· ${escapeHtml(s.superintendent_name || "Unknown")} · ${s.reading_count} reading${s.reading_count === 1 ? "" : "s"}</span></span>
+                <button type="button" class="button button--outline button--small download-inspection-pdf" data-building-id="${buildingId}" data-date="${s.inspection_date}">${icon("check")} Download PDF</button>
+              </div>`,
+            )
+            .join("")}
+        </details>`,
+    )
+    .join("");
 }
 
 function renderBuildingWorldOrder(order) {
@@ -1641,11 +1876,18 @@ function renderInspectionView(data) {
           <p class="section-kicker">${escapeHtml(data.building.name)} · Daily Inspection</p>
           <h2 id="inspection-title">${escapeHtml(formatInspectionDate(data.date))}</h2>
         </div>
-        ${renderInspectionStatusBadge(data)}
+        <div class="inspection-card__header-actions">
+          ${
+            !locked && data.tags.length
+              ? `<button type="button" class="button button--primary button--small" id="start-command-mode">${icon("camera")} Command mode</button>`
+              : ""
+          }
+          ${renderInspectionStatusBadge(data)}
+        </div>
       </div>
       <form id="inspection-form" class="inspection-form">
         ${Object.entries(groups)
-          .map(([system, tags]) => renderInspectionGroup(system, tags, data.readings, locked))
+          .map(([system, tags]) => renderInspectionGroup(system, tags, data.readings, locked, data.flags))
           .join("")}
         <label class="inspection-notes">
           <span>Comments</span>
@@ -1807,7 +2049,7 @@ function renderInspectionStatusBadge(data) {
   return `<span class="status-pill">${icon("clock")} Not started</span>`;
 }
 
-function renderInspectionGroup(system, tags, readings, locked) {
+function renderInspectionGroup(system, tags, readings, locked, flags = {}) {
   const groupId = `photo-${slugify(system)}`;
   return `
     <fieldset class="inspection-group">
@@ -1824,24 +2066,34 @@ function renderInspectionGroup(system, tags, readings, locked) {
             </div>`
       }
       <div class="inspection-grid">
-        ${tags.map((tag) => renderInspectionField(tag, readings[tag.id], locked)).join("")}
+        ${tags.map((tag) => renderInspectionField(tag, readings[tag.id], locked, flags[tag.id])).join("")}
       </div>
     </fieldset>`;
 }
 
-function renderInspectionField(tag, value, locked) {
+function renderInspectionField(tag, value, locked, flagged) {
   const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
+  const fieldId = `tag-input-${tag.id}`;
   return `
-    <label class="inspection-field" data-field-tag-id="${tag.id}">
-      <span>${escapeHtml(label)}${tag.unit ? ` <small>(${escapeHtml(tag.unit)})</small>` : ""}</span>
-      <input
-        type="text"
-        name="tag-${tag.id}"
-        data-tag-id="${tag.id}"
-        value="${escapeHtml(value ?? "")}"
-        ${locked ? "disabled" : ""}
-        autocomplete="off"
-      />
+    <label class="inspection-field ${flagged ? "inspection-field--flagged" : ""}" data-field-tag-id="${tag.id}" for="${fieldId}">
+      <span>${escapeHtml(label)}${tag.unit ? ` <small>(${escapeHtml(tag.unit)})</small>` : ""} ${flagged ? `<small class="inspection-field__flag-note">🚩 flagged in command mode</small>` : ""}</span>
+      <span class="inspection-field__row">
+        <input
+          type="text"
+          id="${fieldId}"
+          name="tag-${tag.id}"
+          data-tag-id="${tag.id}"
+          value="${escapeHtml(value ?? "")}"
+          ${locked ? "disabled" : ""}
+          autocomplete="off"
+        />
+        ${
+          locked
+            ? ""
+            : `<label class="icon-button inspection-field__photo-button" for="single-photo-${tag.id}" title="Attach a photo for this reading">${icon("camera")}</label>
+               <input type="file" accept="image/*" capture="environment" id="single-photo-${tag.id}" data-single-photo-tag-id="${tag.id}" hidden />`
+        }
+      </span>
     </label>`;
 }
 
@@ -1932,6 +2184,35 @@ async function handlePhotoCapture(event) {
   }
 }
 
+// The per-field camera icon on the regular (non-command-mode) grid — same
+// underlying multi-tag endpoint, just called with a single tag.
+async function handleSinglePhotoCapture(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  const tagId = Number(input.dataset.singlePhotoTagId);
+  const field = document.querySelector(`[data-field-tag-id="${tagId}"]`);
+  const fieldInput = field?.querySelector("input");
+  const photoButton = field?.querySelector(".inspection-field__photo-button");
+  if (photoButton) photoButton.classList.add("inspection-field__photo-button--busy");
+  try {
+    const imageBase64 = await fileToBase64(file);
+    const response = await api.inspectionPhoto({ tagIds: [tagId], imageBase64, mediaType: file.type });
+    const result = response.results?.[0];
+    if (result && result.value != null && !result.unclear && fieldInput) {
+      fieldInput.value = result.value;
+      field.classList.add("inspection-field--filled");
+    } else if (fieldInput) {
+      field.classList.add("inspection-field--unclear");
+    }
+  } catch (error) {
+    if (field) field.title = error.message;
+  } finally {
+    if (photoButton) photoButton.classList.remove("inspection-field__photo-button--busy");
+    input.value = "";
+  }
+}
+
 function groupTagsBySystem(tags) {
   const groups = {};
   for (const tag of tags) {
@@ -2007,6 +2288,487 @@ function findFlaggedReadings(readings) {
   return state.inspection.tags
     .map((tag) => ({ tag, value: readings[tag.id], flag: clientFlagFor(tag, readings[tag.id]) }))
     .filter((item) => item.flag);
+}
+
+// ---------------------------------------------------------------------
+// Command mode -- a guided, one-reading-at-a-time walkthrough. Ordered by
+// physical location (so a super doesn't backtrack between floors), with
+// camera / upload / manual entry per item, AI label verification on
+// photos, and a normal-vs-abnormal check against both the manager's set
+// parameters and this tag's recent history -- all reusing the same
+// inspection_readings the regular grid form writes to, just through a
+// different UI.
+// ---------------------------------------------------------------------
+
+// Same trend check the backend used to decide whether history data was
+// even worth attaching (see worker/inspections.js loadHistory) -- this is
+// the client-side half: does THIS value look like an outlier against it.
+function historyFlagFor(tag, rawValue) {
+  const h = tag.history;
+  if (!h || tag.value_type === "on_off" || rawValue == null || rawValue === "") return null;
+  const num = Number.parseFloat(rawValue);
+  if (Number.isNaN(num)) return null;
+  const threshold = Math.max(h.stdev * 2, Math.abs(h.avg) * 0.15, 1);
+  return Math.abs(num - h.avg) > threshold;
+}
+
+function startCommandMode() {
+  const tags = state.inspection?.tags || [];
+  if (!tags.length) return;
+  const order = [...tags]
+    .sort((a, b) => {
+      const la = a.location_sort_order ?? Number.MAX_SAFE_INTEGER;
+      const lb = b.location_sort_order ?? Number.MAX_SAFE_INTEGER;
+      if (la !== lb) return la - lb;
+      return a.sort_order - b.sort_order;
+    })
+    .map((t) => t.id);
+
+  const readings = { ...(state.inspection.readings || {}) };
+  const flags = { ...(state.inspection.flags || {}) };
+  const photoKeys = { ...(state.inspection.photoKeys || {}) };
+  const resumeIndex = order.findIndex((id) => !readings[id] && !flags[id]);
+
+  state.commandMode = {
+    active: true,
+    order,
+    index: resumeIndex === -1 ? 0 : resumeIndex,
+    readings,
+    flags,
+    photoKeys,
+    entryMode: "choose",
+    manualDraft: "",
+    scanResult: null,
+    abnormalPrompt: null,
+    reviewFlags: false,
+    reviewingSingleFlag: false,
+    saving: false,
+    error: "",
+  };
+  renderApp();
+}
+
+function exitCommandMode() {
+  state.commandMode = null;
+  renderApp();
+}
+
+async function commandModeSave() {
+  const cm = state.commandMode;
+  cm.saving = true;
+  try {
+    const data = await api.inspectionSave({
+      notes: state.inspection.notes,
+      readings: cm.readings,
+      flags: cm.flags,
+      photoKeys: cm.photoKeys,
+    });
+    state.inspection.readings = data.readings;
+    state.inspection.flags = data.flags;
+    state.inspection.photoKeys = data.photoKeys;
+    state.inspection.status = data.status;
+  } catch (error) {
+    cm.error = error.message;
+  } finally {
+    cm.saving = false;
+  }
+}
+
+function commandModeAdvance() {
+  const cm = state.commandMode;
+  if (cm.index < cm.order.length - 1) {
+    cm.index += 1;
+    cm.entryMode = "choose";
+    cm.abnormalPrompt = null;
+    cm.scanResult = null;
+    renderApp();
+    return;
+  }
+  const anyFlagged = cm.order.some((id) => cm.flags[id]);
+  if (anyFlagged) {
+    cm.reviewFlags = true;
+    renderApp();
+  } else {
+    exitCommandMode();
+  }
+}
+
+async function commandModeAfterValueSettled() {
+  const cm = state.commandMode;
+  cm.abnormalPrompt = null;
+  await commandModeSave();
+
+  if (cm.reviewingSingleFlag) {
+    cm.reviewingSingleFlag = false;
+    const stillFlagged = cm.order.some((id) => cm.flags[id]);
+    if (stillFlagged) {
+      cm.reviewFlags = true;
+      renderApp();
+    } else {
+      exitCommandMode();
+    }
+    return;
+  }
+
+  cm.entryMode = "choose";
+  commandModeAdvance();
+}
+
+async function commandModeAcceptValue(tagId, rawValue, { photoKey } = {}) {
+  const cm = state.commandMode;
+  const tag = state.inspection.tags.find((t) => t.id === tagId);
+
+  cm.readings[tagId] = rawValue;
+  cm.flags[tagId] = false;
+  if (photoKey) cm.photoKeys[tagId] = photoKey;
+  cm.scanResult = null;
+  cm.manualDraft = "";
+  cm.error = "";
+
+  const paramFlag = clientFlagFor(tag, rawValue);
+  const trendFlag = !paramFlag && historyFlagFor(tag, rawValue);
+
+  if (paramFlag) {
+    const detail = tag.parameter?.expected
+      ? `Expected "${tag.parameter.expected}" — this doesn't match.`
+      : tag.parameter?.min != null
+        ? `Outside the normal range your operations manager set (${tag.parameter.min}–${tag.parameter.max}${tag.unit ? ` ${tag.unit}` : ""}).`
+        : "This is outside the normal range set for this reading.";
+    cm.abnormalPrompt = { tagId, value: rawValue, basis: "parameter", detail };
+    cm.entryMode = "choose";
+    renderApp();
+    return;
+  }
+  if (trendFlag) {
+    const avg = Math.round(tag.history.avg * 10) / 10;
+    cm.abnormalPrompt = {
+      tagId,
+      value: rawValue,
+      basis: "history",
+      detail: `Recent readings for this item have averaged ${avg}${tag.unit ? ` ${tag.unit}` : ""} — this is a noticeable jump from that.`,
+    };
+    cm.entryMode = "choose";
+    renderApp();
+    return;
+  }
+
+  await commandModeAfterValueSettled();
+}
+
+async function handleCommandModeAbnormalConfirm() {
+  const cm = state.commandMode;
+  const tagId = cm.abnormalPrompt.tagId;
+  if (!state.confirmedAbnormalTagIds.includes(tagId)) {
+    state.confirmedAbnormalTagIds.push(tagId);
+  }
+  await commandModeAfterValueSettled();
+}
+
+function handleCommandModeAbnormalIncorrect() {
+  const cm = state.commandMode;
+  const tagId = cm.abnormalPrompt.tagId;
+  cm.abnormalPrompt = null;
+  cm.readings[tagId] = "";
+  cm.entryMode = "manual";
+  cm.manualDraft = "";
+  renderApp();
+}
+
+async function handleCommandModeFlag() {
+  const cm = state.commandMode;
+  const tagId = cm.order[cm.index];
+  cm.flags[tagId] = true;
+  cm.abnormalPrompt = null;
+  cm.entryMode = "choose";
+  await commandModeSave();
+
+  if (cm.reviewingSingleFlag) {
+    cm.reviewingSingleFlag = false;
+    cm.reviewFlags = true;
+    renderApp();
+    return;
+  }
+  commandModeAdvance();
+}
+
+function handleCommandModePrev() {
+  const cm = state.commandMode;
+  if (cm.index === 0) return;
+  cm.index -= 1;
+  cm.entryMode = "choose";
+  cm.abnormalPrompt = null;
+  cm.scanResult = null;
+  renderApp();
+}
+
+function handleCommandModeNext() {
+  const cm = state.commandMode;
+  cm.entryMode = "choose";
+  cm.abnormalPrompt = null;
+  cm.scanResult = null;
+  commandModeAdvance();
+}
+
+function handleCommandModeManualOpen() {
+  const cm = state.commandMode;
+  const tagId = cm.order[cm.index];
+  cm.entryMode = "manual";
+  cm.manualDraft = cm.readings[tagId] || "";
+  renderApp();
+}
+
+function handleCommandModeManualCancel() {
+  const cm = state.commandMode;
+  cm.entryMode = "choose";
+  renderApp();
+}
+
+function handleCommandModeManualSubmit(event) {
+  event.preventDefault();
+  const cm = state.commandMode;
+  const tagId = cm.order[cm.index];
+  const value = document.querySelector("#command-mode-manual-input").value.trim();
+  if (!value) return;
+  commandModeAcceptValue(tagId, value);
+}
+
+async function handleCommandModePhotoInput(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  const cm = state.commandMode;
+  const tagId = cm.order[cm.index];
+  cm.entryMode = "busy";
+  cm.error = "";
+  renderApp();
+  const status = document.querySelector("#command-mode-busy-status");
+  const stopAnimation = status ? startReadingAnimation(status, { estimateSeconds: 4 }) : () => {};
+  try {
+    const imageBase64 = await fileToBase64(file);
+    const result = await api.commandModePhoto({ tagId, imageBase64, mediaType: file.type });
+    stopAnimation();
+    cm.scanResult = result;
+    cm.entryMode = "scan-result";
+    renderApp();
+  } catch (error) {
+    stopAnimation();
+    cm.error = error.message;
+    cm.entryMode = "choose";
+    renderApp();
+  } finally {
+    input.value = "";
+  }
+}
+
+function handleCommandModeScanAccept() {
+  const cm = state.commandMode;
+  const tagId = cm.order[cm.index];
+  const result = cm.scanResult;
+  commandModeAcceptValue(tagId, result.value, { photoKey: result.photoKey });
+}
+
+function handleCommandModeScanRetake() {
+  const cm = state.commandMode;
+  cm.scanResult = null;
+  cm.entryMode = "choose";
+  renderApp();
+}
+
+function handleCommandModeScanManual() {
+  const cm = state.commandMode;
+  const value = cm.scanResult?.value;
+  cm.scanResult = null;
+  cm.entryMode = "manual";
+  cm.manualDraft = value || "";
+  renderApp();
+}
+
+function handleCommandModeResolveFlag(tagId) {
+  const cm = state.commandMode;
+  cm.reviewFlags = false;
+  cm.reviewingSingleFlag = true;
+  cm.index = cm.order.indexOf(tagId);
+  cm.entryMode = "choose";
+  cm.abnormalPrompt = null;
+  cm.scanResult = null;
+  renderApp();
+}
+
+function renderCommandMode() {
+  const cm = state.commandMode;
+  const tags = state.inspection.tags;
+  const byId = Object.fromEntries(tags.map((t) => [t.id, t]));
+
+  if (cm.reviewFlags) return renderCommandModeFlagReview(cm, byId);
+
+  const tagId = cm.order[cm.index];
+  const tag = byId[tagId];
+  const total = cm.order.length;
+  const answeredCount = cm.order.filter((id) => (cm.readings[id] && cm.readings[id] !== "") || cm.flags[id]).length;
+  const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
+  const currentValue = cm.readings[tagId];
+  const isFlagged = !!cm.flags[tagId];
+
+  return `
+    <section class="command-mode">
+      <div class="command-mode__topbar">
+        <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
+        <span class="command-mode__progress">${cm.index + 1} of ${total} · ${answeredCount} done</span>
+      </div>
+      <div class="command-mode__progress-track"><span style="width:${Math.round((cm.index / Math.max(total - 1, 1)) * 100)}%"></span></div>
+
+      <div class="command-mode__stage">
+        <p class="command-mode__location">${tag.location_name ? escapeHtml(tag.location_name) : "⚠ No location set for this item"}</p>
+        <h1 class="command-mode__label">${escapeHtml(label)}</h1>
+        ${
+          tag.unit
+            ? `<p class="command-mode__unit">Unit: ${escapeHtml(tag.unit)}</p>`
+            : tag.value_type === "on_off"
+              ? `<p class="command-mode__unit">Expected: on / off</p>`
+              : ""
+        }
+
+        ${cm.error ? `<p class="form-error">${escapeHtml(cm.error)}</p>` : ""}
+
+        ${
+          cm.abnormalPrompt
+            ? renderCommandModeAbnormal(cm.abnormalPrompt, tag)
+            : cm.entryMode === "scan-result"
+              ? renderCommandModeScanResult(cm, tag)
+              : cm.entryMode === "manual"
+                ? renderCommandModeManualEntry(cm, tag)
+                : cm.entryMode === "busy"
+                  ? `<div class="command-mode__busy"><span class="loading-bar"><span></span></span><p id="command-mode-busy-status">Reading…</p></div>`
+                  : renderCommandModeChoose(currentValue, isFlagged, tag)
+        }
+      </div>
+
+      ${
+        cm.abnormalPrompt || cm.entryMode === "manual" || cm.entryMode === "busy" || cm.entryMode === "scan-result"
+          ? ""
+          : `<div class="command-mode__nav">
+              <button type="button" class="button button--outline" id="command-mode-prev" ${cm.index === 0 ? "disabled" : ""}>← Back</button>
+              <button type="button" class="button button--outline" id="command-mode-flag">Flag for later</button>
+              <button type="button" class="button button--outline" id="command-mode-next">${cm.index === total - 1 ? "Skip to end" : "Skip →"}</button>
+            </div>`
+      }
+    </section>`;
+}
+
+function renderCommandModeChoose(currentValue, isFlagged, tag) {
+  return `
+    ${
+      currentValue
+        ? `<div class="command-mode__current"><span>${escapeHtml(currentValue)}</span>${tag.unit ? ` <small>${escapeHtml(tag.unit)}</small>` : ""}</div>`
+        : `<p class="command-mode__empty">${isFlagged ? "🚩 Flagged for later — no value yet" : "No value yet"}</p>`
+    }
+    <div class="command-mode__actions">
+      <label class="button button--primary command-mode__action" for="command-mode-camera">${icon("camera")} Take picture</label>
+      <input type="file" accept="image/*" capture="environment" id="command-mode-camera" hidden />
+      <label class="button button--outline command-mode__action" for="command-mode-upload">${icon("image")} Upload from device</label>
+      <input type="file" accept="image/*" id="command-mode-upload" hidden />
+      <button type="button" class="button button--outline command-mode__action" id="command-mode-manual">${icon("edit")} Enter manually</button>
+    </div>`;
+}
+
+function renderCommandModeManualEntry(cm, tag) {
+  return `
+    <form id="command-mode-manual-form" class="command-mode__manual">
+      <input
+        type="text"
+        inputmode="${tag.value_type === "on_off" ? "text" : "decimal"}"
+        id="command-mode-manual-input"
+        value="${escapeHtml(cm.manualDraft ?? "")}"
+        placeholder="${tag.value_type === "on_off" ? "on / off" : "Value"}"
+        autocomplete="off"
+      />
+      <div class="command-mode__manual-actions">
+        <button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button>
+        <button type="submit" class="button button--primary">Confirm</button>
+      </div>
+    </form>`;
+}
+
+function renderCommandModeScanResult(cm, tag) {
+  const r = cm.scanResult;
+  return `
+    <div class="command-mode__scan-result ${!r.labelConfirmed || r.unclear || r.value == null ? "command-mode__scan-result--warning" : ""}">
+      ${
+        r.value != null
+          ? `<div class="command-mode__current"><span>${escapeHtml(r.value)}</span>${tag.unit ? ` <small>${escapeHtml(tag.unit)}</small>` : ""}</div>`
+          : `<p class="command-mode__empty">Couldn't read a value in that photo.</p>`
+      }
+      ${
+        !r.labelConfirmed
+          ? `<p class="command-mode__scan-note">${icon("warning")} Couldn't confirm this photo shows "${escapeHtml(tag.tag_no || tag.reading_type)}" — double check it's the right equipment before accepting.</p>`
+          : ""
+      }
+      ${r.unclear ? `<p class="command-mode__scan-note">${icon("warning")} That reading looked blurry or ambiguous.</p>` : ""}
+      <p class="quiet-label">Scanned in ${(r.elapsedMs / 1000).toFixed(1)}s</p>
+      <div class="command-mode__manual-actions">
+        <button type="button" class="button button--outline" id="command-mode-scan-retake">Retake</button>
+        <button type="button" class="button button--outline" id="command-mode-scan-manual">Enter manually</button>
+        ${r.value != null ? `<button type="button" class="button button--primary" id="command-mode-scan-accept">Accept</button>` : ""}
+      </div>
+    </div>`;
+}
+
+function renderCommandModeAbnormal(prompt, tag) {
+  return `
+    <div class="command-mode__abnormal">
+      <div class="command-mode__current"><span>${escapeHtml(prompt.value)}</span>${tag.unit ? ` <small>${escapeHtml(tag.unit)}</small>` : ""}</div>
+      <p class="command-mode__scan-note">${icon("warning")} ${escapeHtml(prompt.detail)}</p>
+      <div class="command-mode__manual-actions">
+        <button type="button" class="button button--outline" id="command-mode-abnormal-incorrect">Incorrect — re-enter</button>
+        <button type="button" class="button button--primary" id="command-mode-abnormal-confirm">Confirm as normal</button>
+      </div>
+    </div>`;
+}
+
+function renderCommandModeFlagReview(cm, byId) {
+  const flaggedIds = cm.order.filter((id) => cm.flags[id]);
+  return `
+    <section class="command-mode">
+      <div class="command-mode__topbar">
+        <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
+      </div>
+      <div class="command-mode__stage command-mode__stage--review">
+        <h1 class="command-mode__label">Flagged items</h1>
+        <p class="parameters-intro">Resolve these before this inspection can be submitted — an unresolved location assignment doesn't have to mean a wasted trip.</p>
+        <div class="command-mode__flag-list">
+          ${flaggedIds
+            .map((id) => {
+              const t = byId[id];
+              const label = [t.tag_no, t.reading_type].filter(Boolean).join(" — ");
+              return `<div class="building-row">
+                <div class="building-row__name"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(t.location_name || "No location set")}</small></div>
+                <button type="button" class="button button--outline button--small command-mode-resolve-flag" data-tag-id="${id}">Resolve</button>
+              </div>`;
+            })
+            .join("")}
+        </div>
+      </div>
+    </section>`;
+}
+
+function bindCommandModeEvents() {
+  document.querySelector("#command-mode-exit")?.addEventListener("click", exitCommandMode);
+  document.querySelector("#command-mode-prev")?.addEventListener("click", handleCommandModePrev);
+  document.querySelector("#command-mode-next")?.addEventListener("click", handleCommandModeNext);
+  document.querySelector("#command-mode-flag")?.addEventListener("click", handleCommandModeFlag);
+  document.querySelector("#command-mode-manual")?.addEventListener("click", handleCommandModeManualOpen);
+  document.querySelector("#command-mode-manual-cancel")?.addEventListener("click", handleCommandModeManualCancel);
+  document.querySelector("#command-mode-manual-form")?.addEventListener("submit", handleCommandModeManualSubmit);
+  document.querySelector("#command-mode-camera")?.addEventListener("change", handleCommandModePhotoInput);
+  document.querySelector("#command-mode-upload")?.addEventListener("change", handleCommandModePhotoInput);
+  document.querySelector("#command-mode-scan-accept")?.addEventListener("click", handleCommandModeScanAccept);
+  document.querySelector("#command-mode-scan-retake")?.addEventListener("click", handleCommandModeScanRetake);
+  document.querySelector("#command-mode-scan-manual")?.addEventListener("click", handleCommandModeScanManual);
+  document.querySelector("#command-mode-abnormal-confirm")?.addEventListener("click", handleCommandModeAbnormalConfirm);
+  document.querySelector("#command-mode-abnormal-incorrect")?.addEventListener("click", handleCommandModeAbnormalIncorrect);
+  document.querySelectorAll(".command-mode-resolve-flag").forEach((button) => {
+    button.addEventListener("click", () => handleCommandModeResolveFlag(Number(button.dataset.tagId)));
+  });
 }
 
 async function handleInspectionSubmit(event) {
@@ -2250,6 +3012,10 @@ function bindDashboardEvents() {
   document.querySelectorAll("[data-photo-group]").forEach((input) => {
     input.addEventListener("change", handlePhotoCapture);
   });
+  document.querySelectorAll("[data-single-photo-tag-id]").forEach((input) => {
+    input.addEventListener("change", handleSinglePhotoCapture);
+  });
+  document.querySelector("#start-command-mode")?.addEventListener("click", startCommandMode);
   document.querySelector("#parameters-form")?.addEventListener("submit", handleParametersSave);
 
   document.querySelector("#register-building-toggle")?.addEventListener("click", () => {
@@ -2360,6 +3126,16 @@ function bindDashboardEvents() {
   });
   document.querySelectorAll(".resolve-work-order-world").forEach((button) => {
     button.addEventListener("click", () => handleResolveWorkOrderWorld(button));
+  });
+  document.querySelector("#add-location-form")?.addEventListener("submit", handleAddLocation);
+  document.querySelectorAll(".remove-location").forEach((button) => {
+    button.addEventListener("click", () => handleRemoveLocation(button));
+  });
+  document.querySelectorAll(".assign-tag-location").forEach((select) => {
+    select.addEventListener("change", () => handleAssignTagLocation(select));
+  });
+  document.querySelectorAll(".download-inspection-pdf").forEach((button) => {
+    button.addEventListener("click", () => handleDownloadInspectionPdf(button));
   });
 
   // The map picker's edit form reuses the registration wizard's map IDs, so
