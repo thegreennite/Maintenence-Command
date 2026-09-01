@@ -39,6 +39,7 @@ import { handlePhotoDates, handlePhotoList, handlePhotoView } from "./photos.js"
 import { handleCreateNotice, handleDeleteNotice } from "./notices.js";
 import { handleUpdateProfile } from "./profile.js";
 import { needsVerification, sendVerificationCode, verifyCode } from "./two-factor.js";
+import { sendWeeklyDigest } from "./weekly-digest.js";
 import {
   handleBuildingSearchForRegistration,
   handleSelfRegister,
@@ -127,6 +128,14 @@ export default {
           return json({ error: "Administrator access required" }, 403, cors.headers);
         }
         return handleAdminStats(env, cors.headers);
+      }
+
+      if (url.pathname === "/api/admin/weekly-digest/send-now" && request.method === "POST") {
+        if (session.role !== "admin") {
+          return json({ error: "Administrator access required" }, 403, cors.headers);
+        }
+        const result = await sendWeeklyDigest(env);
+        return json(result, 200, cors.headers);
       }
 
       if (url.pathname === "/api/admin/impersonate" && request.method === "POST") {
@@ -415,6 +424,19 @@ export default {
       console.error("Request failed", error);
       return json({ error: "Something went wrong" }, 500, cors.headers);
     }
+  },
+
+  // Cloudflare cron triggers run on a fixed UTC schedule (wrangler.toml),
+  // and a fixed UTC time drifts against Toronto's clock across DST -- so
+  // this fires daily and just no-ops on every day that isn't actually
+  // Friday in Toronto, rather than trying to express "Friday Toronto time"
+  // as a UTC cron expression directly.
+  async scheduled(event, env, ctx) {
+    const todayToronto = new Date().toLocaleDateString("en-US", { timeZone: "America/Toronto", weekday: "short" });
+    if (todayToronto !== "Fri") return;
+    ctx.waitUntil(
+      sendWeeklyDigest(env).catch((error) => console.error("Weekly digest cron failed", error)),
+    );
   },
 };
 

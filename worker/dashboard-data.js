@@ -15,18 +15,18 @@ export const roleLabels = {
 
 const TORONTO_TZ = "America/Toronto";
 
-function todayIso() {
+export function todayIso() {
   return new Date().toLocaleDateString("en-CA", { timeZone: TORONTO_TZ });
 }
 
-function weekdayName(isoDate) {
+export function weekdayName(isoDate) {
   return new Date(`${isoDate}T00:00:00`).toLocaleDateString("en-US", { weekday: "short" });
 }
 
 // Monday-start week containing isoDate -- "resets each week" is just this
 // window sliding forward with the calendar, not a stored counter that
 // needs a cron job to clear.
-function weekDates(isoDate) {
+export function weekDates(isoDate) {
   const d = new Date(`${isoDate}T00:00:00`);
   const offset = (d.getDay() + 6) % 7; // Mon=0..Sun=6
   const monday = new Date(d);
@@ -58,7 +58,7 @@ function timeOfDayGreeting(firstName) {
 
 // Of a set of buildings' inspection_days, how many fall on each of the
 // given dates -- i.e. how many building-days were actually expected.
-function countExpected(buildings, dates) {
+export function countExpected(buildings, dates) {
   let total = 0;
   for (const building of buildings) {
     const days = (building.inspection_days || "").split(",");

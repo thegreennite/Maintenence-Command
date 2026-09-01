@@ -26,3 +26,10 @@ GHL_LOCATION_ID = "B3DTv8qZBapYs1m8Rcv2"
 
 [observability]
 enabled = true
+
+[triggers]
+# Fires daily at 20:00 UTC (~3-4pm Toronto depending on DST) -- the
+# scheduled() handler itself checks it's actually Friday in Toronto before
+# sending, rather than trying to express "Friday Toronto time" as a
+# fixed UTC cron day-of-week field.
+crons = ["0 20 * * *"]
