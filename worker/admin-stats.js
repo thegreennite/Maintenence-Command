@@ -16,9 +16,10 @@ export async function handleAdminStats(env, corsHeaders) {
     workersUsage(env),
     d1Usage(env),
     pagesUsage(env),
+    r2Usage(env),
   ]);
 
-  const [workers, d1, pages] = results.map((r) =>
+  const [workers, d1, pages, r2] = results.map((r) =>
     r.status === "fulfilled" ? r.value : { error: r.reason?.message || "Couldn't fetch this one." },
   );
 
@@ -29,12 +30,13 @@ export async function handleAdminStats(env, corsHeaders) {
         { name: "Cloudflare Pages", role: "Hosts the app (frontend)", status: "connected", live: true },
         { name: "Cloudflare Workers", role: "API / backend logic", status: "connected", live: true },
         { name: "Cloudflare D1", role: "Database", status: "connected", live: true },
-        { name: "Cloudflare R2", role: "Photo storage", status: "not_set_up", live: false, note: "Not provisioned yet — photos are read and discarded, not kept." },
+        { name: "Cloudflare R2", role: "Photo storage", status: env.PHOTOS ? "connected" : "not_set_up", live: false, note: "Inspection + checklist-setup photos, organized by building/day." },
         { name: "Google Gemini", role: "AI photo reading", status: env.GOOGLE_AI_KEY ? "connected" : "not_set_up", live: false, note: "Usage not pulled live here — check console.cloud.google.com billing/quotas." },
         { name: "Google Maps", role: "Building location picker", status: env.GOOGLE_MAPS_API_KEY ? "connected" : "not_set_up", live: false, note: "Usage not pulled live here — check console.cloud.google.com billing/quotas." },
         { name: "GitHub", role: "Source code", status: env.GITHUB_REPO_URL ? "connected" : "not_set_up", live: false, note: env.GITHUB_REPO_URL || undefined },
+        { name: "GoHighLevel", role: "Weekly 2FA email delivery", status: env.GHL_API_KEY ? "connected" : "not_set_up", live: false, note: "Reused from Revinetic's own GHL account." },
       ],
-      usage: { workers, d1, pages },
+      usage: { workers, d1, pages, r2 },
     },
     corsHeaders,
   );
@@ -146,6 +148,34 @@ async function pagesUsage(env) {
   const thisMonth = (response.result || []).filter((d) => new Date(d.created_on) >= monthStart).length;
   const limit = 500;
   return { label: "Builds this month", used: thisMonth, limit, unit: "builds", period: "per month", percent: pct(thisMonth, limit) };
+}
+
+async function r2Usage(env) {
+  if (!env.PHOTOS) return { label: "Photo storage", used: 0, limit: 10240, unit: "MB", period: "total", percent: 0 };
+
+  const data = await graphql(
+    env,
+    `query {
+      viewer {
+        accounts(filter: {accountTag: "${env.CLOUDFLARE_ACCOUNT_ID}"}) {
+          r2StorageAdaptiveGroups(
+            limit: 1,
+            filter: {datetime_geq: "${isoDaysAgo(1)}", datetime_leq: "${isoDaysAgo(0)}", bucketName: "fhg-command-photos"}
+          ) { max { payloadSize } }
+        }
+      }
+    }`,
+  );
+  const bytes = data.viewer.accounts[0]?.r2StorageAdaptiveGroups?.[0]?.max?.payloadSize || 0;
+  const limitBytes = 10 * 1024 * 1024 * 1024;
+  return {
+    label: "Photo storage",
+    used: Math.round((bytes / (1024 * 1024)) * 100) / 100,
+    limit: 10240,
+    unit: "MB",
+    period: "total",
+    percent: pct(bytes, limitBytes),
+  };
 }
 
 function pct(used, limit) {

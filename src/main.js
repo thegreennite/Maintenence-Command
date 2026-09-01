@@ -1368,6 +1368,7 @@ function renderStatsPanel() {
         ${renderUsageBar(usage.d1?.rowsRead)}
         ${renderUsageBar(usage.d1?.rowsWritten)}
         ${renderUsageBar(usage.pages)}
+        ${renderUsageBar(usage.r2)}
       </div>
       <p class="map-picker__hint">Gemini and Google Maps usage aren't pulled live here yet — check console.cloud.google.com for those.</p>
     </section>`;
