@@ -237,6 +237,18 @@ const api = {
   assignTagLocation(payload) {
     return this.request("/manager/tags/location", { method: "POST", body: JSON.stringify(payload) });
   },
+  managerGroups(buildingId) {
+    return this.request(`/manager/groups?buildingId=${buildingId}`);
+  },
+  createGroup(payload) {
+    return this.request("/manager/groups/create", { method: "POST", body: JSON.stringify(payload) });
+  },
+  deleteGroup(groupId) {
+    return this.request("/manager/groups/delete", { method: "POST", body: JSON.stringify({ groupId }) });
+  },
+  assignTagGroup(payload) {
+    return this.request("/manager/tags/group", { method: "POST", body: JSON.stringify(payload) });
+  },
   inspectionHistory(buildingId) {
     return this.request(`/manager/buildings/inspection-history?buildingId=${buildingId}`);
   },
@@ -263,6 +275,34 @@ function initials(name = "") {
     .toUpperCase();
 }
 
+// Reused on the login form and every "create a password" step of
+// registration -- a labeled password input with a show/hide eye toggle.
+function renderPasswordField({ label, name, autocomplete, minlength, required = true, fieldId }) {
+  const id = fieldId || `pw-${name}`;
+  return `
+    <label for="${id}">
+      <span>${escapeHtml(label)}</span>
+      <span class="password-field">
+        <input id="${id}" name="${name}" type="password" autocomplete="${autocomplete}" ${minlength ? `minlength="${minlength}"` : ""} ${required ? "required" : ""} />
+        <button type="button" class="icon-button password-toggle" data-target="${id}" title="Show password" aria-label="Show password">${icon("eye")}</button>
+      </span>
+    </label>`;
+}
+
+function bindPasswordToggles(root = document) {
+  root.querySelectorAll(".password-toggle").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = document.querySelector(`#${CSS.escape(button.dataset.target)}`);
+      if (!input) return;
+      const showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      button.innerHTML = icon(showing ? "eye" : "eye-off");
+      button.title = showing ? "Show password" : "Hide password";
+      button.setAttribute("aria-label", button.title);
+    });
+  });
+}
+
 function icon(name) {
   const paths = {
     arrow: '<path d="m9 18 6-6-6-6"/>',
@@ -278,6 +318,8 @@ function icon(name) {
     close: '<path d="M18 6 6 18M6 6l12 12"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
     edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/>',
+    "eye-off": '<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61C3.35 8.36 1 12 1 12s4 8 11 8a9.26 9.26 0 0 0 5.39-1.61M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>',
   };
   return `<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] || paths.command}</svg>`;
 }
@@ -330,10 +372,7 @@ function renderLogin(message = "") {
               <span>Username</span>
               <input name="username" autocomplete="username" autocapitalize="none" required />
             </label>
-            <label>
-              <span>Password</span>
-              <input name="password" type="password" autocomplete="current-password" required />
-            </label>
+            ${renderPasswordField({ label: "Password", name: "password", autocomplete: "current-password", fieldId: "login-password" })}
             <p class="form-error" id="login-error" ${message ? "" : "hidden"} role="alert">${escapeHtml(message)}</p>
             <button class="button button--primary button--full" type="submit">
               <span>Enter command center</span>${icon("arrow")}
@@ -351,6 +390,7 @@ function renderLogin(message = "") {
   document.querySelector("#create-account-link")?.addEventListener("click", () => startRegistration());
 
   document.querySelector("#login-form").addEventListener("submit", handleLogin);
+  bindPasswordToggles();
   document.querySelector('input[name="username"]').focus();
 }
 
@@ -401,6 +441,7 @@ function renderRegister() {
     button.addEventListener("click", () => selectRegistrationBuilding(Number(button.dataset.buildingId), button.dataset.buildingName));
   });
   document.querySelector("#registration-profile-form")?.addEventListener("submit", handleSelfRegisterSubmit);
+  bindPasswordToggles();
 }
 
 function renderRegisterRoleStep() {
@@ -464,8 +505,12 @@ function renderRegisterProfileStep(reg) {
           ? `<label><span>Region name</span><input name="regionName" required autocomplete="off" placeholder="e.g. Central Portfolio" /></label>`
           : ""
       }
-      <label><span>Create a password</span><input name="password" type="password" minlength="8" required autocomplete="new-password" /></label>
+      ${renderPasswordField({ label: "Create a password", name: "password", autocomplete: "new-password", minlength: 8, fieldId: "registration-password" })}
       <label><span>Profile picture <small>(optional)</small></span><input name="profilePhoto" type="file" accept="image/*" /></label>
+      <label class="consent-checkbox">
+        <input type="checkbox" name="consent" required />
+        <span>I agree to receive text messages and emails from FHG Command about my account, assignments, and building operations.</span>
+      </label>
       <p class="form-error" id="registration-error" hidden role="alert"></p>
       <button class="button button--primary button--full" type="submit"><span>Submit request</span>${icon("arrow")}</button>
     </form>`;
@@ -520,6 +565,7 @@ async function handleSelfRegisterSubmit(event) {
       phone: data.get("phone"),
       password: data.get("password"),
       profilePhoto,
+      contactConsent: data.get("consent") === "on",
     });
     state.registration.step = "done";
     renderRegister();
@@ -533,7 +579,7 @@ async function handleSelfRegisterSubmit(event) {
 async function handleLogin(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const button = form.querySelector("button");
+  const button = form.querySelector('button[type="submit"]');
   const error = form.querySelector("#login-error");
   const data = new FormData(form);
   error.hidden = true;
@@ -605,7 +651,7 @@ function renderVerifyCodeScreen(pendingToken) {
 async function handleVerifyCode(event, pendingToken) {
   event.preventDefault();
   const form = event.currentTarget;
-  const button = form.querySelector("button");
+  const button = form.querySelector('button[type="submit"]');
   const error = document.querySelector("#verify-code-error");
   const code = new FormData(form).get("code");
   error.hidden = true;
@@ -1453,6 +1499,7 @@ async function refreshBuildingWorldLocations() {
   const detail = await api.buildingDetail(state.buildingWorld.buildingId).catch(() => null);
   if (!detail) return;
   state.buildingWorld.locations = detail.locations;
+  state.buildingWorld.groups = detail.groups;
   state.buildingWorld.tags = detail.tags;
   renderApp();
 }
@@ -1490,6 +1537,46 @@ async function handleAssignTagLocation(select) {
     await api.assignTagLocation({ tagId: Number(select.dataset.tagId), locationId: select.value || null });
     const tag = state.buildingWorld.tags.find((t) => t.id === Number(select.dataset.tagId));
     if (tag) tag.location_id = select.value ? Number(select.value) : null;
+  } catch (error) {
+    select.title = error.message;
+  } finally {
+    select.disabled = false;
+  }
+}
+
+async function handleAddGroup(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const input = form.querySelector('input[name="name"]');
+  const name = input.value.trim();
+  if (!name) return;
+  input.disabled = true;
+  try {
+    await api.createGroup({ buildingId: state.buildingWorld.buildingId, name });
+    input.value = "";
+    await refreshBuildingWorldLocations();
+  } finally {
+    input.disabled = false;
+  }
+}
+
+async function handleRemoveGroup(button) {
+  button.disabled = true;
+  try {
+    await api.deleteGroup(Number(button.dataset.groupId));
+    await refreshBuildingWorldLocations();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleAssignTagGroup(select) {
+  select.disabled = true;
+  try {
+    await api.assignTagGroup({ tagId: Number(select.dataset.tagId), groupId: select.value || null });
+    const tag = state.buildingWorld.tags.find((t) => t.id === Number(select.dataset.tagId));
+    if (tag) tag.equipment_group_id = select.value ? Number(select.value) : null;
   } catch (error) {
     select.title = error.message;
   } finally {
@@ -1590,7 +1677,7 @@ function renderBuildingWorld() {
 
   const openOrders = world.workOrders.filter((w) => w.status === "open");
   const resolvedOrders = world.workOrders.filter((w) => w.status === "resolved");
-  const groups = groupTagsBySystem(world.tags);
+  const systemGroups = groupTagsBySystem(world.tags);
 
   return `
     <section class="building-world">
@@ -1675,18 +1762,36 @@ function renderBuildingWorld() {
               <button type="submit" class="button button--outline button--small">Add</button>
             </form>
           </div>
+          <div class="location-manager">
+            <span class="quiet-label" style="width:100%;">Equipment groups — a custom label for what kind of thing it is, e.g. "Pumps", "Boilers"</span>
+            ${(world.groups || [])
+              .map(
+                (g) => `<span class="location-chip">${escapeHtml(g.name)}<button type="button" class="remove-group" data-group-id="${g.id}" title="Delete group" aria-label="Delete group">${icon("close")}</button></span>`,
+              )
+              .join("")}
+            <form id="add-group-form" class="location-add-form">
+              <input type="text" name="name" placeholder="+ Add a group…" maxlength="60" autocomplete="off" />
+              <button type="submit" class="button button--outline button--small">Add</button>
+            </form>
+          </div>
           <div class="checklist-preview">
-            ${Object.entries(groups)
+            ${Object.entries(systemGroups)
               .map(
                 ([system, tags]) =>
                   `<div class="checklist-preview__group"><h4>${escapeHtml(system)}</h4><ul>${tags
                     .map(
                       (t) => `<li>
                         <span>${escapeHtml([t.tag_no, t.reading_type].filter(Boolean).join(" — "))}</span>
-                        <select class="assign-tag-location" data-tag-id="${t.id}">
-                          <option value="">No location</option>
-                          ${(world.locations || []).map((l) => `<option value="${l.id}" ${t.location_id === l.id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
-                        </select>
+                        <span class="checklist-preview__selects">
+                          <select class="assign-tag-location" data-tag-id="${t.id}">
+                            <option value="">No location</option>
+                            ${(world.locations || []).map((l) => `<option value="${l.id}" ${t.location_id === l.id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
+                          </select>
+                          <select class="assign-tag-group" data-tag-id="${t.id}">
+                            <option value="">No group</option>
+                            ${(world.groups || []).map((g) => `<option value="${g.id}" ${t.equipment_group_id === g.id ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("")}
+                          </select>
+                        </span>
                       </li>`,
                     )
                     .join("")}</ul></div>`,
@@ -2142,16 +2247,68 @@ async function fileToBase64(file) {
   return btoa(binary);
 }
 
+// iPhones (and some Samsung/Android phones) save camera-roll photos as
+// HEIC/HEIF by default. Safari can sometimes decode that straight into a
+// canvas; Chrome and Firefox on any platform can't -- createImageBitmap
+// just fails silently there. Convert to JPEG first with a WASM decoder
+// bundled specifically for this, so "upload from device" works no matter
+// what phone or browser took the photo. The live camera capture path
+// ("take picture") almost always already hands back a JPEG regardless of
+// phone, so this mostly matters for picking an existing photo.
+function looksLikeHeic(file) {
+  const type = (file.type || "").toLowerCase();
+  const name = (file.name || "").toLowerCase();
+  return type.includes("heic") || type.includes("heif") || name.endsWith(".heic") || name.endsWith(".heif");
+}
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function normalizeToDecodableImage(file) {
+  if (!looksLikeHeic(file)) return file;
+  try {
+    // Dynamically imported -- it bundles a ~500KB WASM HEIC decoder, no
+    // reason to make every visitor download that just to load the app
+    // when most photos (especially anything from the live camera capture)
+    // never need it. Wrapped in a hard timeout: this decoder runs in its
+    // own Web Worker and was observed, during testing, to occasionally
+    // never resolve or reject at all (no error, no timeout of its own) --
+    // rare, but a photo upload must never be able to hang the UI forever
+    // because of it.
+    const conversion = (async () => {
+      const { default: heic2any } = await import("heic2any");
+      const result = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
+      return Array.isArray(result) ? result[0] : result;
+    })();
+    return await withTimeout(conversion, 20_000, "HEIC conversion timed out.");
+  } catch (error) {
+    console.error("HEIC conversion failed", error);
+    const err = new Error(
+      "Couldn't read that photo (HEIC/HEIF conversion failed or timed out). Try again, take a new photo with the camera instead, or switch your phone's camera format to \"Most Compatible\" (JPEG) in Settings.",
+    );
+    err.heicConversionFailed = true;
+    throw err;
+  }
+}
+
 // A modern phone's camera photo (often 12-48MP, 4-15MB) base64-inflates
 // well past what the AI endpoints accept and takes noticeably longer to
 // upload and process to boot. Gemini doesn't need pixel-for-pixel detail
 // to read a gauge or a label -- downscale + re-encode as JPEG client-side
 // before every photo upload. Falls back to the raw file if this browser
-// can't decode it (rare formats), so a photo can never silently fail to
-// send because of this step.
+// can't decode it for some other reason, so a photo can never silently
+// fail to send because of this step (HEIC/HEIF is the one format that's
+// truly unrecoverable if the WASM decoder itself fails, since the server
+// doesn't accept that media type either).
 async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } = {}) {
+  const sourceFile = await normalizeToDecodableImage(file);
   try {
-    const bitmap = await createImageBitmap(file);
+    const bitmap = await createImageBitmap(sourceFile);
     const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
     const width = Math.max(1, Math.round(bitmap.width * scale));
     const height = Math.max(1, Math.round(bitmap.height * scale));
@@ -2164,7 +2321,12 @@ async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } =
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
     if (!blob) throw new Error("Canvas produced no image data.");
     return { base64: await fileToBase64(blob), mediaType: "image/jpeg" };
-  } catch {
+  } catch (error) {
+    if (sourceFile !== file) {
+      // Already converted out of HEIC into a real JPEG blob -- send that
+      // as-is rather than the original (server-rejected) HEIC bytes.
+      return { base64: await fileToBase64(sourceFile), mediaType: "image/jpeg" };
+    }
     return { base64: await fileToBase64(file), mediaType: file.type || "image/jpeg" };
   }
 }
@@ -2648,7 +2810,7 @@ function renderCommandMode() {
       <div class="command-mode__progress-track"><span style="width:${Math.round((cm.index / Math.max(total - 1, 1)) * 100)}%"></span></div>
 
       <div class="command-mode__stage">
-        <p class="command-mode__location">${tag.location_name ? escapeHtml(tag.location_name) : "⚠ No location set for this item"}</p>
+        <p class="command-mode__location">${tag.location_name ? escapeHtml(tag.location_name) : "⚠ No location set for this item"}${tag.equipment_group_name ? ` · ${escapeHtml(tag.equipment_group_name)}` : ""}</p>
         <h1 class="command-mode__label">${escapeHtml(label)}</h1>
         ${
           tag.unit
@@ -3163,6 +3325,13 @@ function bindDashboardEvents() {
   });
   document.querySelectorAll(".assign-tag-location").forEach((select) => {
     select.addEventListener("change", () => handleAssignTagLocation(select));
+  });
+  document.querySelector("#add-group-form")?.addEventListener("submit", handleAddGroup);
+  document.querySelectorAll(".remove-group").forEach((button) => {
+    button.addEventListener("click", () => handleRemoveGroup(button));
+  });
+  document.querySelectorAll(".assign-tag-group").forEach((select) => {
+    select.addEventListener("change", () => handleAssignTagGroup(select));
   });
   document.querySelectorAll(".download-inspection-pdf").forEach((button) => {
     button.addEventListener("click", () => handleDownloadInspectionPdf(button));

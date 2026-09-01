@@ -53,10 +53,12 @@ async function loadTags(env, buildingId) {
     env.DB.prepare(
       `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.value_type, t.location_id,
          l.name AS location_name, l.sort_order AS location_sort_order,
+         t.equipment_group_id, g.name AS equipment_group_name,
          p.min_value, p.max_value, p.expected_value
        FROM inspection_tags t
        LEFT JOIN inspection_parameters p ON p.tag_id = t.id
        LEFT JOIN building_locations l ON l.id = t.location_id
+       LEFT JOIN equipment_groups g ON g.id = t.equipment_group_id
        WHERE t.building_id = ? ORDER BY t.sort_order`,
     )
       .bind(buildingId)
@@ -78,6 +80,8 @@ async function loadTags(env, buildingId) {
     location_id: row.location_id,
     location_name: row.location_name,
     location_sort_order: row.location_sort_order,
+    equipment_group_id: row.equipment_group_id,
+    equipment_group_name: row.equipment_group_name,
     parameter:
       row.min_value != null || row.max_value != null || row.expected_value != null
         ? { min: row.min_value, max: row.max_value, expected: row.expected_value }

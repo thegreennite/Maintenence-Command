@@ -12,6 +12,7 @@ import { handleManagerInspection, handleManagerParametersSave, handleManagerSupe
 import { handlePropertyInspections } from "./property.js";
 import { handleInspectionPhoto, handleCommandModePhoto } from "./vision.js";
 import { handleListLocations, handleCreateLocation, handleDeleteLocation, handleAssignTagLocation } from "./locations.js";
+import { handleListGroups, handleCreateGroup, handleDeleteGroup, handleAssignTagGroup } from "./groups.js";
 import { handleInspectionHistory, handleInspectionDetail } from "./inspection-history.js";
 import {
   handleBuildingsList,
@@ -100,7 +101,7 @@ export default {
       }
 
       if (url.pathname === "/api/dashboard" && request.method === "GET") {
-        return json({ dashboard: dashboardForRole(session.role, session.full_name) }, 200, cors.headers);
+        return json({ dashboard: await dashboardForRole(session.role, session.full_name, env, session) }, 200, cors.headers);
       }
 
       if (url.pathname === "/api/photos/dates" && request.method === "GET") {
@@ -330,6 +331,34 @@ export default {
           return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignTagLocation(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/groups" && request.method === "GET") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleListGroups(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/groups/create" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleCreateGroup(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/groups/delete" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleDeleteGroup(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/tags/group" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleAssignTagGroup(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/inspection-history" && request.method === "GET") {

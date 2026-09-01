@@ -19,6 +19,7 @@
     "wrangler": "4.127.0"
   },
   "dependencies": {
+    "heic2any": "^0.0.4",
     "jspdf": "^4.2.1"
   }
 }

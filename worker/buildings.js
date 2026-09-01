@@ -342,10 +342,13 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
   const building = await findOwnedBuilding(env, session, buildingId);
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
-  const [tags, workOrders, notices, recentNotes, superintendents, locations] = await Promise.all([
+  const [tags, workOrders, notices, recentNotes, superintendents, locations, groups] = await Promise.all([
     env.DB.prepare(
-      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.value_type, t.location_id, l.name AS location_name
-       FROM inspection_tags t LEFT JOIN building_locations l ON l.id = t.location_id
+      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.value_type,
+         t.location_id, l.name AS location_name, t.equipment_group_id, g.name AS equipment_group_name
+       FROM inspection_tags t
+       LEFT JOIN building_locations l ON l.id = t.location_id
+       LEFT JOIN equipment_groups g ON g.id = t.equipment_group_id
        WHERE t.building_id = ? ORDER BY t.sort_order`,
     )
       .bind(buildingId)
@@ -382,6 +385,9 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
     env.DB.prepare("SELECT id, name, sort_order FROM building_locations WHERE building_id = ? ORDER BY sort_order, name")
       .bind(buildingId)
       .all(),
+    env.DB.prepare("SELECT id, name, sort_order FROM equipment_groups WHERE building_id = ? ORDER BY sort_order, name")
+      .bind(buildingId)
+      .all(),
   ]);
 
   return jsonOk(
@@ -393,6 +399,7 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
       recentNotes: recentNotes.results,
       superintendents: superintendents.results,
       locations: locations.results,
+      groups: groups.results,
     },
     corsHeaders,
   );

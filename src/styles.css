@@ -67,6 +67,12 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .login-form input:hover { border-color: #aab5af; }
 .login-form input:focus { border-color: var(--forest); outline: none; background: white; box-shadow: 0 0 0 3px rgba(23,76,67,.09); }
 .form-error { margin: -4px 0 0; padding: 11px 13px; border-left: 3px solid var(--danger); border-radius: 4px; color: #9c312a; background: var(--danger-soft); font-size: 13px; }
+.password-field { position: relative; display: block; }
+.password-field input { padding-right: 46px; }
+.password-toggle { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); width: 36px; height: 36px; border-color: transparent; background: transparent; color: #8a9491; }
+.password-toggle:hover { color: var(--forest); background: #eef2f0; }
+.consent-checkbox { display: flex; align-items: flex-start; gap: 10px; font-size: 12.5px; font-weight: 500; color: var(--muted); line-height: 1.5; cursor: pointer; }
+.consent-checkbox input { width: 17px; height: 17px; flex: 0 0 auto; margin-top: 2px; accent-color: var(--forest); }
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 44px; padding: 0 18px; border: 1px solid transparent; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 700; transition: transform .15s, background .15s, border .15s; }
 .button:hover:not(:disabled) { transform: translateY(-1px); }
 .button:disabled { cursor: wait; opacity: .65; }
@@ -529,6 +535,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
    elements in the same row. */
 .location-add-form .button { width: auto; flex: 0 0 auto; }
 .checklist-preview__group li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.checklist-preview__selects { display: flex; gap: 6px; flex: 0 0 auto; }
 .checklist-preview__group select { height: 30px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 11.5px; max-width: 130px; }
 
 /* Inspection history -- weekly folders on the building world page */
@@ -562,6 +569,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .button { min-height: 46px; }
   .icon-button { width: 44px; height: 44px; }
   .checklist-preview__group li { flex-direction: column; align-items: stretch; gap: 6px; }
+  .checklist-preview__selects { flex-direction: column; width: 100%; }
   .checklist-preview__group select { max-width: none; width: 100%; height: 40px; }
   .location-add-form { width: 100%; }
   .location-add-form input { flex: 1; min-width: 0; }

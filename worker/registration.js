@@ -42,6 +42,7 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   const buildingId = Number.parseInt(body.buildingId, 10);
   const regionName = String(body.regionName || "").trim();
   const profilePhoto = typeof body.profilePhoto === "string" ? body.profilePhoto : null;
+  const contactConsent = body.contactConsent === true;
 
   if (!SELF_SERVE_ROLES.has(requestedRole)) {
     return jsonError("Choose your role.", 400, corsHeaders);
@@ -54,6 +55,9 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   }
   if (profilePhoto && profilePhoto.length > 2_000_000) {
     return jsonError("That profile photo is too large. Try a smaller image.", 400, corsHeaders);
+  }
+  if (!contactConsent) {
+    return jsonError("Please check the box agreeing to receive text messages and emails to continue.", 400, corsHeaders);
   }
 
   const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ? OR username = ?")
@@ -70,8 +74,8 @@ export async function handleSelfRegister(request, env, corsHeaders) {
     if (!regionName) return jsonError("A region/team name is required.", 400, corsHeaders);
     const buildingAccess = requestedRole === "operations_manager" ? "all" : "own";
     await env.DB.prepare(
-      `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, email, phone, profile_photo, status, is_active)
-       VALUES (?, ?, ?, ?, ?, 'regional_manager', ?, ?, ?, ?, ?, 'pending', 0)`,
+      `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at)
+       VALUES (?, ?, ?, ?, ?, 'regional_manager', ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP)`,
     )
       .bind(email, hash, salt, fullName, JOB_TITLES[requestedRole], buildingAccess, regionName, email, phone || null, profilePhoto)
       .run();
@@ -95,8 +99,8 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   }
 
   await env.DB.prepare(
-    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, building_id, email, phone, profile_photo, status, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0)`,
+    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, building_id, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP)`,
   )
     .bind(email, hash, salt, fullName, JOB_TITLES[requestedRole], requestedRole, building.region, building.id, email, phone || null, profilePhoto)
     .run();
