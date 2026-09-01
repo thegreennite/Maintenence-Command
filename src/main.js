@@ -1122,8 +1122,9 @@ function renderTagReviewRow(tag, index) {
       <input type="text" data-field="reading_type" value="${escapeHtml(tag.reading_type || "")}" placeholder="Reading" />
       <input type="text" data-field="unit" value="${escapeHtml(tag.unit || "")}" placeholder="—" />
       <select data-field="value_type">
-        <option value="numeric" ${tag.value_type !== "on_off" ? "selected" : ""}>Numeric</option>
+        <option value="numeric" ${tag.value_type !== "on_off" && tag.value_type !== "hoa" ? "selected" : ""}>Numeric</option>
         <option value="on_off" ${tag.value_type === "on_off" ? "selected" : ""}>On/off</option>
+        <option value="hoa" ${tag.value_type === "hoa" ? "selected" : ""}>Hand-Off-Auto</option>
       </select>
       <button type="button" class="icon-button remove-tag-row" title="Remove this row" aria-label="Remove this row">${icon("warning")}</button>
     </div>`;
@@ -1330,7 +1331,16 @@ function renderParameterRow(tag) {
                   <option value="off" ${tag.parameter?.expected === "off" ? "selected" : ""}>Off</option>
                 </select>
               </label>`
-            : `<label class="parameter-inline"><span>Min</span>
+            : tag.value_type === "hoa"
+              ? `<label class="parameter-inline"><span>Expected</span>
+                  <select data-param-tag-id="${tag.id}" data-param-field="expected">
+                    <option value="" ${!tag.parameter?.expected ? "selected" : ""}>Not evaluated</option>
+                    <option value="Hand" ${tag.parameter?.expected === "Hand" ? "selected" : ""}>Hand</option>
+                    <option value="Off" ${tag.parameter?.expected === "Off" ? "selected" : ""}>Off</option>
+                    <option value="Auto" ${tag.parameter?.expected === "Auto" ? "selected" : ""}>Auto</option>
+                  </select>
+                </label>`
+              : `<label class="parameter-inline"><span>Min</span>
                 <input type="number" step="any" data-param-tag-id="${tag.id}" data-param-field="min" value="${tag.parameter?.min ?? ""}" />
               </label>
               <label class="parameter-inline"><span>Max</span>
@@ -2469,7 +2479,7 @@ function clientFlagFor(tag, rawValue) {
   const parameter = tag.parameter;
   if (!parameter || rawValue == null || rawValue === "") return null;
 
-  if (tag.value_type === "on_off") {
+  if (tag.value_type === "on_off" || tag.value_type === "hoa") {
     if (!parameter.expected) return null;
     return rawValue.trim().toLowerCase() === parameter.expected.trim().toLowerCase() ? null : "red";
   }
@@ -2504,7 +2514,7 @@ function findFlaggedReadings(readings) {
 // the client-side half: does THIS value look like an outlier against it.
 function historyFlagFor(tag, rawValue) {
   const h = tag.history;
-  if (!h || tag.value_type === "on_off" || rawValue == null || rawValue === "") return null;
+  if (!h || tag.value_type === "on_off" || tag.value_type === "hoa" || rawValue == null || rawValue === "") return null;
   const num = Number.parseFloat(rawValue);
   if (Number.isNaN(num)) return null;
   const threshold = Math.max(h.stdev * 2, Math.abs(h.avg) * 0.15, 1);
@@ -2807,6 +2817,12 @@ function handleCommandModeManualSubmit(event) {
   commandModeAcceptValue(tagId, value);
 }
 
+function handleCommandModeManualChoice(button) {
+  const cm = state.commandMode;
+  const tagId = cm.order[cm.index];
+  commandModeAcceptValue(tagId, button.dataset.value);
+}
+
 async function handleCommandModePhotoInput(event) {
   const input = event.currentTarget;
   const file = input.files?.[0];
@@ -2901,7 +2917,9 @@ function renderCommandMode() {
             ? `<p class="command-mode__unit">Unit: ${escapeHtml(tag.unit)}</p>`
             : tag.value_type === "on_off"
               ? `<p class="command-mode__unit">Expected: on / off</p>`
-              : ""
+              : tag.value_type === "hoa"
+                ? `<p class="command-mode__unit">Expected: Hand / Off / Auto</p>`
+                : ""
         }
 
         ${cm.error ? `<p class="form-error">${escapeHtml(cm.error)}</p>` : ""}
@@ -2947,15 +2965,40 @@ function renderCommandModeChoose(currentValue, isFlagged, tag) {
     </div>`;
 }
 
+// on_off and hoa are both closed sets of exact expected strings -- a
+// one-tap choice beats typing "hand" or "auto" on a phone keyboard, and
+// it can't typo into something the flag-matching logic won't recognize.
+const COMMAND_MODE_CHOICE_OPTIONS = {
+  on_off: ["on", "off"],
+  hoa: ["Hand", "Off", "Auto"],
+};
+
 function renderCommandModeManualEntry(cm, tag) {
+  const choices = COMMAND_MODE_CHOICE_OPTIONS[tag.value_type];
+  if (choices) {
+    return `
+      <div class="command-mode__manual">
+        <div class="command-mode__choice-grid">
+          ${choices
+            .map(
+              (choice) =>
+                `<button type="button" class="button button--outline command-mode-manual-choice" data-value="${escapeHtml(choice)}">${escapeHtml(choice)}</button>`,
+            )
+            .join("")}
+        </div>
+        <div class="command-mode__manual-actions">
+          <button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button>
+        </div>
+      </div>`;
+  }
   return `
     <form id="command-mode-manual-form" class="command-mode__manual">
       <input
         type="text"
-        inputmode="${tag.value_type === "on_off" ? "text" : "decimal"}"
+        inputmode="decimal"
         id="command-mode-manual-input"
         value="${escapeHtml(cm.manualDraft ?? "")}"
-        placeholder="${tag.value_type === "on_off" ? "on / off" : "Value"}"
+        placeholder="Value"
         autocomplete="off"
       />
       <div class="command-mode__manual-actions">
@@ -3036,6 +3079,9 @@ function bindCommandModeEvents() {
   document.querySelector("#command-mode-manual")?.addEventListener("click", handleCommandModeManualOpen);
   document.querySelector("#command-mode-manual-cancel")?.addEventListener("click", handleCommandModeManualCancel);
   document.querySelector("#command-mode-manual-form")?.addEventListener("submit", handleCommandModeManualSubmit);
+  document.querySelectorAll(".command-mode-manual-choice").forEach((button) => {
+    button.addEventListener("click", () => handleCommandModeManualChoice(button));
+  });
   document.querySelector("#command-mode-camera")?.addEventListener("change", handleCommandModePhotoInput);
   document.querySelector("#command-mode-upload")?.addEventListener("change", handleCommandModePhotoInput);
   document.querySelector("#command-mode-scan-accept")?.addEventListener("click", handleCommandModeScanAccept);

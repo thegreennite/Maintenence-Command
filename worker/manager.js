@@ -16,7 +16,7 @@ function today() {
 export function flagFor(tag, rawValue, parameter) {
   if (!parameter || rawValue == null || rawValue === "") return null;
 
-  if (tag.value_type === "on_off") {
+  if (tag.value_type === "on_off" || tag.value_type === "hoa") {
     if (!parameter.expected_value) return null;
     return rawValue.trim().toLowerCase() === parameter.expected_value.trim().toLowerCase()
       ? "green"
@@ -78,7 +78,7 @@ export async function handleManagerInspection(request, session, env, corsHeaders
 
   const [tags, parameters, submission] = await Promise.all([
     env.DB.prepare(
-      `SELECT id, system_name, tag_no, reading_type, unit, value_type, sort_order
+      `SELECT id, system_name, tag_no, reading_type, unit, reading_kind AS value_type, sort_order
        FROM inspection_tags WHERE building_id = ? ORDER BY sort_order`,
     )
       .bind(building.id)
@@ -146,7 +146,7 @@ export async function handleManagerParametersSave(request, session, env, corsHea
   if (!building) return jsonError("No building found in your region.", 404, corsHeaders);
 
   const validTags = await env.DB.prepare(
-    "SELECT id, value_type FROM inspection_tags WHERE building_id = ?",
+    "SELECT id, reading_kind AS value_type FROM inspection_tags WHERE building_id = ?",
   )
     .bind(building.id)
     .all();
@@ -160,7 +160,7 @@ export async function handleManagerParametersSave(request, session, env, corsHea
 
     const min = valueType === "numeric" && entry.min !== "" && entry.min != null ? Number.parseFloat(entry.min) : null;
     const max = valueType === "numeric" && entry.max !== "" && entry.max != null ? Number.parseFloat(entry.max) : null;
-    const expected = valueType === "on_off" && entry.expected ? String(entry.expected) : null;
+    const expected = (valueType === "on_off" || valueType === "hoa") && entry.expected ? String(entry.expected) : null;
 
     if (min == null && max == null && !expected) {
       statements.push(env.DB.prepare("DELETE FROM inspection_parameters WHERE tag_id = ?").bind(tagId));

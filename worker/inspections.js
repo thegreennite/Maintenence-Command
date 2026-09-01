@@ -27,7 +27,7 @@ async function loadHistory(env, buildingId, today) {
      JOIN inspection_submissions s ON s.id = r.submission_id
      JOIN inspection_tags t ON t.id = r.tag_id
      WHERE s.building_id = ? AND s.status = 'submitted' AND s.inspection_date >= date(?, '-7 days')
-       AND s.inspection_date < ? AND t.value_type = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
+       AND s.inspection_date < ? AND t.reading_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
      GROUP BY r.tag_id`,
   )
     .bind(buildingId, today, today)
@@ -51,7 +51,7 @@ async function loadHistory(env, buildingId, today) {
 async function loadTags(env, buildingId) {
   const [result, history] = await Promise.all([
     env.DB.prepare(
-      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.value_type, t.location_id,
+      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.reading_kind AS value_type, t.location_id,
          l.name AS location_name, l.sort_order AS location_sort_order,
          t.equipment_group_id, g.name AS equipment_group_name,
          p.min_value, p.max_value, p.expected_value

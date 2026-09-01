@@ -216,7 +216,7 @@ For each reading, determine:
 - tag_no: the specific equipment label if there is one (e.g. "Boiler: H1A"), or null if the reading applies to the building generally (e.g. "Outside temperature")
 - reading_type: what's being read (e.g. "Inlet temperature", "on/off", "Pressure")
 - unit: the unit shown (e.g. "°", "PSI", "%"), or null if none
-- value_type: "on_off" if this reading is literally an on/off or open/closed state, otherwise "numeric"
+- value_type: "on_off" if this reading is literally an on/off or open/closed state; "hoa" if it's a Hand-Off-Auto selector switch (common on pumps, fans, blowers, motors — the equipment can be found in Hand/manual-forced-on, Off, or Auto/automatic-control, not just on or off); otherwise "numeric"
 
 Return a JSON array of objects with exactly those five fields. If you can't read the sheet(s) clearly enough to extract anything reliably, return an empty array rather than guessing.`;
 
@@ -247,7 +247,7 @@ Return a JSON array of objects with exactly those five fields. If you can't read
                   tag_no: { type: "STRING", nullable: true },
                   reading_type: { type: "STRING" },
                   unit: { type: "STRING", nullable: true },
-                  value_type: { type: "STRING", enum: ["numeric", "on_off"] },
+                  value_type: { type: "STRING", enum: ["numeric", "on_off", "hoa"] },
                 },
                 required: ["system_name", "reading_type", "value_type"],
               },
@@ -315,7 +315,7 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
       tagNo: tag.tag_no ? String(tag.tag_no).trim() : null,
       readingType: String(tag.reading_type || "").trim(),
       unit: tag.unit ? String(tag.unit).trim() : null,
-      valueType: tag.value_type === "on_off" ? "on_off" : "numeric",
+      valueType: ["on_off", "hoa"].includes(tag.value_type) ? tag.value_type : "numeric",
       sortOrder: index + 1,
     }))
     .filter((row) => row.systemName && row.readingType);
@@ -325,7 +325,7 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
   await env.DB.batch(
     validRows.map((row) =>
       env.DB.prepare(
-        `INSERT INTO inspection_tags (building_id, system_name, tag_no, reading_type, unit, value_type, sort_order)
+        `INSERT INTO inspection_tags (building_id, system_name, tag_no, reading_type, unit, reading_kind, sort_order)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).bind(buildingId, row.systemName, row.tagNo, row.readingType, row.unit, row.valueType, row.sortOrder),
     ),
@@ -344,7 +344,7 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
 
   const [tags, workOrders, notices, recentNotes, superintendents, locations, groups] = await Promise.all([
     env.DB.prepare(
-      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.value_type,
+      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.reading_kind AS value_type,
          t.location_id, l.name AS location_name, t.equipment_group_id, g.name AS equipment_group_name
        FROM inspection_tags t
        LEFT JOIN building_locations l ON l.id = t.location_id

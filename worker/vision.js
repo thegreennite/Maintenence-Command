@@ -37,7 +37,7 @@ export async function handleInspectionPhoto(request, session, env, corsHeaders) 
 
   const placeholders = tagIds.map(() => "?").join(",");
   const tags = await env.DB.prepare(
-    `SELECT id, tag_no, reading_type, unit, value_type FROM inspection_tags
+    `SELECT id, tag_no, reading_type, unit, reading_kind AS value_type FROM inspection_tags
      WHERE building_id = ? AND id IN (${placeholders})`,
   )
     .bind(session.building_id, ...tagIds)
@@ -52,7 +52,14 @@ export async function handleInspectionPhoto(request, session, env, corsHeaders) 
   const listing = orderedTags
     .map((tag, index) => {
       const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
-      const hint = tag.value_type === "on_off" ? '(expected value: "on" or "off")' : tag.unit ? `(unit: ${tag.unit})` : "";
+      const hint =
+        tag.value_type === "on_off"
+          ? '(expected value: "on" or "off")'
+          : tag.value_type === "hoa"
+            ? '(expected value: "Hand", "Off", or "Auto" — a Hand-Off-Auto selector switch)'
+            : tag.unit
+              ? `(unit: ${tag.unit})`
+              : "";
       return `${index + 1}. ${label} ${hint}`.trim();
     })
     .join("\n");
@@ -163,14 +170,21 @@ export async function handleCommandModePhoto(request, session, env, corsHeaders)
   }
 
   const tag = await env.DB.prepare(
-    "SELECT id, tag_no, reading_type, unit, value_type FROM inspection_tags WHERE id = ? AND building_id = ?",
+    "SELECT id, tag_no, reading_type, unit, reading_kind AS value_type FROM inspection_tags WHERE id = ? AND building_id = ?",
   )
     .bind(tagId, session.building_id)
     .first();
   if (!tag) return jsonError("Reading not found for this building.", 404, corsHeaders);
 
   const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
-  const hint = tag.value_type === "on_off" ? 'Expected value: "on" or "off".' : tag.unit ? `Unit: ${tag.unit}.` : "";
+  const hint =
+    tag.value_type === "on_off"
+      ? 'Expected value: "on" or "off".'
+      : tag.value_type === "hoa"
+        ? 'Expected value: "Hand", "Off", or "Auto" — a Hand-Off-Auto selector switch position.'
+        : tag.unit
+          ? `Unit: ${tag.unit}.`
+          : "";
   const labelCheck = tag.tag_no
     ? `This reading is specifically for the equipment labeled "${tag.tag_no}" — look for that exact tag number on a sticker, plate, or handwritten label near the gauge in the photo. If you can't confirm this photo is actually of "${tag.tag_no}" (e.g. it shows a different tag number, or no tag number is visible at all), set "labelConfirmed" to false and still report the value you see, if any, but flag it.`
     : `This equipment has no specific tag number to verify — set "labelConfirmed" to true as long as a plausible gauge/display is visible.`;
