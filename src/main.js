@@ -62,6 +62,10 @@ const state = {
   // -- an arrow toggle instead of always fully opening the building world
   // page just to check its region/address/coverage at a glance.
   expandedBuildingRowIds: new Set(),
+  // The dashboard's "Today's Inspection" parameters panel -- collapsed by
+  // default so it doesn't dump one building's entire reading list onto the
+  // dashboard; same arrow-toggle idea as the portfolio rows above.
+  managerParametersExpanded: false,
 };
 
 // In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
@@ -1348,7 +1352,7 @@ async function handleAssignSuperintendentSubmit(event) {
 
 function renderManagerInspectionPanel(data) {
   if (!data) return "";
-  const groups = groupTagsBySystem(data.tags);
+  const expanded = state.managerParametersExpanded;
   return `
     <section class="card inspection-card" aria-labelledby="manager-inspection-title">
       <div class="card__header">
@@ -1356,19 +1360,28 @@ function renderManagerInspectionPanel(data) {
           <p class="section-kicker">${escapeHtml(data.building.name)} · Today's Inspection</p>
           <h2 id="manager-inspection-title">${escapeHtml(formatInspectionDate(data.date))}</h2>
         </div>
-        ${renderInspectionStatusBadge(data)}
-      </div>
-      <form id="parameters-form" class="inspection-form">
-        <p class="parameters-intro">Set an optional normal range for any reading. Submitted values outside it are flagged automatically — a value just past the edge shows yellow, further out shows red. Leave a reading blank to skip evaluating it.</p>
-        ${Object.entries(groups)
-          .map(([system, tags]) => renderParameterGroup(system, tags))
-          .join("")}
-        <div class="inspection-actions">
-          <button type="submit" class="button button--primary" id="save-parameters-button">Save parameters</button>
+        <div class="inspection-card__header-actions">
+          ${renderInspectionStatusBadge(data)}
+          <button type="button" class="icon-button building-row-toggle ${expanded ? "is-expanded" : ""}" id="toggle-manager-parameters" title="${expanded ? "Hide" : "Show"} parameters" aria-label="${expanded ? "Hide" : "Show"} parameters" aria-expanded="${expanded}">${icon("arrow")}</button>
         </div>
-        <p class="form-error" id="parameters-error" hidden role="alert"></p>
-      </form>
+      </div>
+      ${expanded ? renderManagerParametersBody(data) : ""}
     </section>`;
+}
+
+function renderManagerParametersBody(data) {
+  const groups = groupTagsBySystem(data.tags);
+  return `
+    <form id="parameters-form" class="inspection-form">
+      <p class="parameters-intro">Set an optional normal range for any reading. Submitted values outside it are flagged automatically — a value just past the edge shows yellow, further out shows red. Leave a reading blank to skip evaluating it.</p>
+      ${Object.entries(groups)
+        .map(([system, tags]) => renderParameterGroup(system, tags))
+        .join("")}
+      <div class="inspection-actions">
+        <button type="submit" class="button button--primary" id="save-parameters-button">Save parameters</button>
+      </div>
+      <p class="form-error" id="parameters-error" hidden role="alert"></p>
+    </form>`;
 }
 
 function renderParameterGroup(system, tags) {
@@ -3631,6 +3644,10 @@ function bindDashboardEvents() {
   });
   document.querySelector("#start-command-mode")?.addEventListener("click", startCommandMode);
   document.querySelector("#parameters-form")?.addEventListener("submit", handleParametersSave);
+  document.querySelector("#toggle-manager-parameters")?.addEventListener("click", () => {
+    state.managerParametersExpanded = !state.managerParametersExpanded;
+    renderApp();
+  });
 
   document.querySelector("#register-building-toggle")?.addEventListener("click", () => {
     buildingMap = null;
