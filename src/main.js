@@ -47,6 +47,9 @@ const state = {
   flagIssueJustSent: false,
   photoLibrary: { open: false, buildingId: null, dates: [], selectedDate: null, photos: [], loading: false },
   deleteBuildingTarget: null,
+  buildingWorld: null,
+  buildingWorldEditing: false,
+  buildingWorldAssignableUsers: [],
 };
 
 // In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
@@ -190,6 +193,27 @@ const api = {
   photoList(buildingId, date) {
     return this.request(`/photos/list?buildingId=${buildingId}&date=${date}`);
   },
+  buildingDetail(buildingId) {
+    return this.request(`/manager/buildings/detail?buildingId=${buildingId}`);
+  },
+  updateBuilding(payload) {
+    return this.request("/manager/buildings/update", { method: "POST", body: JSON.stringify(payload) });
+  },
+  createNotice(payload) {
+    return this.request("/manager/notices/create", { method: "POST", body: JSON.stringify(payload) });
+  },
+  deleteNotice(noticeId) {
+    return this.request("/manager/notices/delete", { method: "POST", body: JSON.stringify({ noticeId }) });
+  },
+  assignableUsers() {
+    return this.request("/manager/work-orders/assignable");
+  },
+  assignWorkOrder(payload) {
+    return this.request("/manager/work-orders/assign", { method: "POST", body: JSON.stringify(payload) });
+  },
+  updateProfile(payload) {
+    return this.request("/profile", { method: "POST", body: JSON.stringify(payload) });
+  },
   photoViewUrl(key) {
     return `${API_BASE}/api/photos/view?key=${encodeURIComponent(key)}`;
   },
@@ -227,6 +251,7 @@ function icon(name) {
     warning: '<path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
     close: '<path d="M18 6 6 18M6 6l12 12"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   };
   return `<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] || paths.command}</svg>`;
 }
@@ -307,6 +332,7 @@ const ROLE_LABELS_FOR_REGISTRATION = {
   superintendent: "Superintendent",
   property_manager: "Property Manager",
   regional_manager: "Regional Operations Manager",
+  operations_manager: "Operations Manager",
 };
 
 function startRegistration() {
@@ -360,6 +386,7 @@ function renderRegisterRoleStep() {
           <option value="superintendent">Superintendent</option>
           <option value="property_manager">Property Manager</option>
           <option value="regional_manager">Regional Operations Manager</option>
+          <option value="operations_manager">Operations Manager</option>
         </select>
       </label>
       <button class="button button--primary button--full" type="submit"><span>Continue</span>${icon("arrow")}</button>
@@ -370,7 +397,8 @@ function handleRegistrationRoleSubmit(event) {
   event.preventDefault();
   const role = new FormData(event.currentTarget).get("role");
   state.registration.role = role;
-  state.registration.step = role === "regional_manager" ? "profile" : "building";
+  const isManagerTier = role === "regional_manager" || role === "operations_manager";
+  state.registration.step = isManagerTier ? "profile" : "building";
   renderRegister();
 }
 
@@ -394,7 +422,7 @@ function renderRegisterBuildingStep(reg) {
 }
 
 function renderRegisterProfileStep(reg) {
-  const isManager = reg.role === "regional_manager";
+  const isManager = reg.role === "regional_manager" || reg.role === "operations_manager";
   return `
     <p class="form-intro">${
       isManager
@@ -418,7 +446,8 @@ function renderRegisterProfileStep(reg) {
 }
 
 function renderRegisterDoneStep(reg) {
-  const approver = reg.role === "regional_manager" ? "an administrator" : "your operations manager";
+  const approver =
+    reg.role === "regional_manager" || reg.role === "operations_manager" ? "an administrator" : "your operations manager";
   return `<div class="finding"><p>${icon("check")} Your request has been sent to ${approver} for approval. You'll be able to sign in once they approve it.</p></div>`;
 }
 
@@ -646,10 +675,11 @@ function renderApp() {
         </a>
         <div class="topbar__right">
           <span class="role-pill">${escapeHtml(user.roleLabel)}</span>
-          <div class="user-identity">
+          <button class="user-identity user-identity--button" id="open-profile-edit" title="Edit your profile">
             <span class="avatar">${escapeHtml(initials(user.fullName))}</span>
-            <span><strong>${escapeHtml(user.fullName)}</strong><small>${escapeHtml(user.region || user.jobTitle)}</small></span>
-          </div>
+            <span><strong>${escapeHtml(user.fullName)}</strong><small>${escapeHtml(user.jobTitle)}</small></span>
+            ${icon("edit")}
+          </button>
           <button class="icon-button" id="logout-button" title="Sign out" aria-label="Sign out">${icon("logout")}</button>
         </div>
       </header>
@@ -669,11 +699,15 @@ function renderApp() {
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
   document.querySelector("#return-admin")?.addEventListener("click", handleReturnToAdmin);
+  document.querySelector("#open-profile-edit")?.addEventListener("click", () => renderProfileEditModal(user));
   bindDashboardEvents();
 }
 
 function renderDashboard(data) {
   if (!data) return renderErrorState();
+  if (state.buildingWorld && (data.kind === "regional_manager" || data.kind === "admin")) {
+    return renderBuildingWorld();
+  }
   const body =
     data.kind === "regional_manager"
       ? renderManagerDashboard(data)
@@ -752,7 +786,7 @@ function renderPendingRequestRow(req) {
     <div class="building-row" data-request-id="${req.id}">
       <div class="building-row__name">
         <strong>${escapeHtml(req.full_name)}</strong>
-        <small>${ROLE_LABELS_FOR_REGISTRATION[req.role] || req.role} · ${escapeHtml(req.building_name)} · ${escapeHtml(req.email)}${req.phone ? " · " + escapeHtml(req.phone) : ""}</small>
+        <small>${escapeHtml(req.role_label || ROLE_LABELS_FOR_REGISTRATION[req.role] || req.role)} · ${escapeHtml(req.building_name)} · ${escapeHtml(req.email)}${req.phone ? " · " + escapeHtml(req.phone) : ""}</small>
       </div>
       <div class="inspection-actions">
         <button type="button" class="button button--outline button--small deny-request" data-user-id="${req.id}">Deny</button>
@@ -816,7 +850,8 @@ function renderBuildingRow(building) {
   return `
     <div class="building-row">
       <div class="building-row__name">
-        <strong>${escapeHtml(building.name)} ${isRegistering ? '<span class="status-chip status-chip--registering">Registering</span>' : ""}</strong>
+        <button type="button" class="building-name-link" data-building-id="${building.id}"><strong>${escapeHtml(building.name)}</strong></button>
+        ${isRegistering ? '<span class="status-chip status-chip--registering">Registering</span>' : ""}
         <small>${escapeHtml(building.address || "No address on file")}</small>
       </div>
       <span class="quiet-label">${building.tag_count} reading${building.tag_count === 1 ? "" : "s"}</span>
@@ -1348,6 +1383,186 @@ function renderAdminDashboard(data) {
     ${renderStatsPanel()}`;
 }
 
+async function openBuildingWorld(buildingId) {
+  state.buildingWorld = { loading: true, buildingId };
+  state.buildingWorldEditing = false;
+  renderApp();
+  const [detail, assignable] = await Promise.all([
+    api.buildingDetail(buildingId).catch(() => null),
+    api.assignableUsers().catch(() => ({ users: [] })),
+  ]);
+  if (!detail) {
+    state.buildingWorld = null;
+    renderApp();
+    return;
+  }
+  state.buildingWorld = { loading: false, buildingId, ...detail };
+  state.buildingWorldAssignableUsers = assignable.users;
+  renderApp();
+}
+
+function closeBuildingWorld() {
+  buildingMap = null;
+  buildingMarker = null;
+  state.buildingWorld = null;
+  state.buildingWorldEditing = false;
+  renderApp();
+}
+
+const WORK_ORDER_CATEGORY_LABELS = {
+  inventory: "Inventory",
+  chemicals: "Chemicals / supplies",
+  schedule: "Schedule question",
+  method: "Method / procedure question",
+  other: "Other",
+};
+
+function renderBuildingWorld() {
+  const world = state.buildingWorld;
+  if (world.loading) {
+    return `<section class="card"><p class="empty-state-inline">Loading…</p></section>`;
+  }
+
+  const openOrders = world.workOrders.filter((w) => w.status === "open");
+  const resolvedOrders = world.workOrders.filter((w) => w.status === "resolved");
+  const groups = groupTagsBySystem(world.tags);
+
+  return `
+    <section class="building-world">
+      <div class="building-world__header">
+        <button type="button" class="link-button" id="close-building-world">← All buildings</button>
+        <div class="building-world__title">
+          <h1>${escapeHtml(world.building.name)} ${world.building.status === "registering" ? '<span class="status-chip status-chip--registering">Registering</span>' : ""}</h1>
+          <p class="quiet-label">${escapeHtml(world.building.address || "No address on file")}</p>
+        </div>
+        <button type="button" class="button button--outline button--small" id="toggle-building-edit">${icon("edit")} ${state.buildingWorldEditing ? "Cancel edit" : "Edit building"}</button>
+      </div>
+
+      ${state.buildingWorldEditing ? renderBuildingWorldEditForm(world.building) : ""}
+
+      <div class="building-world__grid">
+        <section class="card">
+          <div class="card__header"><div><p class="section-kicker">Notices</p><h2>Posted for whoever's covering this building</h2></div></div>
+          <div class="notices-list">
+            ${
+              world.notices.length
+                ? world.notices
+                    .map(
+                      (n) => `<div class="notice-row">
+                <p>${escapeHtml(n.message)}</p>
+                <div class="notice-row__meta"><span class="quiet-label">${escapeHtml(n.created_by_name || "Unknown")} · ${formatTimestamp(n.created_at)}</span>
+                <button type="button" class="icon-button remove-notice" data-notice-id="${n.id}" title="Remove notice" aria-label="Remove notice">${icon("close")}</button></div>
+              </div>`,
+                    )
+                    .join("")
+                : `<p class="quiet-label" style="padding: 4px 22px 18px;">Nothing posted.</p>`
+            }
+          </div>
+          <form id="add-notice-form" class="wizard-panel" style="border-top: 1px solid var(--line);">
+            <label class="inspection-field"><span>Post a notice</span><textarea name="message" rows="2" required placeholder="e.g. Elevator contractor Thursday 9am — grant access."></textarea></label>
+            <div class="inspection-actions"><button type="submit" class="button button--primary button--small">Post</button></div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="card__header"><div><p class="section-kicker">Work orders</p><h2>Open (${openOrders.length})</h2></div></div>
+          <div class="buildings-list">
+            ${openOrders.length ? openOrders.map(renderBuildingWorldOrder).join("") : `<p class="quiet-label" style="padding: 14px 4px;">Nothing open.</p>`}
+          </div>
+          ${
+            resolvedOrders.length
+              ? `<details style="margin: 10px 22px 18px;"><summary>Resolved (${resolvedOrders.length})</summary><div class="buildings-list">${resolvedOrders.map(renderBuildingWorldOrder).join("")}</div></details>`
+              : ""
+          }
+        </section>
+
+        <section class="card">
+          <div class="card__header"><div><p class="section-kicker">Coverage</p><h2>Superintendents</h2></div></div>
+          <div class="buildings-list">
+            ${world.superintendents.length ? world.superintendents.map((s) => `<div class="building-row"><div class="building-row__name"><strong>${escapeHtml(s.full_name)}</strong></div></div>`).join("") : `<p class="quiet-label" style="padding: 14px 4px;">Nobody assigned yet.</p>`}
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card__header"><div><p class="section-kicker">Recent notes</p><h2>From the daily inspection</h2></div></div>
+          <div class="buildings-list">
+            ${
+              world.recentNotes.length
+                ? world.recentNotes
+                    .map((n) => `<div class="building-row"><div class="building-row__name"><strong>${escapeHtml(formatInspectionDate(n.inspection_date))}</strong><small>${escapeHtml(n.notes)}</small></div></div>`)
+                    .join("")
+                : `<p class="quiet-label" style="padding: 14px 4px;">No comments left recently.</p>`
+            }
+          </div>
+        </section>
+
+        <section class="card building-world__checklist">
+          <div class="card__header"><div><p class="section-kicker">Checklist</p><h2>${world.tags.length} readings</h2></div></div>
+          <div class="checklist-preview">
+            ${Object.entries(groups)
+              .map(
+                ([system, tags]) => `<div class="checklist-preview__group"><h4>${escapeHtml(system)}</h4><ul>${tags.map((t) => `<li>${escapeHtml([t.tag_no, t.reading_type].filter(Boolean).join(" — "))}</li>`).join("")}</ul></div>`,
+              )
+              .join("")}
+          </div>
+        </section>
+      </div>
+    </section>`;
+}
+
+function renderBuildingWorldOrder(order) {
+  const tone = order.source === "reading" ? "danger" : "warning";
+  return `<div class="building-row work-order-row">
+    <div class="building-row__name">
+      <strong><span class="urgency-dot urgency-dot--${tone}"></span> ${escapeHtml(order.title)}</strong>
+      <small>${escapeHtml(order.description || "")}</small>
+      <small class="quiet-label">${escapeHtml(order.reported_by || "Unknown")} · ${formatTimestamp(order.created_at)}${order.assigned_to_name ? ` · Assigned to ${escapeHtml(order.assigned_to_name)}` : ""}</small>
+    </div>
+    ${
+      order.status === "open"
+        ? `<div class="inspection-actions">
+            <select class="assign-work-order-select" data-work-order-id="${order.id}">
+              <option value="">Assign to…</option>
+              ${state.buildingWorldAssignableUsers.map((u) => `<option value="${u.id}" ${order.assigned_to === u.id ? "selected" : ""}>${escapeHtml(u.full_name)} — ${escapeHtml(u.job_title)}</option>`).join("")}
+            </select>
+            <button type="button" class="button button--outline button--small resolve-work-order-world" data-work-order-id="${order.id}">Resolve</button>
+          </div>`
+        : `<span class="quiet-label">Resolved ${formatTimestamp(order.resolved_at)}</span>`
+    }
+  </div>`;
+}
+
+function renderBuildingWorldEditForm(building) {
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const currentDays = (building.inspection_days || "").split(",");
+  return `
+    <form id="building-world-edit-form" class="card wizard-panel">
+      <h3>Edit building details</h3>
+      <label class="inspection-field"><span>Building name</span><input name="name" value="${escapeHtml(building.name)}" required /></label>
+      <label class="inspection-field"><span>Address</span><input name="address" id="building-address-input" value="${escapeHtml(building.address || "")}" autocomplete="off" /></label>
+      <div class="map-picker">
+        <div class="map-search-results" id="map-search-results"></div>
+        <div class="map-picker__canvas" id="building-map" ${building.latitude ? "" : "hidden"}></div>
+        <div class="map-save-bar" id="map-save-bar" ${building.latitude ? "" : "hidden"}>
+          <span>${icon("check")} <strong id="map-save-bar-address">Current pinned location</strong></span>
+        </div>
+        <p class="map-picker__hint" id="map-picker-hint">Type a new address to move the pin, or drag it directly.</p>
+        <input type="hidden" name="latitude" id="building-latitude" value="${building.latitude ?? ""}" />
+        <input type="hidden" name="longitude" id="building-longitude" value="${building.longitude ?? ""}" />
+      </div>
+      <div class="inspection-field"><span>Inspection days</span>
+        <div class="day-checkboxes">
+          ${days.map((day) => `<label class="day-checkbox"><input type="checkbox" name="days" value="${day}" ${currentDays.includes(day) ? "checked" : ""} />${day}</label>`).join("")}
+        </div>
+      </div>
+      <div class="inspection-actions">
+        <button type="button" class="button button--outline" id="cancel-building-world-edit">Cancel</button>
+        <button type="submit" class="button button--primary">Save changes</button>
+      </div>
+      <p class="form-error" id="building-world-edit-error" hidden role="alert"></p>
+    </form>`;
+}
+
 function renderStatsPanel() {
   if (!state.adminStats) {
     return `<section class="card"><div class="card__header"><div><p class="section-kicker">Infrastructure</p><h2>Connections &amp; usage</h2></div></div><p class="empty-state-inline">Couldn't load live usage right now.</p></section>`;
@@ -1836,6 +2051,49 @@ async function submitInspection(form) {
   }
 }
 
+function renderProfileEditModal(user) {
+  const existing = document.querySelector("#profile-edit-modal");
+  if (existing) existing.remove();
+
+  const wrap = document.createElement("div");
+  wrap.id = "profile-edit-modal";
+  wrap.className = "modal-overlay";
+  wrap.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="profile-edit-title">
+      <h3 id="profile-edit-title">${icon("edit")} Edit your profile</h3>
+      <form id="profile-edit-form" class="login-form">
+        <label><span>Full name</span><input name="fullName" value="${escapeHtml(user.fullName)}" required /></label>
+        <label><span>Written role</span><input name="jobTitle" value="${escapeHtml(user.jobTitle)}" required maxlength="80" /></label>
+        <p class="map-picker__hint">This is what other managers see when deciding who to assign something to — it can be different from your access level (${escapeHtml(user.roleLabel)}). e.g. "Field Inventory Operations Specialist."</p>
+        <p class="form-error" id="profile-edit-error" hidden role="alert"></p>
+        <div class="inspection-actions">
+          <button type="button" class="button button--outline" id="cancel-profile-edit">Cancel</button>
+          <button type="submit" class="button button--primary">Save</button>
+        </div>
+      </form>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  wrap.querySelector("#cancel-profile-edit").addEventListener("click", () => wrap.remove());
+  wrap.querySelector("#profile-edit-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const error = wrap.querySelector("#profile-edit-error");
+    const data = new FormData(form);
+    button.disabled = true;
+    try {
+      await api.updateProfile({ fullName: data.get("fullName"), jobTitle: data.get("jobTitle") });
+      wrap.remove();
+      await loadDashboard();
+    } catch (requestError) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+      button.disabled = false;
+    }
+  });
+}
+
 function renderOutOfRangeModal(flagged) {
   const existing = document.querySelector("#out-of-range-modal");
   if (existing) existing.remove();
@@ -2071,6 +2329,146 @@ function bindDashboardEvents() {
       renderApp();
     });
   });
+
+  document.querySelectorAll(".building-name-link").forEach((button) => {
+    button.addEventListener("click", () => {
+      buildingMap = null;
+      buildingMarker = null;
+      openBuildingWorld(Number(button.dataset.buildingId));
+    });
+  });
+  document.querySelector("#close-building-world")?.addEventListener("click", closeBuildingWorld);
+  document.querySelector("#toggle-building-edit")?.addEventListener("click", () => {
+    buildingMap = null;
+    buildingMarker = null;
+    state.buildingWorldEditing = !state.buildingWorldEditing;
+    renderApp();
+  });
+  document.querySelector("#cancel-building-world-edit")?.addEventListener("click", () => {
+    buildingMap = null;
+    buildingMarker = null;
+    state.buildingWorldEditing = false;
+    renderApp();
+  });
+  document.querySelector("#building-world-edit-form")?.addEventListener("submit", handleBuildingWorldEditSubmit);
+  document.querySelector("#add-notice-form")?.addEventListener("submit", handleAddNotice);
+  document.querySelectorAll(".remove-notice").forEach((button) => {
+    button.addEventListener("click", () => handleRemoveNotice(button));
+  });
+  document.querySelectorAll(".assign-work-order-select").forEach((select) => {
+    select.addEventListener("change", () => handleAssignWorkOrderWorld(select));
+  });
+  document.querySelectorAll(".resolve-work-order-world").forEach((button) => {
+    button.addEventListener("click", () => handleResolveWorkOrderWorld(button));
+  });
+
+  // The map picker's edit form reuses the registration wizard's map IDs, so
+  // an existing pinned location needs its Google Map instance created too --
+  // otherwise the visible canvas just sits empty until the address changes.
+  if (state.buildingWorldEditing && state.buildingWorld?.building?.latitude != null && !buildingMap) {
+    placeBuildingMapPin(state.buildingWorld.building.latitude, state.buildingWorld.building.longitude);
+  }
+}
+
+async function handleBuildingWorldEditSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = document.querySelector("#building-world-edit-error");
+  const data = new FormData(form);
+  const days = Array.from(form.querySelectorAll('input[name="days"]:checked')).map((el) => el.value);
+  const submitButton = form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  try {
+    const latitude = data.get("latitude") ? Number.parseFloat(data.get("latitude")) : null;
+    const longitude = data.get("longitude") ? Number.parseFloat(data.get("longitude")) : null;
+    const payload = {
+      buildingId: state.buildingWorld.buildingId,
+      name: data.get("name"),
+      address: data.get("address"),
+      inspectionDays: days,
+      latitude,
+      longitude,
+    };
+    await api.updateBuilding(payload);
+    const patch = { name: payload.name, address: payload.address, inspection_days: days.join(","), latitude, longitude };
+    state.buildingWorld.building = { ...state.buildingWorld.building, ...patch };
+    state.managerBuildings = state.managerBuildings.map((b) => (b.id === payload.buildingId ? { ...b, ...patch } : b));
+    state.buildingWorldEditing = false;
+    buildingMap = null;
+    buildingMarker = null;
+    renderApp();
+  } catch (requestError) {
+    submitButton.disabled = false;
+    error.textContent = requestError.message;
+    error.hidden = false;
+  }
+}
+
+async function handleAddNotice(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const message = String(data.get("message") || "").trim();
+  if (!message) return;
+  const submitButton = form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  try {
+    await api.createNotice({ buildingId: state.buildingWorld.buildingId, message });
+    const detail = await api.buildingDetail(state.buildingWorld.buildingId);
+    state.buildingWorld = { loading: false, buildingId: state.buildingWorld.buildingId, ...detail };
+    renderApp();
+  } catch (error) {
+    submitButton.disabled = false;
+    form.querySelector("textarea").title = error.message;
+  }
+}
+
+async function handleRemoveNotice(button) {
+  button.disabled = true;
+  try {
+    await api.deleteNotice(Number(button.dataset.noticeId));
+    state.buildingWorld.notices = state.buildingWorld.notices.filter((n) => n.id !== Number(button.dataset.noticeId));
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleAssignWorkOrderWorld(select) {
+  const workOrderId = Number(select.dataset.workOrderId);
+  const assigneeId = Number(select.value);
+  if (!assigneeId) return;
+  select.disabled = true;
+  try {
+    await api.assignWorkOrder({ workOrderId, assigneeId });
+    const assignee = state.buildingWorldAssignableUsers.find((u) => u.id === assigneeId);
+    state.buildingWorld.workOrders = state.buildingWorld.workOrders.map((w) =>
+      w.id === workOrderId ? { ...w, assigned_to: assigneeId, assigned_to_name: assignee?.full_name } : w,
+    );
+    renderApp();
+  } catch (error) {
+    select.disabled = false;
+    select.title = error.message;
+  }
+}
+
+async function handleResolveWorkOrderWorld(button) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Resolving…";
+  try {
+    const workOrderId = Number(button.dataset.workOrderId);
+    await api.resolveWorkOrder(workOrderId);
+    state.buildingWorld.workOrders = state.buildingWorld.workOrders.map((w) =>
+      w.id === workOrderId ? { ...w, status: "resolved" } : w,
+    );
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    button.title = error.message;
+  }
 }
 
 async function handlePendingRequestDecision(button, approve) {

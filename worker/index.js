@@ -14,17 +14,27 @@ import { handleInspectionPhoto } from "./vision.js";
 import {
   handleBuildingsList,
   handleBuildingCreate,
+  handleUpdateBuilding,
   handlePushLive,
   handleDeleteBuilding,
   handleUnassignedSuperintendents,
   handleAssignSuperintendent,
   handleGenerateTags,
   handleSaveTags,
+  handleBuildingDetail,
 } from "./buildings.js";
 import { handleGeocodeSearch } from "./geocode.js";
-import { handleFlagIssue, handleManagerWorkOrders, handleResolveWorkOrder } from "./work-orders.js";
+import {
+  handleFlagIssue,
+  handleManagerWorkOrders,
+  handleResolveWorkOrder,
+  handleAssignWorkOrder,
+  handleAssignableUsers,
+} from "./work-orders.js";
 import { handleAdminStats } from "./admin-stats.js";
 import { handlePhotoDates, handlePhotoList, handlePhotoView } from "./photos.js";
+import { handleCreateNotice, handleDeleteNotice } from "./notices.js";
+import { handleUpdateProfile } from "./profile.js";
 import { needsVerification, sendVerificationCode, verifyCode } from "./two-factor.js";
 import {
   handleBuildingSearchForRegistration,
@@ -99,6 +109,10 @@ export default {
       }
       if (url.pathname === "/api/photos/view" && request.method === "GET") {
         return handlePhotoView(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/profile" && request.method === "POST") {
+        return handleUpdateProfile(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/admin/accounts" && request.method === "GET") {
@@ -239,6 +253,48 @@ export default {
         return handleDeleteBuilding(request, session, env, cors.headers);
       }
 
+      if (url.pathname === "/api/manager/buildings/update" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleUpdateBuilding(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/buildings/detail" && request.method === "GET") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleBuildingDetail(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/notices/create" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleCreateNotice(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/notices/delete" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleDeleteNotice(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/work-orders/assignable" && request.method === "GET") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleAssignableUsers(session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/work-orders/assign" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleAssignWorkOrder(request, session, env, cors.headers);
+      }
+
       if (url.pathname === "/api/manager/superintendents" && request.method === "GET") {
         if (session.role !== "regional_manager") {
           return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
@@ -295,7 +351,7 @@ async function handleLogin(request, env, corsHeaders) {
   // still needs to verify its password before we say anything about status,
   // so a wrong-password guess against a real email doesn't confirm it exists.
   const user = await env.DB.prepare(
-    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, status, email, last_2fa_verified_at, ghl_contact_id
+    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id
      FROM users WHERE username = ?`,
   )
     .bind(username)
@@ -341,7 +397,7 @@ async function handleVerifyCode(request, env, corsHeaders) {
   if (!result.ok) return json({ error: result.error }, 401, corsHeaders);
 
   const user = await env.DB.prepare(
-    `SELECT id, username, full_name, job_title, role, region, building_id, status FROM users WHERE id = ?`,
+    `SELECT id, username, full_name, job_title, role, region, building_id, building_access, status FROM users WHERE id = ?`,
   )
     .bind(result.userId)
     .first();
@@ -468,10 +524,10 @@ async function requireSession(request, env) {
 
   const session = await env.DB.prepare(
     `SELECT s.id AS session_id, s.expires_at, s.last_seen_at,
-       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id,
+       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access,
        actor.id AS actor_id, actor.username AS actor_username,
        actor.full_name AS actor_full_name, actor.job_title AS actor_job_title,
-       actor.role AS actor_role, actor.region AS actor_region
+       actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access
      FROM sessions s
      JOIN users u ON u.id = s.user_id AND u.is_active = 1
      JOIN users actor ON actor.id = s.actor_user_id AND actor.is_active = 1
@@ -507,6 +563,11 @@ function sessionPayload(session) {
   };
 }
 
+function displayRoleLabel(role, buildingAccess) {
+  if (role === "regional_manager" && buildingAccess === "all") return "Operations Manager";
+  return roleLabels[role];
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -514,7 +575,8 @@ function publicUser(user) {
     fullName: user.full_name,
     jobTitle: user.job_title,
     role: user.role,
-    roleLabel: roleLabels[user.role],
+    buildingAccess: user.building_access || "own",
+    roleLabel: displayRoleLabel(user.role, user.building_access),
     region: user.region,
   };
 }
@@ -527,6 +589,7 @@ function actorUser(session) {
     job_title: session.actor_job_title,
     role: session.actor_role,
     region: session.actor_region,
+    building_access: session.actor_building_access,
   });
 }
 

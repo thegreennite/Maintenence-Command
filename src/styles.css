@@ -91,6 +91,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .user-identity > span:last-child { display: grid; gap: 2px; }
 .user-identity strong { font-size: 12px; }
 .user-identity small { color: var(--muted); font-size: 10px; }
+.user-identity--button { border: 1px solid transparent; background: none; padding: 4px 8px; border-radius: 8px; cursor: pointer; text-align: left; }
+.user-identity--button:hover { border-color: var(--line); background: var(--surface-2, #eef2f0); }
+.user-identity--button .icon { width: 13px; color: var(--ink-faint, #9aa8a3); margin-left: 2px; }
 .avatar { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; border-radius: 50%; color: white; background: var(--forest); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 .avatar--soft { color: var(--forest); background: var(--mint); }
 .avatar--large { width: 46px; height: 46px; font-size: 12px; }
@@ -435,3 +438,33 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .delete-building-panel { border-top-color: var(--danger); }
 .delete-building-panel h3 { color: var(--danger); }
 .delete-building-panel code { background: var(--danger-soft); color: #9c312a; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+/* Building world -- the dedicated per-building page */
+.building-name-link { border: none; background: none; padding: 0; margin: 0; font: inherit; text-align: left; cursor: pointer; color: var(--ink); }
+.building-name-link:hover strong { text-decoration: underline; text-underline-offset: 2px; }
+.building-world { display: flex; flex-direction: column; gap: 18px; }
+.building-world__header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.building-world__header .link-button { flex: 0 0 100%; }
+.building-world__title h1 { margin: 4px 0 0; font: 600 26px/1.2 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.03em; }
+.building-world__title p { margin: 4px 0 0; }
+.building-world__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; align-items: start; }
+.building-world__checklist { grid-column: 1 / -1; }
+
+.notices-list { display: flex; flex-direction: column; }
+.notice-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 12px 22px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.notice-row:last-child { border-bottom: none; }
+.notice-row p { margin: 0 0 4px; }
+.notice-row__meta { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.notice-row .icon-button { width: 28px; height: 28px; }
+.notice-row .icon-button .icon { width: 13px; }
+
+.work-order-row { align-items: flex-start; }
+.urgency-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.urgency-dot--danger { background: var(--danger); }
+.urgency-dot--warning { background: var(--warning); }
+.assign-work-order-select { height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 12.5px; max-width: 220px; }
+
+.checklist-preview { padding: 4px 22px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 18px; }
+.checklist-preview__group h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.checklist-preview__group ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.checklist-preview__group li { font-size: 13px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--canvas); }

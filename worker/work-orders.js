@@ -1,6 +1,11 @@
-// Work orders: the real data behind what used to be the mock Exception
-// Queue. Manager-only tracking -- no assignment, the manager just sees
-// what's open per building and marks it resolved.
+// Work orders: the real data behind the Exception Queue. A Regional
+// Manager sees what's open on buildings they registered, plus anything
+// assigned to them specifically; an Operations Manager (or Admin) sees
+// everything. Either can hand a work order to another manager to actually
+// handle -- e.g. a ROM assigning a supply issue to the OM who owns
+// inventory.
+
+import { canSeeAllBuildings } from "./access.js";
 
 const CATEGORY_LABELS = {
   inventory: "Inventory",
@@ -54,32 +59,42 @@ export async function handleFlagIssue(request, session, env, corsHeaders) {
 }
 
 export async function handleManagerWorkOrders(session, env, corsHeaders) {
+  const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
     `SELECT w.id, w.source, w.category, w.title, w.description, w.reading_value, w.status,
-       w.created_at, w.resolved_at, b.name AS building_name, b.id AS building_id,
-       u.full_name AS reported_by
+       w.created_at, w.resolved_at, w.assigned_to, b.name AS building_name, b.id AS building_id,
+       u.full_name AS reported_by, assignee.full_name AS assigned_to_name
      FROM work_orders w
      JOIN buildings b ON b.id = w.building_id
      LEFT JOIN users u ON u.id = w.created_by
-     WHERE b.region = ?
+     LEFT JOIN users assignee ON assignee.id = w.assigned_to
+     WHERE ${scoped ? "1=1" : "(b.created_by = ? OR w.assigned_to = ?)"}
      ORDER BY w.status ASC, w.created_at DESC
      LIMIT 50`,
   )
-    .bind(session.region)
+    .bind(...(scoped ? [] : [session.id, session.id]))
     .all();
   return jsonOk({ workOrders: result.results }, corsHeaders);
+}
+
+async function findVisibleWorkOrder(env, session, workOrderId) {
+  const scoped = canSeeAllBuildings(session);
+  if (scoped) {
+    return env.DB.prepare("SELECT w.id, w.building_id FROM work_orders w WHERE w.id = ?").bind(workOrderId).first();
+  }
+  return env.DB.prepare(
+    `SELECT w.id, w.building_id FROM work_orders w JOIN buildings b ON b.id = w.building_id
+     WHERE w.id = ? AND (b.created_by = ? OR w.assigned_to = ?)`,
+  )
+    .bind(workOrderId, session.id, session.id)
+    .first();
 }
 
 export async function handleResolveWorkOrder(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   const workOrderId = Number.parseInt(body.workOrderId, 10);
 
-  const workOrder = await env.DB.prepare(
-    `SELECT w.id FROM work_orders w JOIN buildings b ON b.id = w.building_id
-     WHERE w.id = ? AND b.region = ?`,
-  )
-    .bind(workOrderId, session.region)
-    .first();
+  const workOrder = await findVisibleWorkOrder(env, session, workOrderId);
   if (!workOrder) return jsonError("Work order not found.", 404, corsHeaders);
 
   await env.DB.prepare(
@@ -89,6 +104,41 @@ export async function handleResolveWorkOrder(request, session, env, corsHeaders)
     .run();
 
   return jsonOk({ ok: true }, corsHeaders);
+}
+
+export async function handleAssignWorkOrder(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const workOrderId = Number.parseInt(body.workOrderId, 10);
+  const assigneeId = Number.parseInt(body.assigneeId, 10);
+
+  const workOrder = await findVisibleWorkOrder(env, session, workOrderId);
+  if (!workOrder) return jsonError("Work order not found.", 404, corsHeaders);
+
+  const assignee = await env.DB.prepare(
+    "SELECT id FROM users WHERE id = ? AND role IN ('regional_manager', 'admin') AND is_active = 1",
+  )
+    .bind(assigneeId)
+    .first();
+  if (!assignee) return jsonError("That person can't be assigned work orders.", 400, corsHeaders);
+
+  await env.DB.prepare("UPDATE work_orders SET assigned_to = ?, assigned_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(assigneeId, workOrderId)
+    .run();
+
+  return jsonOk({ ok: true }, corsHeaders);
+}
+
+// Who can a manager hand a work order to -- every other manager/OM/admin,
+// for the "assign to..." picker.
+export async function handleAssignableUsers(session, env, corsHeaders) {
+  const result = await env.DB.prepare(
+    `SELECT id, full_name, job_title, role, building_access FROM users
+     WHERE role IN ('regional_manager', 'admin') AND is_active = 1 AND id != ?
+     ORDER BY full_name`,
+  )
+    .bind(session.id)
+    .all();
+  return jsonOk({ users: result.results }, corsHeaders);
 }
 
 function jsonOk(data, headers) {

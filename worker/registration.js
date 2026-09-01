@@ -1,17 +1,22 @@
 // Self-registration: anyone can sign up as Superintendent, Property
-// Manager, or Regional Operations Manager. Super/PM register against an
-// existing building and wait on that building's Regional Manager to
-// approve them. A Regional Manager registers against a new region name
-// and waits on an Administrator to approve them instead -- there's no
-// "manager of managers" otherwise.
+// Manager, Regional Operations Manager, or Operations Manager. Super/PM
+// register against an existing building and wait on whoever registered
+// that building to approve them. A Regional/Operations Manager registers
+// with a region/team name and waits on an Administrator instead -- there's
+// no "manager of managers" otherwise.
+//
+// ROM and OM are the same `role` value in the database (regional_manager)
+// -- OM is distinguished by building_access = 'all' (see worker/access.js).
 
 import { hashPassword } from "./security.js";
+import { canSeeAllBuildings } from "./access.js";
 
-const SELF_SERVE_ROLES = new Set(["superintendent", "property_manager", "regional_manager"]);
+const SELF_SERVE_ROLES = new Set(["superintendent", "property_manager", "regional_manager", "operations_manager"]);
 const JOB_TITLES = {
   superintendent: "Superintendent",
   property_manager: "Property Manager",
   regional_manager: "Regional Operations Manager",
+  operations_manager: "Operations Manager",
 };
 
 export async function handleBuildingSearchForRegistration(request, env, corsHeaders) {
@@ -29,7 +34,7 @@ export async function handleBuildingSearchForRegistration(request, env, corsHead
 
 export async function handleSelfRegister(request, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
-  const role = String(body.role || "");
+  const requestedRole = String(body.role || "");
   const fullName = String(body.fullName || "").trim();
   const email = String(body.email || "").trim();
   const phone = String(body.phone || "").trim();
@@ -38,7 +43,7 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   const regionName = String(body.regionName || "").trim();
   const profilePhoto = typeof body.profilePhoto === "string" ? body.profilePhoto : null;
 
-  if (!SELF_SERVE_ROLES.has(role)) {
+  if (!SELF_SERVE_ROLES.has(requestedRole)) {
     return jsonError("Choose your role.", 400, corsHeaders);
   }
   if (!fullName || !email || !password) {
@@ -59,14 +64,16 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   }
 
   const { salt, hash } = await hashPassword(password);
+  const isManagerTier = requestedRole === "regional_manager" || requestedRole === "operations_manager";
 
-  if (role === "regional_manager") {
-    if (!regionName) return jsonError("A region name is required.", 400, corsHeaders);
+  if (isManagerTier) {
+    if (!regionName) return jsonError("A region/team name is required.", 400, corsHeaders);
+    const buildingAccess = requestedRole === "operations_manager" ? "all" : "own";
     await env.DB.prepare(
-      `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, email, phone, profile_photo, status, is_active)
-       VALUES (?, ?, ?, ?, ?, 'regional_manager', ?, ?, ?, ?, 'pending', 0)`,
+      `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, email, phone, profile_photo, status, is_active)
+       VALUES (?, ?, ?, ?, ?, 'regional_manager', ?, ?, ?, ?, ?, 'pending', 0)`,
     )
-      .bind(email, hash, salt, fullName, JOB_TITLES.regional_manager, regionName, email, phone || null, profilePhoto)
+      .bind(email, hash, salt, fullName, JOB_TITLES[requestedRole], buildingAccess, regionName, email, phone || null, profilePhoto)
       .run();
     return jsonOk({ ok: true, message: "Your request has been sent to an administrator for approval." }, corsHeaders);
   }
@@ -91,7 +98,7 @@ export async function handleSelfRegister(request, env, corsHeaders) {
     `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, building_id, email, phone, profile_photo, status, is_active)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0)`,
   )
-    .bind(email, hash, salt, fullName, JOB_TITLES[role], role, building.region, building.id, email, phone || null, profilePhoto)
+    .bind(email, hash, salt, fullName, JOB_TITLES[requestedRole], requestedRole, building.region, building.id, email, phone || null, profilePhoto)
     .run();
 
   return jsonOk(
@@ -100,42 +107,78 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   );
 }
 
-// Regional Manager sees pending Super/PM requests for their own region's
-// buildings. Admin sees pending Regional Manager requests, account-wide.
+function pendingRoleLabel(role, buildingAccess) {
+  if (role === "regional_manager" && buildingAccess === "all") return "Operations Manager";
+  return JOB_TITLES[role] || role;
+}
+
+// A Regional Manager sees pending Super/PM requests for buildings THEY
+// registered. An Operations Manager (or Admin) sees pending requests for
+// every building. Admin additionally sees pending Regional/Operations
+// Manager requests -- there's no one else to approve those.
 export async function handlePendingRequests(session, env, corsHeaders) {
   if (session.role === "admin") {
-    const result = await env.DB.prepare(
-      `SELECT id, full_name, email, phone, role, profile_photo, region
-       FROM users WHERE status = 'pending' AND role = 'regional_manager' ORDER BY id`,
-    ).all();
-    return jsonOk({ requests: result.results.map((r) => ({ ...r, building_name: r.region })) }, corsHeaders);
+    const [managerRequests, buildingRequests] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, full_name, email, phone, role, building_access, profile_photo, region
+         FROM users WHERE status = 'pending' AND role = 'regional_manager' ORDER BY id`,
+      ).all(),
+      env.DB.prepare(
+        `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.building_access, u.profile_photo, b.name AS building_name
+         FROM users u JOIN buildings b ON b.id = u.building_id
+         WHERE u.status = 'pending' ORDER BY u.id`,
+      ).all(),
+    ]);
+    const managers = managerRequests.results.map((r) => ({
+      ...r,
+      building_name: r.region,
+      role_label: pendingRoleLabel(r.role, r.building_access),
+    }));
+    const buildings = buildingRequests.results.map((r) => ({ ...r, role_label: pendingRoleLabel(r.role, r.building_access) }));
+    return jsonOk({ requests: [...managers, ...buildings] }, corsHeaders);
   }
 
+  const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
-    `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.profile_photo, b.name AS building_name
+    `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.building_access, u.profile_photo, b.name AS building_name
      FROM users u JOIN buildings b ON b.id = u.building_id
-     WHERE u.status = 'pending' AND b.region = ? ORDER BY u.id`,
+     WHERE u.status = 'pending' ${scoped ? "" : "AND b.created_by = ?"} ORDER BY u.id`,
   )
-    .bind(session.region)
+    .bind(...(scoped ? [] : [session.id]))
     .all();
-  return jsonOk({ requests: result.results }, corsHeaders);
+  return jsonOk(
+    { requests: result.results.map((r) => ({ ...r, role_label: pendingRoleLabel(r.role, r.building_access) })) },
+    corsHeaders,
+  );
 }
 
 export async function handlePendingRequestDecision(request, session, env, corsHeaders, approve) {
   const body = await request.json().catch(() => ({}));
   const userId = Number.parseInt(body.userId, 10);
+  const scoped = canSeeAllBuildings(session);
 
-  const pending =
-    session.role === "admin"
-      ? await env.DB.prepare("SELECT id FROM users WHERE id = ? AND status = 'pending' AND role = 'regional_manager'")
-          .bind(userId)
-          .first()
-      : await env.DB.prepare(
-          `SELECT u.id FROM users u JOIN buildings b ON b.id = u.building_id
-           WHERE u.id = ? AND u.status = 'pending' AND b.region = ?`,
-        )
-          .bind(userId, session.region)
-          .first();
+  let pending;
+  if (session.role === "admin") {
+    pending = await env.DB.prepare(
+      `SELECT id, role, building_id FROM users WHERE id = ? AND status = 'pending'
+       AND (role = 'regional_manager' OR building_id IS NOT NULL)`,
+    )
+      .bind(userId)
+      .first();
+  } else if (scoped) {
+    pending = await env.DB.prepare(
+      `SELECT u.id FROM users u JOIN buildings b ON b.id = u.building_id WHERE u.id = ? AND u.status = 'pending'`,
+    )
+      .bind(userId)
+      .first();
+  } else {
+    pending = await env.DB.prepare(
+      `SELECT u.id FROM users u JOIN buildings b ON b.id = u.building_id
+       WHERE u.id = ? AND u.status = 'pending' AND b.created_by = ?`,
+    )
+      .bind(userId, session.id)
+      .first();
+  }
   if (!pending) return jsonError("Request not found.", 404, corsHeaders);
 
   await env.DB.prepare("UPDATE users SET status = ?, is_active = ? WHERE id = ?")

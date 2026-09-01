@@ -1,21 +1,33 @@
-// Phase 6: building registration + AI-assisted checklist generation from
-// an uploaded paper inspection sheet. The AI proposes a tag list; nothing
-// goes live until the regional manager reviews and confirms it — same
-// "never trust a blind AI commit" principle as Phase 5's photo reading.
+// Building registration, AI-assisted checklist generation, and the
+// per-building "world" (its own page: notices, recent work orders, recent
+// superintendent notes). A Regional Manager sees only buildings they
+// personally registered; an Operations Manager (or Admin) sees all of them
+// -- see worker/access.js.
 
 import { storePhoto } from "./photos.js";
+import { canSeeAllBuildings } from "./access.js";
 
 const VISION_MODEL = "gemini-3.6-flash";
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+async function findOwnedBuilding(env, session, buildingId, columns = "id, name, address, region, inspection_days, status, latitude, longitude, created_by") {
+  if (canSeeAllBuildings(session)) {
+    return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ?`).bind(buildingId).first();
+  }
+  return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND created_by = ?`)
+    .bind(buildingId, session.id)
+    .first();
+}
+
 export async function handleBuildingsList(session, env, corsHeaders) {
+  const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
     `SELECT b.id, b.name, b.address, b.region, b.inspection_days, b.status, b.latitude, b.longitude,
        (SELECT COUNT(*) FROM inspection_tags t WHERE t.building_id = b.id) AS tag_count,
        (SELECT COUNT(*) FROM users u WHERE u.building_id = b.id AND u.role = 'superintendent' AND u.status = 'active') AS superintendent_count
-     FROM buildings b WHERE b.region = ? ORDER BY b.id`,
+     FROM buildings b ${scoped ? "" : "WHERE b.created_by = ?"} ORDER BY b.id`,
   )
-    .bind(session.region)
+    .bind(...(scoped ? [] : [session.id]))
     .all();
   return jsonOk({ buildings: result.results }, corsHeaders);
 }
@@ -51,13 +63,38 @@ export async function handleBuildingCreate(request, session, env, corsHeaders) {
   return jsonOk({ building }, corsHeaders);
 }
 
+export async function handleUpdateBuilding(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const buildingId = Number.parseInt(body.buildingId, 10);
+
+  const building = await findOwnedBuilding(env, session, buildingId, "id");
+  if (!building) return jsonError("Building not found.", 404, corsHeaders);
+
+  const name = String(body.name || "").trim();
+  const address = String(body.address || "").trim();
+  const days = Array.isArray(body.inspectionDays)
+    ? body.inspectionDays.filter((day) => DAY_NAMES.includes(day))
+    : [];
+  const latitude = Number.isFinite(body.latitude) ? body.latitude : null;
+  const longitude = Number.isFinite(body.longitude) ? body.longitude : null;
+
+  if (!name) return jsonError("A building name is required.", 400, corsHeaders);
+  if (!days.length) return jsonError("Select at least one inspection day.", 400, corsHeaders);
+
+  await env.DB.prepare(
+    "UPDATE buildings SET name = ?, address = ?, inspection_days = ?, latitude = ?, longitude = ? WHERE id = ?",
+  )
+    .bind(name, address || null, DAY_NAMES.filter((d) => days.includes(d)).join(","), latitude, longitude, buildingId)
+    .run();
+
+  return jsonOk({ ok: true }, corsHeaders);
+}
+
 export async function handlePushLive(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   const buildingId = Number.parseInt(body.buildingId, 10);
 
-  const building = await env.DB.prepare("SELECT id, status FROM buildings WHERE id = ? AND region = ?")
-    .bind(buildingId, session.region)
-    .first();
+  const building = await findOwnedBuilding(env, session, buildingId, "id, status");
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
   if (building.status === "active") return jsonOk({ ok: true, alreadyLive: true }, corsHeaders);
 
@@ -77,12 +114,7 @@ export async function handleDeleteBuilding(request, session, env, corsHeaders) {
   const buildingId = Number.parseInt(body.buildingId, 10);
   const confirmationText = String(body.confirmationText || "");
 
-  const building =
-    session.role === "admin"
-      ? await env.DB.prepare("SELECT id, name, region FROM buildings WHERE id = ?").bind(buildingId).first()
-      : await env.DB.prepare("SELECT id, name, region FROM buildings WHERE id = ? AND region = ?")
-          .bind(buildingId, session.region)
-          .first();
+  const building = await findOwnedBuilding(env, session, buildingId, "id, name");
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   // Enforced server-side too, not just as a UI gate -- the exact phrase has
@@ -102,6 +134,7 @@ export async function handleDeleteBuilding(request, session, env, corsHeaders) {
     ).bind(buildingId),
     env.DB.prepare("DELETE FROM inspection_tags WHERE building_id = ?").bind(buildingId),
     env.DB.prepare("DELETE FROM work_orders WHERE building_id = ?").bind(buildingId),
+    env.DB.prepare("DELETE FROM building_notices WHERE building_id = ?").bind(buildingId),
     // People aren't deleted, just unassigned -- a building going away
     // shouldn't take an account with it. They show up as unassigned/
     // pending-reassignment afterward.
@@ -133,15 +166,13 @@ export async function handleAssignSuperintendent(request, session, env, corsHead
   const buildingId = Number.parseInt(body.buildingId, 10);
   const userId = Number.parseInt(body.userId, 10);
 
-  const building = await env.DB.prepare("SELECT id, region FROM buildings WHERE id = ? AND region = ?")
-    .bind(buildingId, session.region)
-    .first();
+  const building = await findOwnedBuilding(env, session, buildingId, "id, region");
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   const result = await env.DB.prepare(
     "UPDATE users SET building_id = ?, region = ? WHERE id = ? AND role = 'superintendent' AND building_id IS NULL",
   )
-    .bind(buildingId, session.region, userId)
+    .bind(buildingId, building.region, userId)
     .run();
 
   if (!result.meta.changes) {
@@ -176,9 +207,7 @@ export async function handleGenerateTags(request, session, env, corsHeaders) {
     }
   }
 
-  const building = buildingId
-    ? await env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND region = ?").bind(buildingId, session.region).first()
-    : null;
+  const building = buildingId ? await findOwnedBuilding(env, session, buildingId, "id") : null;
 
   const prompt = `These ${images.length > 1 ? `${images.length} photos are pages/sections of` : "is a photo of"} a paper building-inspection checklist (a "daily log" sheet used by a building superintendent — things like boilers, pumps, cooling towers, fire safety, elevators). Extract every distinct reading the form asks the inspector to record, EXCLUDING any row that looks crossed out, struck through, or otherwise marked as not tracked. ${images.length > 1 ? "Combine everything from all photos into ONE list — do not repeat a reading that appears on more than one photo." : ""}
 
@@ -270,9 +299,7 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
   const buildingId = Number.parseInt(body.buildingId, 10);
   const tags = Array.isArray(body.tags) ? body.tags : [];
 
-  const building = await env.DB.prepare("SELECT id, region FROM buildings WHERE id = ? AND region = ?")
-    .bind(buildingId, session.region)
-    .first();
+  const building = await findOwnedBuilding(env, session, buildingId, "id");
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   const existing = await env.DB.prepare("SELECT COUNT(*) AS count FROM inspection_tags WHERE building_id = ?")
@@ -305,6 +332,64 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
   );
 
   return jsonOk({ ok: true, count: validRows.length }, corsHeaders);
+}
+
+// The per-building "world": its checklist, recent work orders (open and
+// resolved, not just the manager's cross-building queue), the notices
+// board, and the superintendent's recent daily comments.
+export async function handleBuildingDetail(request, session, env, corsHeaders) {
+  const buildingId = Number.parseInt(new URL(request.url).searchParams.get("buildingId"), 10);
+  const building = await findOwnedBuilding(env, session, buildingId);
+  if (!building) return jsonError("Building not found.", 404, corsHeaders);
+
+  const [tags, workOrders, notices, recentNotes, superintendents] = await Promise.all([
+    env.DB.prepare(
+      "SELECT id, system_name, tag_no, reading_type, unit, value_type FROM inspection_tags WHERE building_id = ? ORDER BY sort_order",
+    )
+      .bind(buildingId)
+      .all(),
+    env.DB.prepare(
+      `SELECT w.id, w.source, w.category, w.title, w.description, w.status, w.created_at, w.resolved_at,
+         u.full_name AS reported_by, assignee.full_name AS assigned_to_name
+       FROM work_orders w
+       LEFT JOIN users u ON u.id = w.created_by
+       LEFT JOIN users assignee ON assignee.id = w.assigned_to
+       WHERE w.building_id = ? ORDER BY w.created_at DESC LIMIT 30`,
+    )
+      .bind(buildingId)
+      .all(),
+    env.DB.prepare(
+      `SELECT n.id, n.message, n.created_at, u.full_name AS created_by_name
+       FROM building_notices n LEFT JOIN users u ON u.id = n.created_by
+       WHERE n.building_id = ? ORDER BY n.created_at DESC`,
+    )
+      .bind(buildingId)
+      .all(),
+    env.DB.prepare(
+      `SELECT inspection_date, notes, submitted_at FROM inspection_submissions
+       WHERE building_id = ? AND notes IS NOT NULL AND TRIM(notes) != ''
+       ORDER BY inspection_date DESC LIMIT 10`,
+    )
+      .bind(buildingId)
+      .all(),
+    env.DB.prepare(
+      "SELECT id, full_name FROM users WHERE building_id = ? AND role = 'superintendent' AND status = 'active'",
+    )
+      .bind(buildingId)
+      .all(),
+  ]);
+
+  return jsonOk(
+    {
+      building,
+      tags: tags.results,
+      workOrders: workOrders.results,
+      notices: notices.results,
+      recentNotes: recentNotes.results,
+      superintendents: superintendents.results,
+    },
+    corsHeaders,
+  );
 }
 
 function jsonOk(data, headers) {

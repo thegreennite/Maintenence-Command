@@ -2,6 +2,8 @@
 // per-reading parameters and green/yellow/red flagging computed against
 // them. Parameters are opt-in — a tag with none set is just "not evaluated".
 
+import { canSeeAllBuildings } from "./access.js";
+
 function today() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 }
@@ -34,24 +36,34 @@ export function flagFor(tag, rawValue, parameter) {
 }
 
 async function resolveBuilding(env, session, buildingId) {
+  const scoped = canSeeAllBuildings(session);
   if (buildingId) {
-    return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND region = ?")
-      .bind(buildingId, session.region)
+    if (scoped) {
+      return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE id = ?")
+        .bind(buildingId)
+        .first();
+    }
+    return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND created_by = ?")
+      .bind(buildingId, session.id)
       .first();
   }
-  return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE region = ? ORDER BY id LIMIT 1")
-    .bind(session.region)
+  if (scoped) {
+    return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings ORDER BY id LIMIT 1").first();
+  }
+  return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE created_by = ? ORDER BY id LIMIT 1")
+    .bind(session.id)
     .first();
 }
 
 export async function handleManagerSuperintendents(session, env, corsHeaders) {
+  const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
     `SELECT u.id, u.full_name, b.name AS building_name
      FROM users u JOIN buildings b ON b.id = u.building_id
-     WHERE u.role = 'superintendent' AND u.region = ? AND u.is_active = 1
+     WHERE u.role = 'superintendent' AND u.is_active = 1 ${scoped ? "" : "AND b.created_by = ?"}
      ORDER BY u.full_name`,
   )
-    .bind(session.region)
+    .bind(...(scoped ? [] : [session.id]))
     .all();
   return jsonOk({ superintendents: result.results }, corsHeaders);
 }

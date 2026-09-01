@@ -64,12 +64,19 @@ export async function handleInspectionToday(session, env, corsHeaders) {
     return jsonError("No building is assigned to this account yet.", 409, corsHeaders);
   }
 
-  const [building, tags, { submission, readings }] = await Promise.all([
+  const [building, tags, { submission, readings }, notices] = await Promise.all([
     env.DB.prepare("SELECT id, name, region, inspection_days, status FROM buildings WHERE id = ?")
       .bind(buildingId)
       .first(),
     loadTags(env, buildingId),
     loadSubmission(env, buildingId, today()),
+    env.DB.prepare(
+      `SELECT n.id, n.message, n.created_at, u.full_name AS created_by_name
+       FROM building_notices n LEFT JOIN users u ON u.id = n.created_by
+       WHERE n.building_id = ? ORDER BY n.created_at DESC`,
+    )
+      .bind(buildingId)
+      .all(),
   ]);
 
   if (building?.status !== "active") {
@@ -90,6 +97,7 @@ export async function handleInspectionToday(session, env, corsHeaders) {
       submittedAt: submission?.submitted_at || null,
       notes: submission?.notes || "",
       readings,
+      notices: notices.results,
     },
     corsHeaders,
   );
