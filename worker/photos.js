@@ -9,9 +9,15 @@ function todayIso() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" }); // en-CA = YYYY-MM-DD
 }
 
+const EXTENSIONS_BY_MEDIA_TYPE = {
+  "image/png": "png",
+  "image/webp": "webp",
+  "application/pdf": "pdf",
+};
+
 export async function storePhoto(env, { buildingId, imageBase64, mediaType, context, uploadedBy }) {
   if (!env.PHOTOS) return null;
-  const ext = mediaType === "image/png" ? "png" : mediaType === "image/webp" ? "webp" : "jpg";
+  const ext = EXTENSIONS_BY_MEDIA_TYPE[mediaType] || "jpg";
   const date = todayIso();
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const rand = crypto.randomUUID().slice(0, 8);

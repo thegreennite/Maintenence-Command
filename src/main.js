@@ -320,6 +320,7 @@ function icon(name) {
     edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
     eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/>',
     "eye-off": '<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61C3.35 8.36 1 12 1 12s4 8 11 8a9.26 9.26 0 0 0 5.39-1.61M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>',
+    file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
   };
   return `<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] || paths.command}</svg>`;
 }
@@ -1084,9 +1085,9 @@ function renderBuildingUploadStep(wizard) {
   return `
     <div class="wizard-panel">
       <h3>${escapeHtml(wizard.building.name)} — build the checklist</h3>
-      <p class="parameters-intro">Attach photos of this building's paper inspection sheet — every page/section at once works fine, up to 20 — and the AI will propose one combined digital checklist. You'll review and edit it before it goes live.</p>
-      <label class="button button--outline photo-capture__button" for="building-sheet-photo">${icon("camera")} Attach photos of the sheet (up to 20)</label>
-      <input type="file" accept="image/*" capture="environment" id="building-sheet-photo" multiple hidden />
+      <p class="parameters-intro">Attach this building's paper inspection sheet — photos, scanned PDFs, or a mix, every page/section at once works fine, up to 20 files — and the AI will propose one combined digital checklist. You'll review and edit it before it goes live.</p>
+      <label class="button button--outline photo-capture__button" for="building-sheet-photo">${icon("camera")} Attach photos or PDFs of the sheet (up to 20)</label>
+      <input type="file" accept="image/*,application/pdf" capture="environment" id="building-sheet-photo" multiple hidden />
       <p class="photo-capture__status" id="building-sheet-status"></p>
     </div>`;
 }
@@ -1188,7 +1189,7 @@ async function handleBuildingSheetPhoto(event) {
   if (!files.length) return;
   const status = document.querySelector("#building-sheet-status");
   if (files.length > MAX_SHEET_PHOTOS) {
-    status.textContent = `Up to ${MAX_SHEET_PHOTOS} photos at a time — you selected ${files.length}.`;
+    status.textContent = `Up to ${MAX_SHEET_PHOTOS} files at a time — you selected ${files.length}.`;
     status.className = "photo-capture__status photo-capture__status--warning";
     input.value = "";
     return;
@@ -1208,7 +1209,7 @@ async function handleBuildingSheetPhoto(event) {
     });
     stopAnimation();
     if (!proposedTags.length) {
-      status.textContent = `Couldn't confidently read ${files.length === 1 ? "that photo" : "those photos"} — try a clearer, closer shot of one section.`;
+      status.textContent = `Couldn't confidently read ${files.length === 1 ? "that file" : "those files"} — try a clearer photo, a cleaner scan, or one section at a time.`;
       status.className = "photo-capture__status photo-capture__status--warning";
       return;
     }
@@ -2060,7 +2061,13 @@ function renderPhotoLibraryCard(defaultBuildingId, buildingOptions) {
             lib.loading
               ? `<p class="quiet-label">Loading…</p>`
               : lib.photos.length
-                ? lib.photos.map((p) => `<a href="${api.photoViewUrl(p.key)}" target="_blank" rel="noopener" class="photo-library__thumb"><img src="${api.photoViewUrl(p.key)}" alt="" loading="lazy" /><span>${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`).join("")
+                ? lib.photos
+                    .map((p) =>
+                      p.key.toLowerCase().endsWith(".pdf")
+                        ? `<a href="${api.photoViewUrl(p.key)}" target="_blank" rel="noopener" class="photo-library__thumb photo-library__thumb--file">${icon("file")}<span>PDF · ${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`
+                        : `<a href="${api.photoViewUrl(p.key)}" target="_blank" rel="noopener" class="photo-library__thumb"><img src="${api.photoViewUrl(p.key)}" alt="" loading="lazy" /><span>${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`,
+                    )
+                    .join("")
                 : lib.selectedDate
                   ? `<p class="quiet-label">Nothing for this day.</p>`
                   : ""

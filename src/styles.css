@@ -440,6 +440,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .photo-library__thumb { display: flex; flex-direction: column; gap: 4px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); text-decoration: none; color: var(--muted); font-size: 10.5px; background: white; }
 .photo-library__thumb img { width: 100%; height: 100px; object-fit: cover; display: block; background: var(--surface-2, #eef2f0); }
 .photo-library__thumb span { padding: 4px 6px; }
+.photo-library__thumb--file { align-items: center; justify-content: center; gap: 8px; height: 100px; background: var(--surface-2, #eef2f0); }
+.photo-library__thumb--file .icon { width: 26px; height: 26px; color: var(--forest); margin-top: 10px; }
+.photo-library__thumb--file span { padding: 0 6px 8px; }
 @media (max-width: 640px) { .photo-library__layout { grid-template-columns: 1fr; } .photo-library__dates { flex-direction: row; flex-wrap: wrap; max-height: none; } }
 
 .delete-building-panel { border-top-color: var(--danger); }

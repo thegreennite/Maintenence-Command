@@ -199,17 +199,17 @@ export async function handleGenerateTags(request, session, env, corsHeaders) {
       ? [{ data: body.imageBase64, mediaType: body.mediaType }]
       : [];
 
-  if (!images.length) return jsonError("At least one photo of the paper inspection sheet is required.", 400, corsHeaders);
-  if (images.length > MAX_SHEET_PHOTOS) return jsonError(`Up to ${MAX_SHEET_PHOTOS} photos at a time.`, 400, corsHeaders);
+  if (!images.length) return jsonError("At least one photo or PDF of the paper inspection sheet is required.", 400, corsHeaders);
+  if (images.length > MAX_SHEET_PHOTOS) return jsonError(`Up to ${MAX_SHEET_PHOTOS} files at a time.`, 400, corsHeaders);
   for (const img of images) {
-    if (!img.data || !["image/jpeg", "image/png", "image/webp"].includes(img.mediaType)) {
-      return jsonError("Unsupported image type — use JPEG, PNG, or WEBP.", 400, corsHeaders);
+    if (!img.data || !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(img.mediaType)) {
+      return jsonError("Unsupported file type — use JPEG, PNG, WEBP, or PDF.", 400, corsHeaders);
     }
   }
 
   const building = buildingId ? await findOwnedBuilding(env, session, buildingId, "id") : null;
 
-  const prompt = `These ${images.length > 1 ? `${images.length} photos are pages/sections of` : "is a photo of"} a paper building-inspection checklist (a "daily log" sheet used by a building superintendent — things like boilers, pumps, cooling towers, fire safety, elevators). Extract every distinct reading the form asks the inspector to record, EXCLUDING any row that looks crossed out, struck through, or otherwise marked as not tracked. ${images.length > 1 ? "Combine everything from all photos into ONE list — do not repeat a reading that appears on more than one photo." : ""}
+  const prompt = `These ${images.length > 1 ? `${images.length} attachments (photos and/or PDF scans) are pages/sections of` : "is a photo or PDF scan of"} a paper building-inspection checklist (a "daily log" sheet used by a building superintendent — things like boilers, pumps, cooling towers, fire safety, elevators). A PDF may itself contain multiple pages — read all of them. Extract every distinct reading the form asks the inspector to record, EXCLUDING any row that looks crossed out, struck through, or otherwise marked as not tracked. ${images.length > 1 ? "Combine everything from every attachment into ONE list — do not repeat a reading that appears more than once." : ""}
 
 For each reading, determine:
 - system_name: the section/category it's under (e.g. "Building Heating", "Fire Safety Systems")
