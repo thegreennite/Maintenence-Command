@@ -15,6 +15,7 @@ import {
   handleBuildingsList,
   handleBuildingCreate,
   handlePushLive,
+  handleDeleteBuilding,
   handleUnassignedSuperintendents,
   handleAssignSuperintendent,
   handleGenerateTags,
@@ -23,6 +24,8 @@ import {
 import { handleGeocodeSearch } from "./geocode.js";
 import { handleFlagIssue, handleManagerWorkOrders, handleResolveWorkOrder } from "./work-orders.js";
 import { handleAdminStats } from "./admin-stats.js";
+import { handlePhotoDates, handlePhotoList, handlePhotoView } from "./photos.js";
+import { needsVerification, sendVerificationCode, verifyCode } from "./two-factor.js";
 import {
   handleBuildingSearchForRegistration,
   handleSelfRegister,
@@ -57,6 +60,9 @@ export default {
       if (url.pathname === "/api/auth/login" && request.method === "POST") {
         return handleLogin(request, env, cors.headers);
       }
+      if (url.pathname === "/api/auth/verify-code" && request.method === "POST") {
+        return handleVerifyCode(request, env, cors.headers);
+      }
 
       // Public: no session required — someone filling out the sign-up form
       // doesn't have one yet.
@@ -83,6 +89,16 @@ export default {
 
       if (url.pathname === "/api/dashboard" && request.method === "GET") {
         return json({ dashboard: dashboardForRole(session.role, session.full_name) }, 200, cors.headers);
+      }
+
+      if (url.pathname === "/api/photos/dates" && request.method === "GET") {
+        return handlePhotoDates(request, session, env, cors.headers);
+      }
+      if (url.pathname === "/api/photos/list" && request.method === "GET") {
+        return handlePhotoList(request, session, env, cors.headers);
+      }
+      if (url.pathname === "/api/photos/view" && request.method === "GET") {
+        return handlePhotoView(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/admin/accounts" && request.method === "GET") {
@@ -216,6 +232,13 @@ export default {
         return handlePushLive(request, session, env, cors.headers);
       }
 
+      if (url.pathname === "/api/manager/buildings/delete" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleDeleteBuilding(request, session, env, cors.headers);
+      }
+
       if (url.pathname === "/api/manager/superintendents" && request.method === "GET") {
         if (session.role !== "regional_manager") {
           return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
@@ -224,22 +247,22 @@ export default {
       }
 
       if (url.pathname === "/api/manager/pending-requests" && request.method === "GET") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handlePendingRequests(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/pending-requests/approve" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handlePendingRequestDecision(request, session, env, cors.headers, true);
       }
 
       if (url.pathname === "/api/manager/pending-requests/deny" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handlePendingRequestDecision(request, session, env, cors.headers, false);
       }
@@ -272,7 +295,7 @@ async function handleLogin(request, env, corsHeaders) {
   // still needs to verify its password before we say anything about status,
   // so a wrong-password guess against a real email doesn't confirm it exists.
   const user = await env.DB.prepare(
-    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, status
+    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, status, email, last_2fa_verified_at, ghl_contact_id
      FROM users WHERE username = ?`,
   )
     .bind(username)
@@ -291,6 +314,43 @@ async function handleLogin(request, env, corsHeaders) {
     return json({ error: "Your registration request was not approved. Contact your operations manager." }, 403, corsHeaders);
   }
 
+  // Accounts seeded before self-registration existed (admin, alex.kim, ...)
+  // have no email on file -- there's nowhere to send a code, so this can't
+  // lock them out. Anyone who actually registered always has a real email.
+  const hasEmail = user.email || user.username.includes("@");
+  if (hasEmail && needsVerification(user)) {
+    try {
+      const pendingToken = await sendVerificationCode(env, user);
+      return json({ requiresVerification: true, pendingToken }, 200, corsHeaders);
+    } catch (error) {
+      console.error("2FA send failed", error);
+      return json({ error: "Couldn't send your verification code. Try again in a moment." }, 502, corsHeaders);
+    }
+  }
+
+  return createSessionForUser(request, env, user, corsHeaders);
+}
+
+async function handleVerifyCode(request, env, corsHeaders) {
+  const body = await readJson(request);
+  const pendingToken = String(body.pendingToken || "");
+  const code = String(body.code || "");
+  if (!pendingToken || !code) return json({ error: "A code is required." }, 400, corsHeaders);
+
+  const result = await verifyCode(env, pendingToken, code);
+  if (!result.ok) return json({ error: result.error }, 401, corsHeaders);
+
+  const user = await env.DB.prepare(
+    `SELECT id, username, full_name, job_title, role, region, building_id, status FROM users WHERE id = ?`,
+  )
+    .bind(result.userId)
+    .first();
+  if (!user) return json({ error: "Account not found." }, 404, corsHeaders);
+
+  return createSessionForUser(request, env, user, corsHeaders);
+}
+
+async function createSessionForUser(request, env, user, corsHeaders) {
   const token = createSessionToken();
   const tokenHash = await hashToken(token);
   const ttlHours = Math.max(1, Number.parseInt(env.SESSION_TTL_HOURS || "12", 10));

@@ -3,7 +3,7 @@
 // them. Parameters are opt-in — a tag with none set is just "not evaluated".
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 }
 
 // A reading is flagged red the moment it's outside the normal range, but

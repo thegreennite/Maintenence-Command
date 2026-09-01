@@ -5,12 +5,16 @@ export const roleLabels = {
   property_manager: "Property Manager",
 };
 
+const TORONTO_TZ = "America/Toronto";
+
 function todayEyebrow() {
-  return new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  return new Date().toLocaleDateString("en-US", { timeZone: TORONTO_TZ, weekday: "long", month: "long", day: "numeric" });
 }
 
 function timeOfDayGreeting(firstName) {
-  const hour = new Date().getHours();
+  // Workers run in UTC -- plain getHours() would greet "good evening" at
+  // 9am Toronto time. Read the hour back out in the right zone instead.
+  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: TORONTO_TZ, hour: "numeric", hour12: false }).format(new Date()));
   const part = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
   return `Good ${part}, ${firstName}`;
 }

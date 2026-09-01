@@ -7,9 +7,10 @@
 // same JSON-in/JSON-out contract either way, so swapping providers later
 // only means rewriting this one file.
 //
-// Photos are NOT persisted (no R2 bucket wired up yet) — processed
-// transiently and discarded. Worth adding later for audit/compliance
-// evidence, but not required for the core extraction to work.
+// Photos are kept in R2 after a successful read — organized by building
+// and day — for audit/compliance evidence and the photo library.
+
+import { storePhoto } from "./photos.js";
 
 const VISION_MODEL = "gemini-3.6-flash";
 const ALLOWED_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -122,6 +123,16 @@ Return a JSON array of exactly ${orderedTags.length} objects, one per numbered r
     value: parsed[index]?.value ?? null,
     unclear: Boolean(parsed[index]?.unclear),
   }));
+
+  // Kept in the library regardless of read quality -- even a blurry attempt
+  // is evidence someone was there and tried, not just clean successes.
+  await storePhoto(env, {
+    buildingId: session.building_id,
+    imageBase64,
+    mediaType,
+    context: "inspection",
+    uploadedBy: session.id,
+  }).catch((error) => console.error("Photo library store failed", error));
 
   return jsonOk({ results }, corsHeaders);
 }

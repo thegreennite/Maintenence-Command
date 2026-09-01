@@ -4,8 +4,10 @@
 
 import { createReadingWorkOrder } from "./work-orders.js";
 
+// Toronto time, not UTC -- an inspection "day" should turn over at
+// midnight ET, not at 8pm local when UTC quietly rolls to the next date.
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 }
 
 async function loadTags(env, buildingId) {

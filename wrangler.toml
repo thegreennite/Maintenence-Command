@@ -8,6 +8,10 @@ database_name = "fhg-command-db"
 database_id = "96ae85a7-61f5-493e-847b-51a17aa39465"
 migrations_dir = "migrations"
 
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "fhg-command-photos"
+
 [vars]
 ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,https://fhg-command.pages.dev"
 SESSION_TTL_HOURS = "12"
@@ -16,6 +20,9 @@ SESSION_TTL_HOURS = "12"
 CLOUDFLARE_ACCOUNT_ID = "c0f148161abb7df271064bb6f37f7227"
 D1_DATABASE_ID = "96ae85a7-61f5-493e-847b-51a17aa39465"
 GITHUB_REPO_URL = "https://github.com/thegreennite/Maintenence-Command"
+# GHL_API_KEY is a Worker secret, not a var. Location/base aren't secret.
+GHL_API_BASE = "https://services.leadconnectorhq.com"
+GHL_LOCATION_ID = "B3DTv8qZBapYs1m8Rcv2"
 
 [observability]
 enabled = true

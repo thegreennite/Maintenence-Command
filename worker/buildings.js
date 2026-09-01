@@ -3,6 +3,8 @@
 // goes live until the regional manager reviews and confirms it — same
 // "never trust a blind AI commit" principle as Phase 5's photo reading.
 
+import { storePhoto } from "./photos.js";
+
 const VISION_MODEL = "gemini-3.6-flash";
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -70,6 +72,55 @@ export async function handlePushLive(request, session, env, corsHeaders) {
   return jsonOk({ ok: true }, corsHeaders);
 }
 
+export async function handleDeleteBuilding(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const buildingId = Number.parseInt(body.buildingId, 10);
+  const confirmationText = String(body.confirmationText || "");
+
+  const building =
+    session.role === "admin"
+      ? await env.DB.prepare("SELECT id, name, region FROM buildings WHERE id = ?").bind(buildingId).first()
+      : await env.DB.prepare("SELECT id, name, region FROM buildings WHERE id = ? AND region = ?")
+          .bind(buildingId, session.region)
+          .first();
+  if (!building) return jsonError("Building not found.", 404, corsHeaders);
+
+  // Enforced server-side too, not just as a UI gate -- the exact phrase has
+  // to match the real building name, word for word, before anything wipes.
+  const required = `I WANT TO DELETE ${building.name}`;
+  if (confirmationText !== required) {
+    return jsonError(`Type exactly "${required}" to confirm.`, 400, corsHeaders);
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(
+      "DELETE FROM inspection_readings WHERE submission_id IN (SELECT id FROM inspection_submissions WHERE building_id = ?)",
+    ).bind(buildingId),
+    env.DB.prepare("DELETE FROM inspection_submissions WHERE building_id = ?").bind(buildingId),
+    env.DB.prepare(
+      "DELETE FROM inspection_parameters WHERE tag_id IN (SELECT id FROM inspection_tags WHERE building_id = ?)",
+    ).bind(buildingId),
+    env.DB.prepare("DELETE FROM inspection_tags WHERE building_id = ?").bind(buildingId),
+    env.DB.prepare("DELETE FROM work_orders WHERE building_id = ?").bind(buildingId),
+    // People aren't deleted, just unassigned -- a building going away
+    // shouldn't take an account with it. They show up as unassigned/
+    // pending-reassignment afterward.
+    env.DB.prepare("UPDATE users SET building_id = NULL WHERE building_id = ?").bind(buildingId),
+    env.DB.prepare("DELETE FROM buildings WHERE id = ?").bind(buildingId),
+  ]);
+
+  if (env.PHOTOS) {
+    const listed = await env.PHOTOS.list({ prefix: `${buildingId}/` }).catch(() => null);
+    if (listed?.objects?.length) {
+      await env.PHOTOS.delete(listed.objects.map((o) => o.key)).catch((error) =>
+        console.error("Photo cleanup failed", error),
+      );
+    }
+  }
+
+  return jsonOk({ ok: true }, corsHeaders);
+}
+
 export async function handleUnassignedSuperintendents(session, env, corsHeaders) {
   const result = await env.DB.prepare(
     "SELECT id, username, full_name FROM users WHERE role = 'superintendent' AND building_id IS NULL AND is_active = 1 ORDER BY full_name",
@@ -100,19 +151,36 @@ export async function handleAssignSuperintendent(request, session, env, corsHead
   return jsonOk({ ok: true }, corsHeaders);
 }
 
+const MAX_SHEET_PHOTOS = 20;
+
 export async function handleGenerateTags(request, session, env, corsHeaders) {
   if (!env.GOOGLE_AI_KEY) {
     return jsonError("AI checklist generation isn't configured on this deployment yet.", 503, corsHeaders);
   }
 
   const body = await request.json().catch(() => ({}));
-  const imageBase64 = body.imageBase64;
-  const mediaType = body.mediaType;
-  if (!imageBase64 || !["image/jpeg", "image/png", "image/webp"].includes(mediaType)) {
-    return jsonError("A photo of the paper inspection sheet is required.", 400, corsHeaders);
+  const buildingId = Number.parseInt(body.buildingId, 10);
+  // Back-compat: a single {imageBase64, mediaType} still works, but the
+  // real path now is images: [{data, mediaType}] for a multi-page form.
+  const images = Array.isArray(body.images)
+    ? body.images
+    : body.imageBase64
+      ? [{ data: body.imageBase64, mediaType: body.mediaType }]
+      : [];
+
+  if (!images.length) return jsonError("At least one photo of the paper inspection sheet is required.", 400, corsHeaders);
+  if (images.length > MAX_SHEET_PHOTOS) return jsonError(`Up to ${MAX_SHEET_PHOTOS} photos at a time.`, 400, corsHeaders);
+  for (const img of images) {
+    if (!img.data || !["image/jpeg", "image/png", "image/webp"].includes(img.mediaType)) {
+      return jsonError("Unsupported image type — use JPEG, PNG, or WEBP.", 400, corsHeaders);
+    }
   }
 
-  const prompt = `This is a photo of a paper building-inspection checklist (a "daily log" sheet used by a building superintendent — things like boilers, pumps, cooling towers, fire safety, elevators). Extract every distinct reading the form asks the inspector to record, EXCLUDING any row that looks crossed out, struck through, or otherwise marked as not tracked.
+  const building = buildingId
+    ? await env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND region = ?").bind(buildingId, session.region).first()
+    : null;
+
+  const prompt = `These ${images.length > 1 ? `${images.length} photos are pages/sections of` : "is a photo of"} a paper building-inspection checklist (a "daily log" sheet used by a building superintendent — things like boilers, pumps, cooling towers, fire safety, elevators). Extract every distinct reading the form asks the inspector to record, EXCLUDING any row that looks crossed out, struck through, or otherwise marked as not tracked. ${images.length > 1 ? "Combine everything from all photos into ONE list — do not repeat a reading that appears on more than one photo." : ""}
 
 For each reading, determine:
 - system_name: the section/category it's under (e.g. "Building Heating", "Fire Safety Systems")
@@ -121,7 +189,7 @@ For each reading, determine:
 - unit: the unit shown (e.g. "°", "PSI", "%"), or null if none
 - value_type: "on_off" if this reading is literally an on/off or open/closed state, otherwise "numeric"
 
-Return a JSON array of objects with exactly those five fields. If you can't read the sheet clearly enough to extract anything reliably, return an empty array rather than guessing.`;
+Return a JSON array of objects with exactly those five fields. If you can't read the sheet(s) clearly enough to extract anything reliably, return an empty array rather than guessing.`;
 
   let response;
   try {
@@ -131,7 +199,14 @@ Return a JSON array of objects with exactly those five fields. If you can't read
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          contents: [{ parts: [{ inline_data: { mime_type: mediaType, data: imageBase64 } }, { text: prompt }] }],
+          contents: [
+            {
+              parts: [
+                ...images.map((img) => ({ inline_data: { mime_type: img.mediaType, data: img.data } })),
+                { text: prompt },
+              ],
+            },
+          ],
           generationConfig: {
             responseMimeType: "application/json",
             responseSchema: {
@@ -172,6 +247,20 @@ Return a JSON array of objects with exactly those five fields. If you can't read
     return jsonError("Couldn't understand the AI's response. Try again.", 502, corsHeaders);
   }
   if (!Array.isArray(parsed)) parsed = [];
+
+  if (building) {
+    await Promise.all(
+      images.map((img) =>
+        storePhoto(env, {
+          buildingId: building.id,
+          imageBase64: img.data,
+          mediaType: img.mediaType,
+          context: "checklist-setup",
+          uploadedBy: session.id,
+        }).catch((error) => console.error("Photo library store failed", error)),
+      ),
+    );
+  }
 
   return jsonOk({ proposedTags: parsed }, corsHeaders);
 }

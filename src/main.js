@@ -45,6 +45,8 @@ const state = {
   workOrders: [],
   flagIssueOpen: false,
   flagIssueJustSent: false,
+  photoLibrary: { open: false, buildingId: null, dates: [], selectedDate: null, photos: [], loading: false },
+  deleteBuildingTarget: null,
 };
 
 // In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
@@ -75,6 +77,12 @@ const api = {
     return this.request("/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
+    });
+  },
+  verifyCode(pendingToken, code) {
+    return this.request("/auth/verify-code", {
+      method: "POST",
+      body: JSON.stringify({ pendingToken, code }),
     });
   },
   logout() {
@@ -143,6 +151,9 @@ const api = {
   managerPushLive(payload) {
     return this.request("/manager/buildings/push-live", { method: "POST", body: JSON.stringify(payload) });
   },
+  managerDeleteBuilding(payload) {
+    return this.request("/manager/buildings/delete", { method: "POST", body: JSON.stringify(payload) });
+  },
   managerSuperintendents() {
     return this.request("/manager/superintendents");
   },
@@ -172,6 +183,15 @@ const api = {
   },
   resolveWorkOrder(workOrderId) {
     return this.request("/manager/work-orders/resolve", { method: "POST", body: JSON.stringify({ workOrderId }) });
+  },
+  photoDates(buildingId) {
+    return this.request(`/photos/dates?buildingId=${buildingId}`);
+  },
+  photoList(buildingId, date) {
+    return this.request(`/photos/list?buildingId=${buildingId}&date=${date}`);
+  },
+  photoViewUrl(key) {
+    return `${API_BASE}/api/photos/view?key=${encodeURIComponent(key)}`;
   },
 };
 
@@ -205,6 +225,8 @@ function icon(name) {
     shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
     users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
     warning: '<path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
+    close: '<path d="M18 6 6 18M6 6l12 12"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
   };
   return `<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] || paths.command}</svg>`;
 }
@@ -269,30 +291,33 @@ function renderLogin(message = "") {
           <p class="security-note">${icon("shield")} Protected role-based access</p>
           <div class="register-links">
             <span>New here?</span>
-            <button type="button" class="link-button" id="register-super-link">Register as Superintendent</button>
-            <button type="button" class="link-button" id="register-pm-link">Register as Property Manager</button>
+            <button type="button" class="link-button" id="create-account-link">Create an account</button>
           </div>
         </div>
       </section>
     </main>`;
 
-  document.querySelector("#register-super-link")?.addEventListener("click", () => startRegistration("superintendent"));
-  document.querySelector("#register-pm-link")?.addEventListener("click", () => startRegistration("property_manager"));
+  document.querySelector("#create-account-link")?.addEventListener("click", () => startRegistration());
 
   document.querySelector("#login-form").addEventListener("submit", handleLogin);
   document.querySelector('input[name="username"]').focus();
 }
 
-const ROLE_LABELS_FOR_REGISTRATION = { superintendent: "Superintendent", property_manager: "Property Manager" };
+const ROLE_LABELS_FOR_REGISTRATION = {
+  superintendent: "Superintendent",
+  property_manager: "Property Manager",
+  regional_manager: "Regional Operations Manager",
+};
 
-function startRegistration(role) {
-  state.registration = { role, step: "building", building: null, buildingResults: [], buildingSearched: false };
+function startRegistration() {
+  state.registration = { role: null, step: "role", building: null, buildingResults: [], buildingSearched: false, regionName: "" };
   renderRegister();
 }
 
 function renderRegister() {
   const reg = state.registration;
-  setDocumentTitle(`Register as ${ROLE_LABELS_FOR_REGISTRATION[reg.role]}`);
+  setDocumentTitle(reg.role ? `Register as ${ROLE_LABELS_FOR_REGISTRATION[reg.role]}` : "Create an account");
+  const titles = { role: "What's your role?", building: "Which building do you cover?", profile: "Create your profile", done: "Request sent" };
   app.innerHTML = `
     <main class="login-page login-page--register">
       <section class="login-panel login-panel--wide">
@@ -301,20 +326,52 @@ function renderRegister() {
             <span class="brand-mark">${icon("command")}</span>
             <span>FHG <strong>Command</strong></span>
           </div>
-          <p class="eyebrow">Register as ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}</p>
-          <h2>${reg.step === "building" ? "Which building do you cover?" : reg.step === "profile" ? "Create your profile" : "Request sent"}</h2>
-          ${reg.step === "building" ? renderRegisterBuildingStep(reg) : reg.step === "profile" ? renderRegisterProfileStep(reg) : renderRegisterDoneStep(reg)}
+          <p class="eyebrow">${reg.role ? `Register as ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}` : "Create an account"}</p>
+          <h2>${titles[reg.step]}</h2>
+          ${
+            reg.step === "role"
+              ? renderRegisterRoleStep()
+              : reg.step === "building"
+                ? renderRegisterBuildingStep(reg)
+                : reg.step === "profile"
+                  ? renderRegisterProfileStep(reg)
+                  : renderRegisterDoneStep(reg)
+          }
           <button type="button" class="link-button" id="back-to-login">← Back to sign in</button>
         </div>
       </section>
     </main>`;
 
   document.querySelector("#back-to-login")?.addEventListener("click", () => renderLogin());
+  document.querySelector("#registration-role-form")?.addEventListener("submit", handleRegistrationRoleSubmit);
   document.querySelector("#registration-building-search")?.addEventListener("input", handleRegistrationBuildingSearch);
   document.querySelectorAll(".registration-building-result").forEach((button) => {
     button.addEventListener("click", () => selectRegistrationBuilding(Number(button.dataset.buildingId), button.dataset.buildingName));
   });
   document.querySelector("#registration-profile-form")?.addEventListener("submit", handleSelfRegisterSubmit);
+}
+
+function renderRegisterRoleStep() {
+  return `
+    <form id="registration-role-form" class="login-form">
+      <label><span>I'm a…</span>
+        <select name="role" required>
+          <option value="" disabled selected>Select your role</option>
+          <option value="superintendent">Superintendent</option>
+          <option value="property_manager">Property Manager</option>
+          <option value="regional_manager">Regional Operations Manager</option>
+        </select>
+      </label>
+      <button class="button button--primary button--full" type="submit"><span>Continue</span>${icon("arrow")}</button>
+    </form>`;
+}
+
+function handleRegistrationRoleSubmit(event) {
+  event.preventDefault();
+  const role = new FormData(event.currentTarget).get("role");
+  state.registration.role = role;
+  state.registration.step = role === "regional_manager" ? "profile" : "building";
+  renderRegister();
 }
 
 function renderRegisterBuildingStep(reg) {
@@ -337,12 +394,22 @@ function renderRegisterBuildingStep(reg) {
 }
 
 function renderRegisterProfileStep(reg) {
+  const isManager = reg.role === "regional_manager";
   return `
-    <p class="form-intro">Registering for <strong>${escapeHtml(reg.building.name)}</strong>. Once you submit, your operations manager will need to approve you before you can sign in.</p>
+    <p class="form-intro">${
+      isManager
+        ? "Registering as a Regional Operations Manager. Once you submit, an administrator will need to approve you before you can sign in."
+        : `Registering for <strong>${escapeHtml(reg.building.name)}</strong>. Once you submit, your operations manager will need to approve you before you can sign in.`
+    }</p>
     <form id="registration-profile-form" class="login-form">
       <label><span>Full name</span><input name="fullName" required autocomplete="name" /></label>
       <label><span>Email</span><input name="email" type="email" required autocomplete="email" /></label>
       <label><span>Phone <small>(optional)</small></span><input name="phone" type="tel" autocomplete="tel" /></label>
+      ${
+        isManager
+          ? `<label><span>Region name</span><input name="regionName" required autocomplete="off" placeholder="e.g. Central Portfolio" /></label>`
+          : ""
+      }
       <label><span>Create a password</span><input name="password" type="password" minlength="8" required autocomplete="new-password" /></label>
       <label><span>Profile picture <small>(optional)</small></span><input name="profilePhoto" type="file" accept="image/*" /></label>
       <p class="form-error" id="registration-error" hidden role="alert"></p>
@@ -350,8 +417,9 @@ function renderRegisterProfileStep(reg) {
     </form>`;
 }
 
-function renderRegisterDoneStep() {
-  return `<div class="finding"><p>${icon("check")} Your request has been sent to your operations manager for approval. You'll be able to sign in once they approve it.</p></div>`;
+function renderRegisterDoneStep(reg) {
+  const approver = reg.role === "regional_manager" ? "an administrator" : "your operations manager";
+  return `<div class="finding"><p>${icon("check")} Your request has been sent to ${approver} for approval. You'll be able to sign in once they approve it.</p></div>`;
 }
 
 async function handleRegistrationBuildingSearch(event) {
@@ -390,7 +458,8 @@ async function handleSelfRegisterSubmit(event) {
     const profilePhoto = photoFile && photoFile.size ? await fileToBase64(photoFile) : null;
     await api.selfRegister({
       role: state.registration.role,
-      buildingId: state.registration.building.id,
+      buildingId: state.registration.building?.id ?? null,
+      regionName: data.get("regionName") || null,
       fullName: data.get("fullName"),
       email: data.get("email"),
       phone: data.get("phone"),
@@ -417,13 +486,84 @@ async function handleLogin(event) {
   button.querySelector("span").textContent = "Signing in…";
 
   try {
-    state.session = await api.login(data.get("username"), data.get("password"));
+    const response = await api.login(data.get("username"), data.get("password"));
+    if (response.requiresVerification) {
+      renderVerifyCodeScreen(response.pendingToken);
+      return;
+    }
+    state.session = response;
     await loadDashboard();
   } catch (requestError) {
     error.textContent = requestError.message;
     error.hidden = false;
     button.disabled = false;
     button.querySelector("span").textContent = "Enter command center";
+  }
+}
+
+function renderVerifyCodeScreen(pendingToken) {
+  setDocumentTitle("Verify it's you");
+  app.innerHTML = `
+    <main class="login-page">
+      <section class="login-story" aria-label="FHG Command overview">
+        <div class="login-story__inner">
+          <div class="brand brand--light">
+            <span class="brand-mark">${icon("command")}</span>
+            <span>FHG <strong>Command</strong></span>
+          </div>
+          <div class="story-copy">
+            <p class="eyebrow eyebrow--light">Weekly check</p>
+            <h1>One more<br />step this week.</h1>
+            <p>We emailed a 6-digit code. This only happens about once a week — most days you'll just sign in normally.</p>
+          </div>
+        </div>
+      </section>
+      <section class="login-panel">
+        <div class="login-form-wrap">
+          <div class="mobile-brand brand">
+            <span class="brand-mark">${icon("command")}</span>
+            <span>FHG <strong>Command</strong></span>
+          </div>
+          <p class="eyebrow">Verify it's you</p>
+          <h2>Check your email</h2>
+          <p class="form-intro">Enter the 6-digit code we just sent.</p>
+          <form class="login-form" id="verify-code-form">
+            <label>
+              <span>Verification code</span>
+              <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required autofocus />
+            </label>
+            <p class="form-error" id="verify-code-error" hidden role="alert"></p>
+            <button class="button button--primary button--full" type="submit">
+              <span>Verify &amp; sign in</span>${icon("arrow")}
+            </button>
+          </form>
+          <button type="button" class="link-button" id="back-to-login-from-verify">← Back to sign in</button>
+        </div>
+      </section>
+    </main>`;
+
+  document.querySelector("#verify-code-form").addEventListener("submit", (event) => handleVerifyCode(event, pendingToken));
+  document.querySelector("#back-to-login-from-verify").addEventListener("click", () => renderLogin());
+  document.querySelector('input[name="code"]').focus();
+}
+
+async function handleVerifyCode(event, pendingToken) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  const error = document.querySelector("#verify-code-error");
+  const code = new FormData(form).get("code");
+  error.hidden = true;
+  button.disabled = true;
+  button.querySelector("span").textContent = "Verifying…";
+  try {
+    state.session = await api.verifyCode(pendingToken, code);
+    await loadDashboard();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.hidden = false;
+    button.disabled = false;
+    button.querySelector("span").textContent = "Verify & sign in";
   }
 }
 
@@ -443,6 +583,9 @@ async function loadDashboard() {
       isPropertyManager ? api.propertyInspections() : Promise.resolve(null),
     ]);
   state.adminStats = isAdminViewing ? await api.adminStats().catch(() => null) : null;
+  if (isAdminViewing) {
+    state.pendingRequests = (await api.managerPendingRequests().catch(() => ({ requests: [] }))).requests;
+  }
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
   state.inspection = inspectionResponse;
@@ -462,6 +605,33 @@ async function loadDashboard() {
     state.selectedExceptionId = state.workOrders.find((w) => w.status === "open")?.id || null;
   }
   renderApp();
+
+  if (isAdminViewing) startAdminStatsAutoRefresh();
+  else stopAdminStatsAutoRefresh();
+}
+
+// Live usage on the Admin dashboard refetches on its own — no reason to
+// make Lucas hit reload to see whether he's approaching a limit.
+let adminStatsRefreshTimer = null;
+const ADMIN_STATS_REFRESH_MS = 30_000;
+
+function startAdminStatsAutoRefresh() {
+  stopAdminStatsAutoRefresh();
+  adminStatsRefreshTimer = setInterval(async () => {
+    if (state.session?.user?.role !== "admin") {
+      stopAdminStatsAutoRefresh();
+      return;
+    }
+    const fresh = await api.adminStats().catch(() => null);
+    if (!fresh || state.session?.user?.role !== "admin") return;
+    state.adminStats = fresh;
+    renderApp();
+  }, ADMIN_STATS_REFRESH_MS);
+}
+
+function stopAdminStatsAutoRefresh() {
+  clearInterval(adminStatsRefreshTimer);
+  adminStatsRefreshTimer = null;
 }
 
 function renderApp() {
@@ -510,7 +680,9 @@ function renderDashboard(data) {
       : data.kind === "admin"
         ? renderAdminDashboard(data)
         : data.kind === "superintendent"
-          ? renderInspectionView(state.inspection) + renderFlagIssuePanel()
+          ? renderInspectionView(state.inspection) +
+            renderFlagIssuePanel() +
+            (state.inspection?.building ? renderPhotoLibraryCard(state.inspection.building.id, null) : "")
           : data.kind === "property_manager"
             ? renderPropertyView(state.propertyInspections)
             : renderRoleShell(data);
@@ -557,7 +729,8 @@ function renderManagerDashboard(data) {
     ${renderManagerInspectionPanel(state.managerInspection)}
     ${renderPendingRequestsPanel()}
     ${renderBuildingsPanel()}
-    ${renderSuperintendentSwitcherPanel()}`;
+    ${renderSuperintendentSwitcherPanel()}
+    ${state.managerBuildings.length ? renderPhotoLibraryCard(state.managerBuildings[0].id, state.managerBuildings.map((b) => ({ id: b.id, name: b.name }))) : ""}`;
 }
 
 function renderPendingRequestsPanel() {
@@ -616,10 +789,26 @@ function renderBuildingsPanel() {
         ${wizard.step === "closed" ? `<button type="button" class="button button--outline button--small" id="register-building-toggle">+ Register a building</button>` : ""}
       </div>
       <div class="buildings-list">
-        ${state.managerBuildings.map(renderBuildingRow).join("")}
+        ${state.managerBuildings.map((b) => renderBuildingRow(b) + (state.deleteBuildingTarget?.id === b.id ? renderDeleteBuildingPanel(b) : "")).join("")}
       </div>
       ${wizard.step !== "closed" ? renderBuildingWizard(wizard) : ""}
     </section>`;
+}
+
+function renderDeleteBuildingPanel(building) {
+  const required = `I WANT TO DELETE ${building.name}`;
+  return `<div class="wizard-panel delete-building-panel">
+    <h3>${icon("warning")} Delete ${escapeHtml(building.name)}?</h3>
+    <p class="parameters-intro">This permanently removes the building, its checklist, every past inspection, and its work orders. Anyone assigned to it becomes unassigned — their accounts aren't deleted. This can't be undone.</p>
+    <label class="inspection-field"><span>Type exactly: <code>${escapeHtml(required)}</code></span>
+      <input type="text" id="delete-building-confirm-text" autocomplete="off" placeholder="${escapeHtml(required)}" />
+    </label>
+    <div class="inspection-actions">
+      <button type="button" class="button button--outline" id="cancel-delete-building">Cancel</button>
+      <button type="button" class="button button--danger" id="confirm-delete-building" data-building-id="${building.id}" data-required="${escapeHtml(required)}" disabled>Delete permanently</button>
+    </div>
+    <p class="form-error" id="delete-building-error" hidden role="alert"></p>
+  </div>`;
 }
 
 function renderBuildingRow(building) {
@@ -639,6 +828,7 @@ function renderBuildingRow(building) {
             ? `<button type="button" class="button button--primary button--small push-live-button" data-building-id="${building.id}">Push to Super</button>`
             : ""
       }
+      <button type="button" class="icon-button delete-building-button" data-building-id="${building.id}" data-building-name="${escapeHtml(building.name)}" title="Delete building" aria-label="Delete ${escapeHtml(building.name)}">${icon("close")}</button>
     </div>`;
 }
 
@@ -660,6 +850,10 @@ function renderBuildingForm() {
       <div class="map-picker">
         <div class="map-search-results" id="map-search-results"></div>
         <div class="map-picker__canvas" id="building-map" hidden></div>
+        <div class="map-save-bar" id="map-save-bar" hidden>
+          <span>${icon("check")} <strong id="map-save-bar-address"></strong></span>
+          <span class="quiet-label">Saved to this building — drag the pin to adjust</span>
+        </div>
         <p class="map-picker__hint" id="map-picker-hint">Type an address above — it locates automatically. Drag the pin after to fine-tune. Optional — you can still register the building without it.</p>
         <input type="hidden" name="latitude" id="building-latitude" />
         <input type="hidden" name="longitude" id="building-longitude" />
@@ -683,9 +877,15 @@ function renderBuildingForm() {
 let buildingMap = null;
 let buildingMarker = null;
 
-async function placeBuildingMapPin(lat, lon) {
+async function placeBuildingMapPin(lat, lon, label) {
   document.querySelector("#building-latitude").value = lat;
   document.querySelector("#building-longitude").value = lon;
+
+  if (label) {
+    const saveBar = document.querySelector("#map-save-bar");
+    saveBar.hidden = false;
+    document.querySelector("#map-save-bar-address").textContent = label;
+  }
 
   const canvas = document.querySelector("#building-map");
   canvas.hidden = false;
@@ -709,6 +909,8 @@ async function placeBuildingMapPin(lat, lon) {
       const newPosition = buildingMarker.getPosition();
       document.querySelector("#building-latitude").value = newPosition.lat();
       document.querySelector("#building-longitude").value = newPosition.lng();
+      document.querySelector("#map-save-bar-address").textContent = "Custom pin location";
+      document.querySelector("#map-save-bar").hidden = false;
     });
   } else {
     buildingMap.setCenter(position);
@@ -745,16 +947,16 @@ async function runAddressSearch(q) {
     }
     // Auto-place the closest match immediately — no extra click required —
     // while still listing alternates in case it's the wrong one.
-    placeBuildingMapPin(results[0].lat, results[0].lon);
+    placeBuildingMapPin(results[0].lat, results[0].lon, results[0].label);
     resultsBox.innerHTML = results
       .map(
         (r, index) =>
-          `<button type="button" class="map-search-result ${index === 0 ? "is-selected" : ""}" data-lat="${r.lat}" data-lon="${r.lon}">${escapeHtml(r.label)}</button>`,
+          `<button type="button" class="map-search-result ${index === 0 ? "is-selected" : ""}" data-lat="${r.lat}" data-lon="${r.lon}" data-label="${escapeHtml(r.label)}">${escapeHtml(r.label)}</button>`,
       )
       .join("");
     resultsBox.querySelectorAll(".map-search-result").forEach((button) => {
       button.addEventListener("click", () => {
-        placeBuildingMapPin(Number(button.dataset.lat), Number(button.dataset.lon));
+        placeBuildingMapPin(Number(button.dataset.lat), Number(button.dataset.lon), button.dataset.label);
         resultsBox.querySelectorAll(".map-search-result").forEach((b) => b.classList.remove("is-selected"));
         button.classList.add("is-selected");
       });
@@ -768,9 +970,9 @@ function renderBuildingUploadStep(wizard) {
   return `
     <div class="wizard-panel">
       <h3>${escapeHtml(wizard.building.name)} — build the checklist</h3>
-      <p class="parameters-intro">Take a photo of this building's paper inspection sheet (one section/page at a time works best) and the AI will propose a digital checklist — you'll review and edit it before it goes live.</p>
-      <label class="button button--outline photo-capture__button" for="building-sheet-photo">${icon("camera")} Upload a photo of the sheet</label>
-      <input type="file" accept="image/*" capture="environment" id="building-sheet-photo" hidden />
+      <p class="parameters-intro">Attach photos of this building's paper inspection sheet — every page/section at once works fine, up to 20 — and the AI will propose one combined digital checklist. You'll review and edit it before it goes live.</p>
+      <label class="button button--outline photo-capture__button" for="building-sheet-photo">${icon("camera")} Attach photos of the sheet (up to 20)</label>
+      <input type="file" accept="image/*" capture="environment" id="building-sheet-photo" multiple hidden />
       <p class="photo-capture__status" id="building-sheet-status"></p>
     </div>`;
 }
@@ -864,19 +1066,32 @@ async function handleCreateBuilding(event) {
   }
 }
 
+const MAX_SHEET_PHOTOS = 20;
+
 async function handleBuildingSheetPhoto(event) {
   const input = event.currentTarget;
-  const file = input.files?.[0];
-  if (!file) return;
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
   const status = document.querySelector("#building-sheet-status");
+  if (files.length > MAX_SHEET_PHOTOS) {
+    status.textContent = `Up to ${MAX_SHEET_PHOTOS} photos at a time — you selected ${files.length}.`;
+    status.className = "photo-capture__status photo-capture__status--warning";
+    input.value = "";
+    return;
+  }
   status.className = "photo-capture__status photo-capture__status--busy";
-  const stopAnimation = startReadingAnimation(status, { estimateSeconds: 8 });
+  const stopAnimation = startReadingAnimation(status, { estimateSeconds: 6 + files.length * 2 });
   try {
-    const imageBase64 = await fileToBase64(file);
-    const { proposedTags } = await api.managerGenerateTags({ imageBase64, mediaType: file.type });
+    const images = await Promise.all(
+      files.map(async (file) => ({ data: await fileToBase64(file), mediaType: file.type })),
+    );
+    const { proposedTags } = await api.managerGenerateTags({
+      buildingId: state.buildingWizard.building.id,
+      images,
+    });
     stopAnimation();
     if (!proposedTags.length) {
-      status.textContent = "Couldn't confidently read that photo — try a clearer, closer shot of one section.";
+      status.textContent = `Couldn't confidently read ${files.length === 1 ? "that photo" : "those photos"} — try a clearer, closer shot of one section.`;
       status.className = "photo-capture__status photo-capture__status--warning";
       return;
     }
@@ -1122,6 +1337,7 @@ function renderCoverage(person) {
 function renderAdminDashboard(data) {
   return `
     <div class="metric-grid metric-grid--three">${data.stats.map(renderStat).join("")}</div>
+    ${renderPendingRequestsPanel()}
     <section class="card admin-panel">
       <div class="card__header"><div><p class="section-kicker">Role Preview</p><h2>Choose a command view</h2></div><span class="quiet-label">Administrator access</span></div>
       <p class="admin-panel__intro">Open another user’s dashboard without using or changing their credentials. Your administrator session remains active.</p>
@@ -1145,7 +1361,7 @@ function renderStatsPanel() {
       </div>
     </section>
     <section class="card" aria-labelledby="usage-title">
-      <div class="card__header"><div><p class="section-kicker">Live usage</p><h2 id="usage-title">Free tier vs. today</h2></div><span class="quiet-label">Cloudflare only — updates on page load</span></div>
+      <div class="card__header"><div><p class="section-kicker">Live usage</p><h2 id="usage-title">Free tier vs. today</h2></div><span class="quiet-label"><span class="status-dot status-dot--success"></span> Auto-refreshing every 30s — Cloudflare only</span></div>
       <div class="usage-bars">
         ${renderUsageBar(usage.workers)}
         ${renderUsageBar(usage.d1?.storage)}
@@ -1239,6 +1455,78 @@ const ISSUE_CATEGORIES = {
   method: "Method / procedure question",
   other: "Something else",
 };
+
+function renderPhotoLibraryCard(defaultBuildingId, buildingOptions) {
+  const lib = state.photoLibrary;
+  if (!lib.open) {
+    return `<section class="card">
+      <div class="card__header">
+        <div><p class="section-kicker">Photo history</p><h2>Photo library</h2></div>
+        <button type="button" class="button button--outline button--small" id="open-photo-library" data-default-building-id="${defaultBuildingId}">${icon("image")} Open library</button>
+      </div>
+    </section>`;
+  }
+  return `<section class="card">
+    <div class="card__header">
+      <div><p class="section-kicker">Photo history</p><h2>Photo library</h2></div>
+      <button type="button" class="icon-button" id="close-photo-library" aria-label="Close photo library">${icon("close")}</button>
+    </div>
+    <div class="photo-library">
+      ${
+        buildingOptions
+          ? `<label class="inspection-field"><span>Building</span>
+              <select id="photo-library-building">
+                ${buildingOptions.map((b) => `<option value="${b.id}" ${b.id === lib.buildingId ? "selected" : ""}>${escapeHtml(b.name)}</option>`).join("")}
+              </select>
+            </label>`
+          : ""
+      }
+      <div class="photo-library__layout">
+        <div class="photo-library__dates">
+          ${
+            lib.dates.length
+              ? lib.dates.map((d) => `<button type="button" class="photo-library__date ${d === lib.selectedDate ? "is-selected" : ""}" data-date="${d}">${escapeHtml(formatInspectionDate(d))}</button>`).join("")
+              : `<p class="quiet-label">No photos yet.</p>`
+          }
+        </div>
+        <div class="photo-library__grid">
+          ${
+            lib.loading
+              ? `<p class="quiet-label">Loading…</p>`
+              : lib.photos.length
+                ? lib.photos.map((p) => `<a href="${api.photoViewUrl(p.key)}" target="_blank" rel="noopener" class="photo-library__thumb"><img src="${api.photoViewUrl(p.key)}" alt="" loading="lazy" /><span>${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`).join("")
+                : lib.selectedDate
+                  ? `<p class="quiet-label">Nothing for this day.</p>`
+                  : ""
+          }
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+
+async function openPhotoLibrary(buildingId) {
+  state.photoLibrary = { open: true, buildingId, dates: [], selectedDate: null, photos: [], loading: true };
+  renderApp();
+  const { dates } = await api.photoDates(buildingId);
+  state.photoLibrary.dates = dates;
+  state.photoLibrary.loading = false;
+  if (dates.length) {
+    await selectPhotoLibraryDate(dates[0]);
+  } else {
+    renderApp();
+  }
+}
+
+async function selectPhotoLibraryDate(date) {
+  state.photoLibrary.selectedDate = date;
+  state.photoLibrary.loading = true;
+  renderApp();
+  const { photos } = await api.photoList(state.photoLibrary.buildingId, date);
+  state.photoLibrary.photos = photos;
+  state.photoLibrary.loading = false;
+  renderApp();
+}
 
 function renderFlagIssuePanel() {
   if (!state.flagIssueOpen) {
@@ -1682,6 +1970,19 @@ function bindDashboardEvents() {
     renderApp();
   });
   document.querySelector("#flag-issue-form")?.addEventListener("submit", handleFlagIssueSubmit);
+  document.querySelector("#open-photo-library")?.addEventListener("click", (event) => {
+    openPhotoLibrary(Number(event.currentTarget.dataset.defaultBuildingId));
+  });
+  document.querySelector("#close-photo-library")?.addEventListener("click", () => {
+    state.photoLibrary = { open: false, buildingId: null, dates: [], selectedDate: null, photos: [], loading: false };
+    renderApp();
+  });
+  document.querySelector("#photo-library-building")?.addEventListener("change", (event) => {
+    openPhotoLibrary(Number(event.currentTarget.value));
+  });
+  document.querySelectorAll(".photo-library__date").forEach((button) => {
+    button.addEventListener("click", () => selectPhotoLibraryDate(button.dataset.date));
+  });
   document.querySelectorAll(".impersonate-button").forEach((button) => {
     button.addEventListener("click", () => handleImpersonate(button));
   });
@@ -1743,6 +2044,21 @@ function bindDashboardEvents() {
   document.querySelectorAll(".push-live-button").forEach((button) => {
     button.addEventListener("click", () => handlePushLive(button));
   });
+  document.querySelectorAll(".delete-building-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.deleteBuildingTarget = { id: Number(button.dataset.buildingId), name: button.dataset.buildingName };
+      renderApp();
+    });
+  });
+  document.querySelector("#cancel-delete-building")?.addEventListener("click", () => {
+    state.deleteBuildingTarget = null;
+    renderApp();
+  });
+  document.querySelector("#delete-building-confirm-text")?.addEventListener("input", (event) => {
+    const confirmButton = document.querySelector("#confirm-delete-building");
+    confirmButton.disabled = event.currentTarget.value !== confirmButton.dataset.required;
+  });
+  document.querySelector("#confirm-delete-building")?.addEventListener("click", (event) => handleDeleteBuilding(event.currentTarget));
   document.querySelectorAll(".continue-setup-button").forEach((button) => {
     button.addEventListener("click", () => {
       buildingMap = null;
@@ -1784,6 +2100,26 @@ async function handleResolveWorkOrder(button) {
     button.disabled = false;
     button.textContent = originalLabel;
     button.title = error.message;
+  }
+}
+
+async function handleDeleteBuilding(button) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Deleting…";
+  const error = document.querySelector("#delete-building-error");
+  try {
+    const buildingId = Number(button.dataset.buildingId);
+    const confirmationText = document.querySelector("#delete-building-confirm-text").value;
+    await api.managerDeleteBuilding({ buildingId, confirmationText });
+    state.managerBuildings = state.managerBuildings.filter((b) => b.id !== buildingId);
+    state.deleteBuildingTarget = null;
+    renderApp();
+  } catch (requestError) {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    error.textContent = requestError.message;
+    error.hidden = false;
   }
 }
 
@@ -1829,6 +2165,7 @@ async function handleReturnToAdmin(event) {
 
 async function handleLogout(event) {
   event.currentTarget.disabled = true;
+  stopAdminStatsAutoRefresh();
   try {
     await api.logout();
   } catch {
