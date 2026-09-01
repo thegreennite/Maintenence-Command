@@ -15,6 +15,7 @@ SESSION_TTL_HOURS = "12"
 # so the admin stats endpoint can query Cloudflare's API about itself.
 CLOUDFLARE_ACCOUNT_ID = "c0f148161abb7df271064bb6f37f7227"
 D1_DATABASE_ID = "96ae85a7-61f5-493e-847b-51a17aa39465"
+GITHUB_REPO_URL = "https://github.com/thegreennite/Maintenence-Command"
 
 [observability]
 enabled = true

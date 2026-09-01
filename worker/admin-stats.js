@@ -32,7 +32,7 @@ export async function handleAdminStats(env, corsHeaders) {
         { name: "Cloudflare R2", role: "Photo storage", status: "not_set_up", live: false, note: "Not provisioned yet — photos are read and discarded, not kept." },
         { name: "Google Gemini", role: "AI photo reading", status: env.GOOGLE_AI_KEY ? "connected" : "not_set_up", live: false, note: "Usage not pulled live here — check console.cloud.google.com billing/quotas." },
         { name: "Google Maps", role: "Building location picker", status: env.GOOGLE_MAPS_API_KEY ? "connected" : "not_set_up", live: false, note: "Usage not pulled live here — check console.cloud.google.com billing/quotas." },
-        { name: "GitHub", role: "Source code", status: env.GITHUB_REPO_CONNECTED === "true" ? "connected" : "not_set_up", live: false },
+        { name: "GitHub", role: "Source code", status: env.GITHUB_REPO_URL ? "connected" : "not_set_up", live: false, note: env.GITHUB_REPO_URL || undefined },
       ],
       usage: { workers, d1, pages },
     },
