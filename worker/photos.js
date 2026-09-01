@@ -3,7 +3,7 @@
 // organized building/date, so a superintendent or regional manager can
 // look back at what a gauge actually looked like on a given day.
 
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 function todayIso() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" }); // en-CA = YYYY-MM-DD
@@ -38,8 +38,8 @@ async function resolveAllowedBuildingIds(session, env, requestedBuildingId) {
   if (session.role === "regional_manager" || session.role === "admin") {
     const row = canSeeAllBuildings(session)
       ? await env.DB.prepare("SELECT id FROM buildings WHERE id = ?").bind(requestedBuildingId).first()
-      : await env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND created_by = ?")
-          .bind(requestedBuildingId, session.id)
+      : await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+          .bind(requestedBuildingId, session.id, session.id)
           .first();
     return row ? [requestedBuildingId] : [];
   }

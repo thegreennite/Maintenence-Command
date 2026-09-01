@@ -4,13 +4,15 @@
 // tag to a location lets command mode walk a superintendent through their
 // readings in physical order instead of checklist order.
 
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 async function ownsBuilding(env, session, buildingId) {
   if (canSeeAllBuildings(session)) {
     return env.DB.prepare("SELECT id FROM buildings WHERE id = ?").bind(buildingId).first();
   }
-  return env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND created_by = ?").bind(buildingId, session.id).first();
+  return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+    .bind(buildingId, session.id, session.id)
+    .first();
 }
 
 export async function handleListLocations(request, session, env, corsHeaders) {

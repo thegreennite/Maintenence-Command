@@ -51,10 +51,17 @@ const state = {
   buildingWorld: null,
   buildingWorldEditing: false,
   buildingWorldAssignableUsers: [],
+  buildingWorldAssignableSupers: [],
+  buildingWorldSharing: [],
+  buildingWorldRoms: [],
   buildingWorldLocations: [],
   buildingWorldManagingLocations: false,
   buildingWorldHistory: null,
   commandMode: null,
+  // Which building rows on the central portfolio list are expanded inline
+  // -- an arrow toggle instead of always fully opening the building world
+  // page just to check its region/address/coverage at a glance.
+  expandedBuildingRowIds: new Set(),
 };
 
 // In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
@@ -254,6 +261,27 @@ const api = {
   },
   inspectionDetail(buildingId, date) {
     return this.request(`/manager/buildings/inspection-detail?buildingId=${buildingId}&date=${date}`);
+  },
+  assignGroupLocation(payload) {
+    return this.request("/manager/groups/assign-location", { method: "POST", body: JSON.stringify(payload) });
+  },
+  assignableSuperintendents(buildingId) {
+    return this.request(`/manager/superintendents/assignable?buildingId=${buildingId}`);
+  },
+  removeSuperintendent(userId) {
+    return this.request("/manager/superintendents/remove", { method: "POST", body: JSON.stringify({ userId }) });
+  },
+  listRoms() {
+    return this.request("/manager/roms");
+  },
+  buildingSharing(buildingId) {
+    return this.request(`/manager/buildings/sharing?buildingId=${buildingId}`);
+  },
+  shareBuilding(payload) {
+    return this.request("/manager/buildings/share", { method: "POST", body: JSON.stringify(payload) });
+  },
+  unshareBuilding(payload) {
+    return this.request("/manager/buildings/unshare", { method: "POST", body: JSON.stringify(payload) });
   },
 };
 
@@ -927,6 +955,7 @@ function renderDeleteBuildingPanel(building) {
 
 function renderBuildingRow(building) {
   const isRegistering = building.status === "registering";
+  const expanded = state.expandedBuildingRowIds.has(building.id);
   return `
     <div class="building-row">
       <div class="building-row__name">
@@ -944,6 +973,35 @@ function renderBuildingRow(building) {
             : ""
       }
       <button type="button" class="icon-button delete-building-button" data-building-id="${building.id}" data-building-name="${escapeHtml(building.name)}" title="Delete building" aria-label="Delete ${escapeHtml(building.name)}">${icon("close")}</button>
+      <button type="button" class="icon-button building-row-toggle ${expanded ? "is-expanded" : ""}" data-building-id="${building.id}" title="${expanded ? "Hide" : "Show"} building info" aria-label="${expanded ? "Hide" : "Show"} building info" aria-expanded="${expanded}">${icon("arrow")}</button>
+    </div>
+    ${expanded ? renderBuildingRowPreview(building) : ""}`;
+}
+
+// The inline preview an arrow-toggle reveals -- enough to place/ID the
+// building without fully navigating into its (much heavier) world page.
+function renderBuildingRowPreview(building) {
+  const days = (building.inspection_days || "").split(",").filter(Boolean);
+  const user = state.session.user;
+  const isManagerOfAll = user.role === "admin" || user.buildingAccess === "all";
+  // Distinguish "sees everything because they're OM/admin" from "was
+  // specifically granted access to this one building" -- the latter is
+  // the building_managers share, not blanket role-based visibility.
+  const ownershipLabel = building.is_owner
+    ? "You own this building"
+    : isManagerOfAll
+      ? "Operations Manager access"
+      : "Shared with you";
+  return `
+    <div class="building-row-preview">
+      <div class="building-row-preview__grid">
+        <div><span class="quiet-label">Region</span><strong>${escapeHtml(building.region || "—")}</strong></div>
+        <div><span class="quiet-label">Inspection days</span><strong>${days.length ? days.map((d) => escapeHtml(d)).join(", ") : "—"}</strong></div>
+        <div><span class="quiet-label">Readings</span><strong>${building.tag_count} tag${building.tag_count === 1 ? "" : "s"}</strong></div>
+        <div><span class="quiet-label">Coverage</span><strong>${building.superintendent_count} superintendent${building.superintendent_count === 1 ? "" : "s"}</strong></div>
+        <div><span class="quiet-label">Ownership</span><strong>${ownershipLabel}</strong></div>
+      </div>
+      <button type="button" class="button button--outline button--small building-name-link" data-building-id="${building.id}">Open full building page →</button>
     </div>`;
 }
 
@@ -1114,6 +1172,16 @@ function renderBuildingReviewStep(wizard) {
     </form>`;
 }
 
+// Reading types that are a closed set of exact expected strings, and
+// what those strings are -- one source of truth reused for the checklist
+// review dropdown, the manager's "Expected" parameter picker, and command
+// mode's one-tap choice buttons. Add a future type here only.
+const CLOSED_CHOICE_TYPES = {
+  on_off: { label: "On/off", options: ["on", "off"] },
+  hoa: { label: "Hand-Off-Auto", options: ["Hand", "Off", "Auto"] },
+  open_closed: { label: "Open/Closed", options: ["Open", "Closed"] },
+};
+
 function renderTagReviewRow(tag, index) {
   return `
     <div class="tags-review-row" data-row-index="${index}">
@@ -1122,9 +1190,10 @@ function renderTagReviewRow(tag, index) {
       <input type="text" data-field="reading_type" value="${escapeHtml(tag.reading_type || "")}" placeholder="Reading" />
       <input type="text" data-field="unit" value="${escapeHtml(tag.unit || "")}" placeholder="—" />
       <select data-field="value_type">
-        <option value="numeric" ${tag.value_type !== "on_off" && tag.value_type !== "hoa" ? "selected" : ""}>Numeric</option>
-        <option value="on_off" ${tag.value_type === "on_off" ? "selected" : ""}>On/off</option>
-        <option value="hoa" ${tag.value_type === "hoa" ? "selected" : ""}>Hand-Off-Auto</option>
+        <option value="numeric" ${!CLOSED_CHOICE_TYPES[tag.value_type] ? "selected" : ""}>Numeric</option>
+        ${Object.entries(CLOSED_CHOICE_TYPES)
+          .map(([value, { label }]) => `<option value="${value}" ${tag.value_type === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
+          .join("")}
       </select>
       <button type="button" class="icon-button remove-tag-row" title="Remove this row" aria-label="Remove this row">${icon("warning")}</button>
     </div>`;
@@ -1323,24 +1392,16 @@ function renderParameterRow(tag) {
       </div>
       <div class="parameter-row__inputs">
         ${
-          tag.value_type === "on_off"
+          CLOSED_CHOICE_TYPES[tag.value_type]
             ? `<label class="parameter-inline"><span>Expected</span>
                 <select data-param-tag-id="${tag.id}" data-param-field="expected">
                   <option value="" ${!tag.parameter?.expected ? "selected" : ""}>Not evaluated</option>
-                  <option value="on" ${tag.parameter?.expected === "on" ? "selected" : ""}>On</option>
-                  <option value="off" ${tag.parameter?.expected === "off" ? "selected" : ""}>Off</option>
+                  ${CLOSED_CHOICE_TYPES[tag.value_type].options
+                    .map((opt) => `<option value="${escapeHtml(opt)}" ${tag.parameter?.expected === opt ? "selected" : ""}>${escapeHtml(opt)}</option>`)
+                    .join("")}
                 </select>
               </label>`
-            : tag.value_type === "hoa"
-              ? `<label class="parameter-inline"><span>Expected</span>
-                  <select data-param-tag-id="${tag.id}" data-param-field="expected">
-                    <option value="" ${!tag.parameter?.expected ? "selected" : ""}>Not evaluated</option>
-                    <option value="Hand" ${tag.parameter?.expected === "Hand" ? "selected" : ""}>Hand</option>
-                    <option value="Off" ${tag.parameter?.expected === "Off" ? "selected" : ""}>Off</option>
-                    <option value="Auto" ${tag.parameter?.expected === "Auto" ? "selected" : ""}>Auto</option>
-                  </select>
-                </label>`
-              : `<label class="parameter-inline"><span>Min</span>
+            : `<label class="parameter-inline"><span>Min</span>
                 <input type="number" step="any" data-param-tag-id="${tag.id}" data-param-field="min" value="${tag.parameter?.min ?? ""}" />
               </label>
               <label class="parameter-inline"><span>Max</span>
@@ -1481,10 +1542,15 @@ async function openBuildingWorld(buildingId) {
   state.buildingWorldEditing = false;
   state.buildingWorldHistory = null;
   renderApp();
-  const [detail, assignable, history] = await Promise.all([
+  const user = state.session.user;
+  const canManageSharing = user.role === "admin" || user.buildingAccess === "all";
+  const [detail, assignable, history, assignableSupers, sharing, roms] = await Promise.all([
     api.buildingDetail(buildingId).catch(() => null),
     api.assignableUsers().catch(() => ({ users: [] })),
     api.inspectionHistory(buildingId).catch(() => ({ submissions: [] })),
+    api.assignableSuperintendents(buildingId).catch(() => ({ superintendents: [] })),
+    api.buildingSharing(buildingId).catch(() => ({ shares: [] })),
+    canManageSharing ? api.listRoms().catch(() => ({ roms: [] })) : Promise.resolve({ roms: [] }),
   ]);
   if (!detail) {
     state.buildingWorld = null;
@@ -1494,6 +1560,9 @@ async function openBuildingWorld(buildingId) {
   state.buildingWorld = { loading: false, buildingId, ...detail };
   state.buildingWorldAssignableUsers = assignable.users;
   state.buildingWorldHistory = history.submissions;
+  state.buildingWorldAssignableSupers = assignableSupers.superintendents;
+  state.buildingWorldSharing = sharing.shares;
+  state.buildingWorldRoms = roms.roms;
   renderApp();
 }
 
@@ -1595,6 +1664,95 @@ async function handleAssignTagGroup(select) {
   }
 }
 
+async function refreshBuildingWorldCoverage() {
+  const buildingId = state.buildingWorld.buildingId;
+  const [detail, assignable] = await Promise.all([
+    api.buildingDetail(buildingId).catch(() => null),
+    api.assignableSuperintendents(buildingId).catch(() => ({ superintendents: [] })),
+  ]);
+  if (detail) state.buildingWorld.superintendents = detail.superintendents;
+  state.buildingWorldAssignableSupers = assignable.superintendents;
+  renderApp();
+}
+
+async function handleRemoveSuperintendentClick(button) {
+  button.disabled = true;
+  try {
+    await api.removeSuperintendent(Number(button.dataset.userId));
+    await refreshBuildingWorldCoverage();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleAssignSuperintendentWorldSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const select = form.querySelector('select[name="userId"]');
+  const userId = select.value;
+  if (!userId) return;
+  select.disabled = true;
+  try {
+    await api.managerAssignSuperintendent({ buildingId: state.buildingWorld.buildingId, userId: Number(userId) });
+    await refreshBuildingWorldCoverage();
+  } catch (error) {
+    select.disabled = false;
+    select.title = error.message;
+  }
+}
+
+async function refreshBuildingWorldSharing() {
+  const shares = await api.buildingSharing(state.buildingWorld.buildingId).catch(() => ({ shares: [] }));
+  state.buildingWorldSharing = shares.shares;
+  renderApp();
+}
+
+async function handleShareBuildingSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const select = form.querySelector('select[name="userId"]');
+  const userId = select.value;
+  if (!userId) return;
+  select.disabled = true;
+  try {
+    await api.shareBuilding({ buildingId: state.buildingWorld.buildingId, userId: Number(userId) });
+    await refreshBuildingWorldSharing();
+  } catch (error) {
+    select.disabled = false;
+    select.title = error.message;
+  }
+}
+
+async function handleUnshareBuildingClick(button) {
+  button.disabled = true;
+  try {
+    await api.unshareBuilding({ buildingId: state.buildingWorld.buildingId, userId: Number(button.dataset.userId) });
+    await refreshBuildingWorldSharing();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleAssignGroupLocationChange(select) {
+  select.disabled = true;
+  const groupId = Number(select.dataset.groupId);
+  const locationId = select.value || null;
+  try {
+    await api.assignGroupLocation({ groupId, locationId });
+    for (const tag of state.buildingWorld.tags) {
+      if (tag.equipment_group_id === groupId) tag.location_id = locationId ? Number(locationId) : null;
+    }
+    select.value = "";
+    renderApp();
+  } catch (error) {
+    select.title = error.message;
+  } finally {
+    select.disabled = false;
+  }
+}
+
 // One PDF per submitted day, built client-side from the same readings a
 // manager sees on screen -- no server-side rendering needed, and it works
 // from any browser the moment it's clicked.
@@ -1688,7 +1846,9 @@ function renderBuildingWorld() {
 
   const openOrders = world.workOrders.filter((w) => w.status === "open");
   const resolvedOrders = world.workOrders.filter((w) => w.status === "resolved");
-  const systemGroups = groupTagsBySystem(world.tags);
+  const checklistSections = groupTagsForChecklist(world.tags);
+  const user = state.session.user;
+  const canManageSharing = user.role === "admin" || user.buildingAccess === "all";
 
   return `
     <section class="building-world">
@@ -1742,9 +1902,33 @@ function renderBuildingWorld() {
         <section class="card">
           <div class="card__header"><div><p class="section-kicker">Coverage</p><h2>Superintendents</h2></div></div>
           <div class="buildings-list">
-            ${world.superintendents.length ? world.superintendents.map((s) => `<div class="building-row"><div class="building-row__name"><strong>${escapeHtml(s.full_name)}</strong></div></div>`).join("") : `<p class="quiet-label" style="padding: 14px 4px;">Nobody assigned yet.</p>`}
+            ${
+              world.superintendents.length
+                ? world.superintendents
+                    .map(
+                      (s) => `<div class="building-row">
+                        <div class="building-row__name"><strong>${escapeHtml(s.full_name)}</strong></div>
+                        <button type="button" class="button button--outline button--small remove-superintendent" data-user-id="${s.id}">Remove</button>
+                      </div>`,
+                    )
+                    .join("")
+                : `<p class="quiet-label" style="padding: 14px 4px;">Nobody assigned yet.</p>`
+            }
           </div>
+          <form id="assign-superintendent-world-form" class="wizard-panel" style="border-top: 1px solid var(--line);">
+            <label class="inspection-field"><span>Assign or move a superintendent here</span>
+              <select name="userId" required>
+                <option value="" disabled ${!state.buildingWorldAssignableSupers?.length ? "selected" : ""}>${state.buildingWorldAssignableSupers?.length ? "Choose a superintendent" : "None available"}</option>
+                ${(state.buildingWorldAssignableSupers || [])
+                  .map((s) => `<option value="${s.id}">${escapeHtml(s.full_name)}${s.building_name ? ` — currently at ${escapeHtml(s.building_name)}` : ""}</option>`)
+                  .join("")}
+              </select>
+            </label>
+            <div class="inspection-actions"><button type="submit" class="button button--primary button--small" ${!state.buildingWorldAssignableSupers?.length ? "disabled" : ""}>Assign</button></div>
+          </form>
         </section>
+
+        ${canManageSharing ? renderBuildingWorldSharing(world) : ""}
 
         <section class="card">
           <div class="card__header"><div><p class="section-kicker">Recent notes</p><h2>From the daily inspection</h2></div></div>
@@ -1785,29 +1969,8 @@ function renderBuildingWorld() {
               <button type="submit" class="button button--outline button--small">Add</button>
             </form>
           </div>
-          <div class="checklist-preview">
-            ${Object.entries(systemGroups)
-              .map(
-                ([system, tags]) =>
-                  `<div class="checklist-preview__group"><h4>${escapeHtml(system)}</h4><ul>${tags
-                    .map(
-                      (t) => `<li>
-                        <span>${escapeHtml([t.tag_no, t.reading_type].filter(Boolean).join(" — "))}</span>
-                        <span class="checklist-preview__selects">
-                          <select class="assign-tag-location" data-tag-id="${t.id}">
-                            <option value="">No location</option>
-                            ${(world.locations || []).map((l) => `<option value="${l.id}" ${t.location_id === l.id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
-                          </select>
-                          <select class="assign-tag-group" data-tag-id="${t.id}">
-                            <option value="">No group</option>
-                            ${(world.groups || []).map((g) => `<option value="${g.id}" ${t.equipment_group_id === g.id ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("")}
-                          </select>
-                        </span>
-                      </li>`,
-                    )
-                    .join("")}</ul></div>`,
-              )
-              .join("")}
+          <div class="checklist-sections">
+            ${checklistSections.map((section) => renderChecklistSection(section, world)).join("")}
           </div>
         </section>
 
@@ -1817,6 +1980,90 @@ function renderBuildingWorld() {
         </section>
       </div>
     </section>`;
+}
+
+// OM/admin only -- an OM can grant a specific ROM full access to a
+// building that ROM didn't personally register, at the OM's discretion.
+function renderBuildingWorldSharing(world) {
+  const shares = state.buildingWorldSharing || [];
+  const roms = state.buildingWorldRoms || [];
+  const sharedIds = new Set(shares.map((s) => s.user_id));
+  const grantable = roms.filter((r) => !sharedIds.has(r.id));
+  return `
+    <section class="card">
+      <div class="card__header"><div><p class="section-kicker">Shared access</p><h2>Regional Managers with full access here</h2></div></div>
+      <div class="buildings-list">
+        ${
+          shares.length
+            ? shares
+                .map(
+                  (s) => `<div class="building-row">
+                    <div class="building-row__name"><strong>${escapeHtml(s.full_name)}</strong><small>Granted by ${escapeHtml(s.granted_by_name || "Unknown")} · ${formatTimestamp(s.granted_at)}</small></div>
+                    <button type="button" class="button button--outline button--small unshare-building" data-user-id="${s.user_id}">Remove</button>
+                  </div>`,
+                )
+                .join("")
+            : `<p class="quiet-label" style="padding: 14px 4px;">Only you can manage this building right now.</p>`
+        }
+      </div>
+      <form id="share-building-form" class="wizard-panel" style="border-top: 1px solid var(--line);">
+        <label class="inspection-field"><span>Give a Regional Manager full access to this building</span>
+          <select name="userId" required>
+            <option value="" disabled ${!grantable.length ? "selected" : ""}>${grantable.length ? "Choose a Regional Manager" : "Nobody left to add"}</option>
+            ${grantable.map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)}${r.region ? ` — ${escapeHtml(r.region)}` : ""}</option>`).join("")}
+          </select>
+        </label>
+        <div class="inspection-actions"><button type="submit" class="button button--primary button--small" ${!grantable.length ? "disabled" : ""}>Grant access</button></div>
+      </form>
+    </section>`;
+}
+
+// One section of the checklist card: a real equipment group ("Elevator
+// Machine Room") with a bulk "set every reading in here to one location"
+// control, or -- for anything nobody's grouped yet -- a plain system-name
+// bucket with no bulk control (there's no group to bulk-assign against).
+function renderChecklistSection(section, world) {
+  const recentNote = section.groupId
+    ? (world.groupNotes || []).find((n) => n.equipment_group_id === section.groupId)
+    : null;
+  return `
+    <div class="checklist-section">
+      <div class="checklist-section__header">
+        <h4>${escapeHtml(section.name)}${section.groupId ? "" : ' <span class="quiet-label">(ungrouped)</span>'}<span class="quiet-label"> · ${section.tags.length}</span></h4>
+        ${
+          section.groupId
+            ? `<select class="assign-group-location" data-group-id="${section.groupId}">
+                <option value="">Set location for all…</option>
+                ${(world.locations || []).map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join("")}
+              </select>`
+            : ""
+        }
+      </div>
+      ${
+        recentNote
+          ? `<p class="checklist-section__note">${icon("edit")} <strong>${escapeHtml(formatInspectionDate(recentNote.inspection_date))}:</strong> ${escapeHtml(recentNote.note)}</p>`
+          : ""
+      }
+      <ul class="checklist-section__list">
+        ${section.tags
+          .map(
+            (t) => `<li>
+              <span>${escapeHtml([t.tag_no, t.reading_type].filter(Boolean).join(" — "))}</span>
+              <span class="checklist-preview__selects">
+                <select class="assign-tag-location" data-tag-id="${t.id}">
+                  <option value="">No location</option>
+                  ${(world.locations || []).map((l) => `<option value="${l.id}" ${t.location_id === l.id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
+                </select>
+                <select class="assign-tag-group" data-tag-id="${t.id}">
+                  <option value="">No group</option>
+                  ${(world.groups || []).map((g) => `<option value="${g.id}" ${t.equipment_group_id === g.id ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("")}
+                </select>
+              </span>
+            </li>`,
+          )
+          .join("")}
+      </ul>
+    </div>`;
 }
 
 // ISO week (Monday-start) so "week of the 25th" groups the way a super
@@ -1986,7 +2233,11 @@ function renderRoleShell(data) {
 function renderInspectionView(data) {
   if (!data) return renderErrorState();
   const locked = data.status === "submitted";
-  const groups = groupTagsBySystem(data.tags);
+  // Grouped the same way the manager's checklist card is (by equipment
+  // group, falling back to system name) so the group a super sees here
+  // lines up with the group they can leave a note against below.
+  const sections = groupTagsForChecklist(data.tags);
+  const groupNotes = data.groupNotes || {};
 
   return `
     <section class="card inspection-card" aria-labelledby="inspection-title">
@@ -2005,8 +2256,8 @@ function renderInspectionView(data) {
         </div>
       </div>
       <form id="inspection-form" class="inspection-form">
-        ${Object.entries(groups)
-          .map(([system, tags]) => renderInspectionGroup(system, tags, data.readings, locked, data.flags))
+        ${sections
+          .map((section) => renderInspectionGroup(section, data.readings, locked, data.flags, groupNotes))
           .join("")}
         <label class="inspection-notes">
           <span>Comments</span>
@@ -2174,25 +2425,35 @@ function renderInspectionStatusBadge(data) {
   return `<span class="status-pill">${icon("clock")} Not started</span>`;
 }
 
-function renderInspectionGroup(system, tags, readings, locked, flags = {}) {
-  const groupId = `photo-${slugify(system)}`;
+function renderInspectionGroup(section, readings, locked, flags = {}, groupNotes = {}) {
+  const { groupId, name, tags } = section;
+  const photoInputId = `photo-${slugify(name)}`;
+  const note = groupId ? groupNotes[groupId] || "" : "";
   return `
     <fieldset class="inspection-group">
-      <legend>${escapeHtml(system)}</legend>
+      <legend>${escapeHtml(name)}</legend>
       ${
         locked
           ? ""
           : `<div class="photo-capture">
-              <label class="button button--outline button--small photo-capture__button" for="${groupId}">
+              <label class="button button--outline button--small photo-capture__button" for="${photoInputId}">
                 ${icon("camera")} Use a photo for this section
               </label>
-              <input type="file" accept="image/*" capture="environment" id="${groupId}" data-photo-group="${escapeHtml(system)}" hidden />
-              <span class="photo-capture__status" data-photo-status="${escapeHtml(system)}"></span>
+              <input type="file" accept="image/*" capture="environment" id="${photoInputId}" data-photo-group="${escapeHtml(name)}" hidden />
+              <span class="photo-capture__status" data-photo-status="${escapeHtml(name)}"></span>
             </div>`
       }
       <div class="inspection-grid">
         ${tags.map((tag) => renderInspectionField(tag, readings[tag.id], locked, flags[tag.id])).join("")}
       </div>
+      ${
+        groupId
+          ? `<label class="inspection-group__note">
+              <span>${icon("edit")} Note for ${escapeHtml(name)} today</span>
+              <textarea data-group-note-id="${groupId}" rows="2" ${locked ? "disabled" : ""} placeholder="Anything worth flagging for this group today — leave blank if nothing to report.">${escapeHtml(note)}</textarea>
+            </label>`
+          : ""
+      }
     </fieldset>`;
 }
 
@@ -2431,6 +2692,37 @@ function groupTagsBySystem(tags) {
   return groups;
 }
 
+// The manager-defined equipment group is the more meaningful way to
+// organize a checklist than the AI-guessed system_name from the original
+// paper sheet -- "Elevator Machine Room" tells a super where to stand;
+// "Building Heating" is just a category. Anything without a group yet
+// falls back to system_name so it's still organized, not dumped in one
+// flat bucket, and naturally clears out as a manager assigns groups.
+function groupTagsForChecklist(tags) {
+  const sections = [];
+  const byGroupId = new Map();
+  for (const tag of tags) {
+    if (!tag.equipment_group_id) continue;
+    if (!byGroupId.has(tag.equipment_group_id)) {
+      const entry = { groupId: tag.equipment_group_id, name: tag.equipment_group_name, tags: [] };
+      byGroupId.set(tag.equipment_group_id, entry);
+      sections.push(entry);
+    }
+    byGroupId.get(tag.equipment_group_id).tags.push(tag);
+  }
+  const bySystem = new Map();
+  for (const tag of tags) {
+    if (tag.equipment_group_id) continue;
+    if (!bySystem.has(tag.system_name)) {
+      const entry = { groupId: null, name: tag.system_name, tags: [] };
+      bySystem.set(tag.system_name, entry);
+      sections.push(entry);
+    }
+    bySystem.get(tag.system_name).tags.push(tag);
+  }
+  return sections;
+}
+
 function formatInspectionDate(isoDate) {
   const date = new Date(`${isoDate}T00:00:00`);
   return date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
@@ -2451,7 +2743,11 @@ function collectInspectionForm(form) {
   form.querySelectorAll("[data-tag-id]").forEach((input) => {
     readings[input.dataset.tagId] = input.value;
   });
-  return { notes: form.querySelector('[name="notes"]').value, readings };
+  const groupNotes = {};
+  form.querySelectorAll("[data-group-note-id]").forEach((textarea) => {
+    groupNotes[textarea.dataset.groupNoteId] = textarea.value;
+  });
+  return { notes: form.querySelector('[name="notes"]').value, readings, groupNotes };
 }
 
 async function handleInspectionSave(event) {
@@ -2479,7 +2775,7 @@ function clientFlagFor(tag, rawValue) {
   const parameter = tag.parameter;
   if (!parameter || rawValue == null || rawValue === "") return null;
 
-  if (tag.value_type === "on_off" || tag.value_type === "hoa") {
+  if (CLOSED_CHOICE_TYPES[tag.value_type]) {
     if (!parameter.expected) return null;
     return rawValue.trim().toLowerCase() === parameter.expected.trim().toLowerCase() ? null : "red";
   }
@@ -2514,7 +2810,7 @@ function findFlaggedReadings(readings) {
 // the client-side half: does THIS value look like an outlier against it.
 function historyFlagFor(tag, rawValue) {
   const h = tag.history;
-  if (!h || tag.value_type === "on_off" || tag.value_type === "hoa" || rawValue == null || rawValue === "") return null;
+  if (!h || CLOSED_CHOICE_TYPES[tag.value_type] || rawValue == null || rawValue === "") return null;
   const num = Number.parseFloat(rawValue);
   if (Number.isNaN(num)) return null;
   const threshold = Math.max(h.stdev * 2, Math.abs(h.avg) * 0.15, 1);
@@ -2915,11 +3211,9 @@ function renderCommandMode() {
         ${
           tag.unit
             ? `<p class="command-mode__unit">Unit: ${escapeHtml(tag.unit)}</p>`
-            : tag.value_type === "on_off"
-              ? `<p class="command-mode__unit">Expected: on / off</p>`
-              : tag.value_type === "hoa"
-                ? `<p class="command-mode__unit">Expected: Hand / Off / Auto</p>`
-                : ""
+            : CLOSED_CHOICE_TYPES[tag.value_type]
+              ? `<p class="command-mode__unit">Expected: ${escapeHtml(CLOSED_CHOICE_TYPES[tag.value_type].options.join(" / "))}</p>`
+              : ""
         }
 
         ${cm.error ? `<p class="form-error">${escapeHtml(cm.error)}</p>` : ""}
@@ -2965,16 +3259,12 @@ function renderCommandModeChoose(currentValue, isFlagged, tag) {
     </div>`;
 }
 
-// on_off and hoa are both closed sets of exact expected strings -- a
-// one-tap choice beats typing "hand" or "auto" on a phone keyboard, and
-// it can't typo into something the flag-matching logic won't recognize.
-const COMMAND_MODE_CHOICE_OPTIONS = {
-  on_off: ["on", "off"],
-  hoa: ["Hand", "Off", "Auto"],
-};
-
 function renderCommandModeManualEntry(cm, tag) {
-  const choices = COMMAND_MODE_CHOICE_OPTIONS[tag.value_type];
+  // A one-tap choice beats typing "hand" or "auto" on a phone keyboard,
+  // and it can't typo into something the flag-matching logic won't
+  // recognize -- reuses the same closed-choice list as the checklist
+  // review dropdown and the manager's "Expected" parameter picker.
+  const choices = CLOSED_CHOICE_TYPES[tag.value_type]?.options;
   if (choices) {
     return `
       <div class="command-mode__manual">
@@ -3427,6 +3717,14 @@ function bindDashboardEvents() {
       openBuildingWorld(Number(button.dataset.buildingId));
     });
   });
+  document.querySelectorAll(".building-row-toggle").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = Number(button.dataset.buildingId);
+      if (state.expandedBuildingRowIds.has(id)) state.expandedBuildingRowIds.delete(id);
+      else state.expandedBuildingRowIds.add(id);
+      renderApp();
+    });
+  });
   document.querySelector("#close-building-world")?.addEventListener("click", closeBuildingWorld);
   document.querySelector("#toggle-building-edit")?.addEventListener("click", () => {
     buildingMap = null;
@@ -3464,6 +3762,17 @@ function bindDashboardEvents() {
   });
   document.querySelectorAll(".assign-tag-group").forEach((select) => {
     select.addEventListener("change", () => handleAssignTagGroup(select));
+  });
+  document.querySelectorAll(".assign-group-location").forEach((select) => {
+    select.addEventListener("change", () => handleAssignGroupLocationChange(select));
+  });
+  document.querySelectorAll(".remove-superintendent").forEach((button) => {
+    button.addEventListener("click", () => handleRemoveSuperintendentClick(button));
+  });
+  document.querySelector("#assign-superintendent-world-form")?.addEventListener("submit", handleAssignSuperintendentWorldSubmit);
+  document.querySelector("#share-building-form")?.addEventListener("submit", handleShareBuildingSubmit);
+  document.querySelectorAll(".unshare-building").forEach((button) => {
+    button.addEventListener("click", () => handleUnshareBuildingClick(button));
   });
   document.querySelectorAll(".download-inspection-pdf").forEach((button) => {
     button.addEventListener("click", () => handleDownloadInspectionPdf(button));

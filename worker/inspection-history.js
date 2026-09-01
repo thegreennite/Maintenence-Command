@@ -3,13 +3,15 @@
 // week; this just returns dates in order) and a full-detail endpoint for
 // rendering one day as a PDF client-side.
 
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 async function ownsBuilding(env, session, buildingId) {
   if (canSeeAllBuildings(session)) {
     return env.DB.prepare("SELECT id, name FROM buildings WHERE id = ?").bind(buildingId).first();
   }
-  return env.DB.prepare("SELECT id, name FROM buildings WHERE id = ? AND created_by = ?").bind(buildingId, session.id).first();
+  return env.DB.prepare(`SELECT id, name FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+    .bind(buildingId, session.id, session.id)
+    .first();
 }
 
 export async function handleInspectionHistory(request, session, env, corsHeaders) {

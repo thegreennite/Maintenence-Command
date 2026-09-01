@@ -2,11 +2,17 @@
 // per-reading parameters and green/yellow/red flagging computed against
 // them. Parameters are opt-in — a tag with none set is just "not evaluated".
 
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 function today() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 }
+
+// Reading types that are a closed set of exact expected strings (as
+// opposed to "numeric", which gets a min/max range instead). Kept as one
+// list so adding a future type (this file already covers on/off,
+// Hand-Off-Auto, and Open/Closed) only means adding it here.
+export const CLOSED_CHOICE_TYPES = new Set(["on_off", "hoa", "open_closed"]);
 
 // A reading is flagged red the moment it's outside the normal range, but
 // gets a yellow "needs a look" band just past the edge before that, sized
@@ -16,7 +22,7 @@ function today() {
 export function flagFor(tag, rawValue, parameter) {
   if (!parameter || rawValue == null || rawValue === "") return null;
 
-  if (tag.value_type === "on_off" || tag.value_type === "hoa") {
+  if (CLOSED_CHOICE_TYPES.has(tag.value_type)) {
     if (!parameter.expected_value) return null;
     return rawValue.trim().toLowerCase() === parameter.expected_value.trim().toLowerCase()
       ? "green"
@@ -43,15 +49,15 @@ async function resolveBuilding(env, session, buildingId) {
         .bind(buildingId)
         .first();
     }
-    return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND created_by = ?")
-      .bind(buildingId, session.id)
+    return env.DB.prepare(`SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+      .bind(buildingId, session.id, session.id)
       .first();
   }
   if (scoped) {
     return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings ORDER BY id LIMIT 1").first();
   }
-  return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE created_by = ? ORDER BY id LIMIT 1")
-    .bind(session.id)
+  return env.DB.prepare(`SELECT id, name, region, inspection_days FROM buildings WHERE ${ownedOrSharedSql("buildings")} ORDER BY id LIMIT 1`)
+    .bind(session.id, session.id)
     .first();
 }
 
@@ -60,10 +66,10 @@ export async function handleManagerSuperintendents(session, env, corsHeaders) {
   const result = await env.DB.prepare(
     `SELECT u.id, u.full_name, b.name AS building_name
      FROM users u JOIN buildings b ON b.id = u.building_id
-     WHERE u.role = 'superintendent' AND u.is_active = 1 ${scoped ? "" : "AND b.created_by = ?"}
+     WHERE u.role = 'superintendent' AND u.is_active = 1 ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`}
      ORDER BY u.full_name`,
   )
-    .bind(...(scoped ? [] : [session.id]))
+    .bind(...(scoped ? [] : [session.id, session.id]))
     .all();
   return jsonOk({ superintendents: result.results }, corsHeaders);
 }
@@ -78,7 +84,7 @@ export async function handleManagerInspection(request, session, env, corsHeaders
 
   const [tags, parameters, submission] = await Promise.all([
     env.DB.prepare(
-      `SELECT id, system_name, tag_no, reading_type, unit, reading_kind AS value_type, sort_order
+      `SELECT id, system_name, tag_no, reading_type, unit, answer_kind AS value_type, sort_order
        FROM inspection_tags WHERE building_id = ? ORDER BY sort_order`,
     )
       .bind(building.id)
@@ -146,7 +152,7 @@ export async function handleManagerParametersSave(request, session, env, corsHea
   if (!building) return jsonError("No building found in your region.", 404, corsHeaders);
 
   const validTags = await env.DB.prepare(
-    "SELECT id, reading_kind AS value_type FROM inspection_tags WHERE building_id = ?",
+    "SELECT id, answer_kind AS value_type FROM inspection_tags WHERE building_id = ?",
   )
     .bind(building.id)
     .all();
@@ -160,7 +166,7 @@ export async function handleManagerParametersSave(request, session, env, corsHea
 
     const min = valueType === "numeric" && entry.min !== "" && entry.min != null ? Number.parseFloat(entry.min) : null;
     const max = valueType === "numeric" && entry.max !== "" && entry.max != null ? Number.parseFloat(entry.max) : null;
-    const expected = (valueType === "on_off" || valueType === "hoa") && entry.expected ? String(entry.expected) : null;
+    const expected = CLOSED_CHOICE_TYPES.has(valueType) && entry.expected ? String(entry.expected) : null;
 
     if (min == null && max == null && !expected) {
       statements.push(env.DB.prepare("DELETE FROM inspection_parameters WHERE tag_id = ?").bind(tagId));

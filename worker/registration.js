@@ -9,7 +9,7 @@
 // -- OM is distinguished by building_access = 'all' (see worker/access.js).
 
 import { hashPassword } from "./security.js";
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 const SELF_SERVE_ROLES = new Set(["superintendent", "property_manager", "regional_manager", "operations_manager"]);
 const JOB_TITLES = {
@@ -146,9 +146,9 @@ export async function handlePendingRequests(session, env, corsHeaders) {
   const result = await env.DB.prepare(
     `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.building_access, u.profile_photo, b.name AS building_name
      FROM users u JOIN buildings b ON b.id = u.building_id
-     WHERE u.status = 'pending' ${scoped ? "" : "AND b.created_by = ?"} ORDER BY u.id`,
+     WHERE u.status = 'pending' ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`} ORDER BY u.id`,
   )
-    .bind(...(scoped ? [] : [session.id]))
+    .bind(...(scoped ? [] : [session.id, session.id]))
     .all();
   return jsonOk(
     { requests: result.results.map((r) => ({ ...r, role_label: pendingRoleLabel(r.role, r.building_access) })) },
@@ -178,9 +178,9 @@ export async function handlePendingRequestDecision(request, session, env, corsHe
   } else {
     pending = await env.DB.prepare(
       `SELECT u.id FROM users u JOIN buildings b ON b.id = u.building_id
-       WHERE u.id = ? AND u.status = 'pending' AND b.created_by = ?`,
+       WHERE u.id = ? AND u.status = 'pending' AND ${ownedOrSharedSql("b")}`,
     )
-      .bind(userId, session.id)
+      .bind(userId, session.id, session.id)
       .first();
   }
   if (!pending) return jsonError("Request not found.", 404, corsHeaders);

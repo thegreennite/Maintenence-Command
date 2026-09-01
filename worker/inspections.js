@@ -27,7 +27,7 @@ async function loadHistory(env, buildingId, today) {
      JOIN inspection_submissions s ON s.id = r.submission_id
      JOIN inspection_tags t ON t.id = r.tag_id
      WHERE s.building_id = ? AND s.status = 'submitted' AND s.inspection_date >= date(?, '-7 days')
-       AND s.inspection_date < ? AND t.reading_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
+       AND s.inspection_date < ? AND t.answer_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
      GROUP BY r.tag_id`,
   )
     .bind(buildingId, today, today)
@@ -51,7 +51,7 @@ async function loadHistory(env, buildingId, today) {
 async function loadTags(env, buildingId) {
   const [result, history] = await Promise.all([
     env.DB.prepare(
-      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.reading_kind AS value_type, t.location_id,
+      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.answer_kind AS value_type, t.location_id,
          l.name AS location_name, l.sort_order AS location_sort_order,
          t.equipment_group_id, g.name AS equipment_group_name,
          p.min_value, p.max_value, p.expected_value
@@ -97,13 +97,16 @@ async function loadSubmission(env, buildingId, date) {
   )
     .bind(buildingId, date)
     .first();
-  if (!submission) return { submission: null, readings: {}, flags: {}, photoKeys: {} };
+  if (!submission) return { submission: null, readings: {}, flags: {}, photoKeys: {}, groupNotes: {} };
 
-  const readings = await env.DB.prepare(
-    `SELECT tag_id, value, flagged, photo_key FROM inspection_readings WHERE submission_id = ?`,
-  )
-    .bind(submission.id)
-    .all();
+  const [readings, groupNotes] = await Promise.all([
+    env.DB.prepare(`SELECT tag_id, value, flagged, photo_key FROM inspection_readings WHERE submission_id = ?`)
+      .bind(submission.id)
+      .all(),
+    env.DB.prepare(`SELECT equipment_group_id, note FROM group_notes WHERE submission_id = ?`)
+      .bind(submission.id)
+      .all(),
+  ]);
   const readingsByTag = {};
   const flagsByTag = {};
   const photoKeysByTag = {};
@@ -112,7 +115,9 @@ async function loadSubmission(env, buildingId, date) {
     if (row.flagged) flagsByTag[row.tag_id] = true;
     if (row.photo_key) photoKeysByTag[row.tag_id] = row.photo_key;
   }
-  return { submission, readings: readingsByTag, flags: flagsByTag, photoKeys: photoKeysByTag };
+  const groupNotesById = {};
+  for (const row of groupNotes.results) groupNotesById[row.equipment_group_id] = row.note;
+  return { submission, readings: readingsByTag, flags: flagsByTag, photoKeys: photoKeysByTag, groupNotes: groupNotesById };
 }
 
 export async function handleInspectionToday(session, env, corsHeaders) {
@@ -121,7 +126,7 @@ export async function handleInspectionToday(session, env, corsHeaders) {
     return jsonError("No building is assigned to this account yet.", 409, corsHeaders);
   }
 
-  const [building, tags, { submission, readings, flags, photoKeys }, notices] = await Promise.all([
+  const [building, tags, { submission, readings, flags, photoKeys, groupNotes }, notices] = await Promise.all([
     env.DB.prepare("SELECT id, name, region, inspection_days, status FROM buildings WHERE id = ?")
       .bind(buildingId)
       .first(),
@@ -156,13 +161,14 @@ export async function handleInspectionToday(session, env, corsHeaders) {
       readings,
       flags,
       photoKeys,
+      groupNotes,
       notices: notices.results,
     },
     corsHeaders,
   );
 }
 
-async function upsertDraft(session, env, { notes, readings, flags, photoKeys }) {
+async function upsertDraft(session, env, { notes, readings, flags, photoKeys, groupNotes }) {
   const buildingId = session.building_id;
   const date = today();
 
@@ -265,6 +271,31 @@ async function upsertDraft(session, env, { notes, readings, flags, photoKeys }) 
     }
   }
   if (statements.length) await env.DB.batch(statements);
+
+  const groupNotesMap = groupNotes || {};
+  if (Object.keys(groupNotesMap).length) {
+    const validGroups = await env.DB.prepare("SELECT id FROM equipment_groups WHERE building_id = ?").bind(buildingId).all();
+    const validGroupIds = new Set(validGroups.results.map((g) => g.id));
+    const noteStatements = [];
+    for (const [groupIdRaw, note] of Object.entries(groupNotesMap)) {
+      const groupId = Number.parseInt(groupIdRaw, 10);
+      if (!validGroupIds.has(groupId)) continue;
+      const trimmed = String(note ?? "").trim();
+      if (!trimmed) {
+        noteStatements.push(
+          env.DB.prepare("DELETE FROM group_notes WHERE submission_id = ? AND equipment_group_id = ?").bind(submissionId, groupId),
+        );
+        continue;
+      }
+      noteStatements.push(
+        env.DB.prepare(
+          `INSERT INTO group_notes (submission_id, equipment_group_id, note, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT (submission_id, equipment_group_id) DO UPDATE SET note = excluded.note, updated_at = CURRENT_TIMESTAMP`,
+        ).bind(submissionId, groupId, trimmed),
+      );
+    }
+    if (noteStatements.length) await env.DB.batch(noteStatements);
+  }
 
   return submissionId;
 }

@@ -5,13 +5,15 @@
 // Same shape and pattern as building_locations/worker/locations.js on
 // purpose -- two independent classification axes over the same tags.
 
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 async function ownsBuilding(env, session, buildingId) {
   if (canSeeAllBuildings(session)) {
     return env.DB.prepare("SELECT id FROM buildings WHERE id = ?").bind(buildingId).first();
   }
-  return env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND created_by = ?").bind(buildingId, session.id).first();
+  return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+    .bind(buildingId, session.id, session.id)
+    .first();
 }
 
 export async function handleListGroups(request, session, env, corsHeaders) {
@@ -76,6 +78,31 @@ export async function handleAssignTagGroup(request, session, env, corsHeaders) {
 
   await env.DB.prepare("UPDATE inspection_tags SET equipment_group_id = ? WHERE id = ?").bind(groupId, tagId).run();
   return jsonOk({ ok: true }, corsHeaders);
+}
+
+// Bulk location assignment: everything in "Elevator Machine Room" (a
+// group) is physically in one spot ("MPH") -- set every tag in that group
+// at once instead of one dropdown per reading.
+export async function handleAssignGroupLocation(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const groupId = Number.parseInt(body.groupId, 10);
+  const locationId = body.locationId == null || body.locationId === "" ? null : Number.parseInt(body.locationId, 10);
+
+  const group = await env.DB.prepare("SELECT id, building_id FROM equipment_groups WHERE id = ?").bind(groupId).first();
+  if (!group) return jsonError("Group not found.", 404, corsHeaders);
+  if (!(await ownsBuilding(env, session, group.building_id))) return jsonError("Group not found.", 404, corsHeaders);
+
+  if (locationId != null) {
+    const location = await env.DB.prepare("SELECT id FROM building_locations WHERE id = ? AND building_id = ?")
+      .bind(locationId, group.building_id)
+      .first();
+    if (!location) return jsonError("Location not found.", 404, corsHeaders);
+  }
+
+  const result = await env.DB.prepare("UPDATE inspection_tags SET location_id = ? WHERE equipment_group_id = ?")
+    .bind(locationId, groupId)
+    .run();
+  return jsonOk({ ok: true, count: result.meta.changes }, corsHeaders);
 }
 
 function jsonOk(data, headers) {

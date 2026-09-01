@@ -5,7 +5,7 @@
 // -- see worker/access.js.
 
 import { storePhoto } from "./photos.js";
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 const VISION_MODEL = "gemini-3.6-flash";
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -14,8 +14,8 @@ async function findOwnedBuilding(env, session, buildingId, columns = "id, name, 
   if (canSeeAllBuildings(session)) {
     return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ?`).bind(buildingId).first();
   }
-  return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND created_by = ?`)
-    .bind(buildingId, session.id)
+  return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+    .bind(buildingId, session.id, session.id)
     .first();
 }
 
@@ -24,10 +24,11 @@ export async function handleBuildingsList(session, env, corsHeaders) {
   const result = await env.DB.prepare(
     `SELECT b.id, b.name, b.address, b.region, b.inspection_days, b.status, b.latitude, b.longitude,
        (SELECT COUNT(*) FROM inspection_tags t WHERE t.building_id = b.id) AS tag_count,
-       (SELECT COUNT(*) FROM users u WHERE u.building_id = b.id AND u.role = 'superintendent' AND u.status = 'active') AS superintendent_count
-     FROM buildings b ${scoped ? "" : "WHERE b.created_by = ?"} ORDER BY b.id`,
+       (SELECT COUNT(*) FROM users u WHERE u.building_id = b.id AND u.role = 'superintendent' AND u.status = 'active') AS superintendent_count,
+       b.created_by = ? AS is_owner
+     FROM buildings b ${scoped ? "" : `WHERE ${ownedOrSharedSql("b")}`} ORDER BY b.id`,
   )
-    .bind(...(scoped ? [] : [session.id]))
+    .bind(session.id, ...(scoped ? [] : [session.id, session.id]))
     .all();
   return jsonOk({ buildings: result.results }, corsHeaders);
 }
@@ -161,6 +162,28 @@ export async function handleUnassignedSuperintendents(session, env, corsHeaders)
   return jsonOk({ superintendents: result.results }, corsHeaders);
 }
 
+// A ROM can assign an unassigned super, or move one off a building they
+// themselves own -- not "steal" one off a building they don't own. An OM
+// (or admin) can move anyone, same as their blanket building visibility.
+export async function handleAssignableSuperintendents(request, session, env, corsHeaders) {
+  const buildingId = Number.parseInt(new URL(request.url).searchParams.get("buildingId"), 10);
+  const building = await findOwnedBuilding(env, session, buildingId, "id");
+  if (!building) return jsonError("Building not found.", 404, corsHeaders);
+
+  const scoped = canSeeAllBuildings(session);
+  const result = await env.DB.prepare(
+    `SELECT u.id, u.full_name, u.building_id, b.name AS building_name
+     FROM users u LEFT JOIN buildings b ON b.id = u.building_id
+     WHERE u.role = 'superintendent' AND u.is_active = 1 AND u.status = 'active'
+       AND (u.building_id IS NULL OR u.building_id != ?)
+       AND (u.building_id IS NULL ${scoped ? "" : `OR ${ownedOrSharedSql("b")}`})
+     ORDER BY u.full_name`,
+  )
+    .bind(...(scoped ? [buildingId] : [buildingId, session.id, session.id]))
+    .all();
+  return jsonOk({ superintendents: result.results }, corsHeaders);
+}
+
 export async function handleAssignSuperintendent(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   const buildingId = Number.parseInt(body.buildingId, 10);
@@ -169,16 +192,38 @@ export async function handleAssignSuperintendent(request, session, env, corsHead
   const building = await findOwnedBuilding(env, session, buildingId, "id, region");
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
-  const result = await env.DB.prepare(
-    "UPDATE users SET building_id = ?, region = ? WHERE id = ? AND role = 'superintendent' AND building_id IS NULL",
+  const target = await env.DB.prepare(
+    "SELECT id, building_id FROM users WHERE id = ? AND role = 'superintendent' AND is_active = 1",
   )
+    .bind(userId)
+    .first();
+  if (!target) return jsonError("Superintendent not found.", 404, corsHeaders);
+  if (target.building_id && !(await findOwnedBuilding(env, session, target.building_id, "id"))) {
+    return jsonError("That superintendent is assigned to a building you don't manage.", 403, corsHeaders);
+  }
+
+  await env.DB.prepare("UPDATE users SET building_id = ?, region = ? WHERE id = ?")
     .bind(buildingId, building.region, userId)
     .run();
 
-  if (!result.meta.changes) {
-    return jsonError("That superintendent is already assigned elsewhere, or doesn't exist.", 409, corsHeaders);
+  return jsonOk({ ok: true }, corsHeaders);
+}
+
+export async function handleRemoveSuperintendent(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const userId = Number.parseInt(body.userId, 10);
+
+  const target = await env.DB.prepare(
+    "SELECT id, building_id FROM users WHERE id = ? AND role = 'superintendent' AND is_active = 1",
+  )
+    .bind(userId)
+    .first();
+  if (!target || !target.building_id) return jsonError("That superintendent isn't assigned to a building.", 404, corsHeaders);
+  if (!(await findOwnedBuilding(env, session, target.building_id, "id"))) {
+    return jsonError("That superintendent is assigned to a building you don't manage.", 403, corsHeaders);
   }
 
+  await env.DB.prepare("UPDATE users SET building_id = NULL WHERE id = ?").bind(userId).run();
   return jsonOk({ ok: true }, corsHeaders);
 }
 
@@ -216,7 +261,7 @@ For each reading, determine:
 - tag_no: the specific equipment label if there is one (e.g. "Boiler: H1A"), or null if the reading applies to the building generally (e.g. "Outside temperature")
 - reading_type: what's being read (e.g. "Inlet temperature", "on/off", "Pressure")
 - unit: the unit shown (e.g. "°", "PSI", "%"), or null if none
-- value_type: "on_off" if this reading is literally an on/off or open/closed state; "hoa" if it's a Hand-Off-Auto selector switch (common on pumps, fans, blowers, motors — the equipment can be found in Hand/manual-forced-on, Off, or Auto/automatic-control, not just on or off); otherwise "numeric"
+- value_type: "on_off" if this reading is literally an on/off state; "open_closed" if it's a valve, damper, or sprinkler-type reading that's specifically Open or Closed rather than on/off; "hoa" if it's a Hand-Off-Auto selector switch (common on pumps, fans, blowers, motors — the equipment can be found in Hand/manual-forced-on, Off, or Auto/automatic-control); otherwise "numeric"
 
 Return a JSON array of objects with exactly those five fields. If you can't read the sheet(s) clearly enough to extract anything reliably, return an empty array rather than guessing.`;
 
@@ -247,7 +292,7 @@ Return a JSON array of objects with exactly those five fields. If you can't read
                   tag_no: { type: "STRING", nullable: true },
                   reading_type: { type: "STRING" },
                   unit: { type: "STRING", nullable: true },
-                  value_type: { type: "STRING", enum: ["numeric", "on_off", "hoa"] },
+                  value_type: { type: "STRING", enum: ["numeric", "on_off", "hoa", "open_closed"] },
                 },
                 required: ["system_name", "reading_type", "value_type"],
               },
@@ -315,7 +360,7 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
       tagNo: tag.tag_no ? String(tag.tag_no).trim() : null,
       readingType: String(tag.reading_type || "").trim(),
       unit: tag.unit ? String(tag.unit).trim() : null,
-      valueType: ["on_off", "hoa"].includes(tag.value_type) ? tag.value_type : "numeric",
+      valueType: ["on_off", "hoa", "open_closed"].includes(tag.value_type) ? tag.value_type : "numeric",
       sortOrder: index + 1,
     }))
     .filter((row) => row.systemName && row.readingType);
@@ -325,7 +370,7 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
   await env.DB.batch(
     validRows.map((row) =>
       env.DB.prepare(
-        `INSERT INTO inspection_tags (building_id, system_name, tag_no, reading_type, unit, reading_kind, sort_order)
+        `INSERT INTO inspection_tags (building_id, system_name, tag_no, reading_type, unit, answer_kind, sort_order)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).bind(buildingId, row.systemName, row.tagNo, row.readingType, row.unit, row.valueType, row.sortOrder),
     ),
@@ -342,9 +387,9 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
   const building = await findOwnedBuilding(env, session, buildingId);
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
-  const [tags, workOrders, notices, recentNotes, superintendents, locations, groups] = await Promise.all([
+  const [tags, workOrders, notices, recentNotes, superintendents, locations, groups, groupNotes] = await Promise.all([
     env.DB.prepare(
-      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.reading_kind AS value_type,
+      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.answer_kind AS value_type,
          t.location_id, l.name AS location_name, t.equipment_group_id, g.name AS equipment_group_name
        FROM inspection_tags t
        LEFT JOIN building_locations l ON l.id = t.location_id
@@ -388,6 +433,15 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
     env.DB.prepare("SELECT id, name, sort_order FROM equipment_groups WHERE building_id = ? ORDER BY sort_order, name")
       .bind(buildingId)
       .all(),
+    env.DB.prepare(
+      `SELECT gn.equipment_group_id, g.name AS group_name, gn.note, gn.updated_at, s.inspection_date
+       FROM group_notes gn
+       JOIN inspection_submissions s ON s.id = gn.submission_id
+       JOIN equipment_groups g ON g.id = gn.equipment_group_id
+       WHERE s.building_id = ? ORDER BY s.inspection_date DESC LIMIT 20`,
+    )
+      .bind(buildingId)
+      .all(),
   ]);
 
   return jsonOk(
@@ -397,6 +451,7 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
       workOrders: workOrders.results,
       notices: notices.results,
       recentNotes: recentNotes.results,
+      groupNotes: groupNotes.results,
       superintendents: superintendents.results,
       locations: locations.results,
       groups: groups.results,

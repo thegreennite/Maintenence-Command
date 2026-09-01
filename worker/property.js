@@ -14,7 +14,7 @@ export async function handlePropertyInspections(request, session, env, corsHeade
   const [building, tags, parameters, submissions] = await Promise.all([
     env.DB.prepare("SELECT id, name, region FROM buildings WHERE id = ?").bind(buildingId).first(),
     env.DB.prepare(
-      "SELECT id, reading_kind AS value_type FROM inspection_tags WHERE building_id = ?",
+      "SELECT id, answer_kind AS value_type FROM inspection_tags WHERE building_id = ?",
     )
       .bind(buildingId)
       .all(),

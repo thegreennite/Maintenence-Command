@@ -5,7 +5,7 @@
 // handle -- e.g. a ROM assigning a supply issue to the OM who owns
 // inventory.
 
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 const CATEGORY_LABELS = {
   inventory: "Inventory",
@@ -68,11 +68,11 @@ export async function handleManagerWorkOrders(session, env, corsHeaders) {
      JOIN buildings b ON b.id = w.building_id
      LEFT JOIN users u ON u.id = w.created_by
      LEFT JOIN users assignee ON assignee.id = w.assigned_to
-     WHERE ${scoped ? "1=1" : "(b.created_by = ? OR w.assigned_to = ?)"}
+     WHERE ${scoped ? "1=1" : `(${ownedOrSharedSql("b")} OR w.assigned_to = ?)`}
      ORDER BY w.status ASC, w.created_at DESC
      LIMIT 50`,
   )
-    .bind(...(scoped ? [] : [session.id, session.id]))
+    .bind(...(scoped ? [] : [session.id, session.id, session.id]))
     .all();
   return jsonOk({ workOrders: result.results }, corsHeaders);
 }
@@ -84,9 +84,9 @@ async function findVisibleWorkOrder(env, session, workOrderId) {
   }
   return env.DB.prepare(
     `SELECT w.id, w.building_id FROM work_orders w JOIN buildings b ON b.id = w.building_id
-     WHERE w.id = ? AND (b.created_by = ? OR w.assigned_to = ?)`,
+     WHERE w.id = ? AND (${ownedOrSharedSql("b")} OR w.assigned_to = ?)`,
   )
-    .bind(workOrderId, session.id, session.id)
+    .bind(workOrderId, session.id, session.id, session.id)
     .first();
 }
 

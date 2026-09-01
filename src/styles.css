@@ -297,6 +297,15 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .inspection-notes { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
 .inspection-notes textarea { padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font: inherit; resize: vertical; }
 .inspection-notes textarea:disabled { color: var(--muted); background: var(--canvas); }
+
+/* Per-group note, filled out normally alongside that group's readings --
+   not a command-mode-only thing. Sits inside its own fieldset so it's
+   clearly scoped to that one group's equipment, not the whole building. */
+.inspection-group__note { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 16px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.inspection-group__note span { display: flex; align-items: center; gap: 5px; }
+.inspection-group__note .icon { width: 12px; }
+.inspection-group__note textarea { padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font: 500 13px/1.4 inherit; color: var(--ink); resize: vertical; }
+.inspection-group__note textarea:disabled { color: var(--muted); background: var(--canvas); }
 .inspection-actions { display: flex; gap: 12px; justify-content: flex-end; }
 .inspection-actions .button { min-width: 150px; }
 .inspection-locked-note { display: flex; align-items: center; gap: 8px; margin: 0; padding: 12px 14px; border-radius: 6px; color: var(--success); background: var(--success-soft); font-size: 13px; font-weight: 600; }
@@ -359,9 +368,22 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .buildings-card { margin-top: 22px; }
 .buildings-list { padding: 4px 22px; }
 .building-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 4px; border-bottom: 1px solid var(--line); }
-.building-row:last-child { border-bottom: none; }
+.building-row:last-child:not(:has(+ .building-row-preview)) { border-bottom: none; }
 .building-row__name { display: flex; flex-direction: column; font-size: 14px; font-weight: 600; }
 .building-row__name small { font-weight: 500; color: var(--muted); }
+
+/* Arrow toggle on the central portfolio list -- expand a quick inline
+   preview instead of always fully navigating into the building world
+   page just to see its region/coverage/ownership. */
+.building-row-toggle { flex: 0 0 auto; }
+.building-row-toggle:hover { color: var(--forest); border-color: var(--line); }
+.building-row-toggle .icon { transition: transform .15s ease; }
+.building-row-toggle.is-expanded .icon { transform: rotate(90deg); }
+.building-row-preview { padding: 4px 4px 16px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; }
+.building-row-preview:last-child { border-bottom: none; }
+.building-row-preview__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 16px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.building-row-preview__grid > div { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.building-row-preview .button { align-self: flex-start; }
 
 .wizard-panel { padding: 20px 22px 22px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
 .wizard-panel h3 { margin: 0; font: 600 17px/1.3 "Avenir Next", Avenir, system-ui, sans-serif; }
@@ -474,10 +496,25 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .urgency-dot--warning { background: var(--warning); }
 .assign-work-order-select { height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 12.5px; max-width: 220px; }
 
-.checklist-preview { padding: 4px 22px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 18px; }
-.checklist-preview__group h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-.checklist-preview__group ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
-.checklist-preview__group li { font-size: 13px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--canvas); }
+/* Checklist card -- grouped by equipment group (falls back to system name
+   for ungrouped tags) instead of one long flat list, so a super or manager
+   can find "Elevator Machine Room" at a glance instead of scanning every
+   reading in the building in system order. */
+.checklist-sections { padding: 6px 22px 22px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; align-items: start; }
+.checklist-section { border: 1px solid var(--line); border-radius: 10px; background: var(--canvas); padding: 14px 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+.checklist-section__header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.checklist-section__header h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 700; }
+.checklist-section__header h4 .quiet-label { text-transform: none; letter-spacing: 0; font-size: 11px; }
+.checklist-section__note { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-2, #eef1ef); color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.checklist-section__note .icon { width: 13px; flex: 0 0 auto; margin-top: 2px; }
+.checklist-section__note strong { color: var(--ink); }
+.checklist-section__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.checklist-section__list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+
+/* Bulk-assign: one select in a group's header sets location_id on every
+   tag in that group at once, instead of walking each reading's own select
+   one at a time. */
+.assign-group-location { height: 28px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 11px; max-width: 160px; flex: 0 0 auto; }
 
 /* Inspection card header actions + per-field photo button + flagged state */
 .inspection-card__header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
@@ -540,9 +577,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
    of relying on flexbox to sort out two conflicting width:100%/flex:1
    elements in the same row. */
 .location-add-form .button { width: auto; flex: 0 0 auto; }
-.checklist-preview__group li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .checklist-preview__selects { display: flex; gap: 6px; flex: 0 0 auto; }
-.checklist-preview__group select { height: 30px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 11.5px; max-width: 130px; }
+.checklist-section__list select { height: 30px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 11.5px; max-width: 130px; }
 
 /* Inspection history -- weekly folders on the building world page */
 .history-week { border-bottom: 1px solid var(--line); }
@@ -574,9 +610,11 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   input, select, textarea { font-size: 16px !important; }
   .button { min-height: 46px; }
   .icon-button { width: 44px; height: 44px; }
-  .checklist-preview__group li { flex-direction: column; align-items: stretch; gap: 6px; }
+  .checklist-sections { grid-template-columns: 1fr; padding: 6px 16px 20px; }
+  .checklist-section__list li { flex-direction: column; align-items: stretch; gap: 6px; }
   .checklist-preview__selects { flex-direction: column; width: 100%; }
-  .checklist-preview__group select { max-width: none; width: 100%; height: 40px; }
+  .checklist-section__list select { max-width: none; width: 100%; height: 40px; }
+  .assign-group-location { max-width: none; width: 100%; height: 40px; }
   .location-add-form { width: 100%; }
   .location-add-form input { flex: 1; min-width: 0; }
   .notice-row { flex-direction: column; align-items: stretch; }

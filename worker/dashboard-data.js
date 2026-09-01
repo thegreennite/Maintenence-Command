@@ -4,7 +4,7 @@
 // here now comes from D1, scoped by canSeeAllBuildings the same way the
 // rest of the manager API is.
 
-import { canSeeAllBuildings } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 export const roleLabels = {
   admin: "Administrator",
@@ -73,9 +73,9 @@ async function visibleActiveBuildings(env, session) {
   const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
     `SELECT id, name, inspection_days, created_by FROM buildings
-     WHERE status = 'active' AND ${scoped ? "1=1" : "created_by = ?"}`,
+     WHERE status = 'active' AND ${scoped ? "1=1" : ownedOrSharedSql("buildings")}`,
   )
-    .bind(...(scoped ? [] : [session.id]))
+    .bind(...(scoped ? [] : [session.id, session.id]))
     .all();
   return result.results;
 }
@@ -118,9 +118,9 @@ async function buildManagerDashboard(env, session, fullName) {
       `SELECT COUNT(*) AS open_count, COUNT(DISTINCT w.building_id) AS building_count,
          SUM(CASE WHEN w.assigned_to IS NULL THEN 1 ELSE 0 END) AS unassigned_count
        FROM work_orders w JOIN buildings b ON b.id = w.building_id
-       WHERE w.status = 'open' AND ${scoped ? "1=1" : "b.created_by = ?"}`,
+       WHERE w.status = 'open' AND ${scoped ? "1=1" : ownedOrSharedSql("b")}`,
     )
-      .bind(...(scoped ? [] : [session.id]))
+      .bind(...(scoped ? [] : [session.id, session.id]))
       .first(),
     submittedCount(
       env,
