@@ -23,10 +23,10 @@
 }
 
 * { box-sizing: border-box; }
-html { min-width: 320px; background: var(--canvas); }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, input { font: inherit; }
-button, a { -webkit-tap-highlight-color: transparent; }
+html { min-width: 320px; background: var(--canvas); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; min-width: 320px; min-height: 100vh; overscroll-behavior-y: contain; }
+button, input, select, textarea { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid rgba(220, 235, 97, 0.8); outline-offset: 2px; }
 
 .icon { width: 20px; height: 20px; flex: 0 0 auto; }
@@ -84,7 +84,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .security-note .icon { width: 15px; }
 
 .app-shell { min-height: 100vh; }
-.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; min-height: 72px; padding: 0 clamp(22px, 4vw, 64px); border-bottom: 1px solid var(--line); background: rgba(255,255,255,.94); backdrop-filter: blur(16px); }
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; min-height: 72px; padding: env(safe-area-inset-top, 0) clamp(22px, 4vw, 64px) 0; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.94); backdrop-filter: blur(16px); }
 .topbar__right { display: flex; align-items: center; gap: 24px; }
 .role-pill { padding: 7px 10px; border-radius: 5px; color: var(--forest); background: var(--mint); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .user-identity { display: flex; align-items: center; gap: 10px; }
@@ -211,7 +211,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .empty-state p { margin: 0; color: var(--muted); }
 .empty-state-inline { display: flex; align-items: center; gap: 8px; padding: 22px; margin: 0; color: var(--muted); font-size: 13.5px; }
 .empty-state-inline .icon { width: 17px; color: var(--success); }
-.app-footer { display: flex; justify-content: space-between; width: min(100% - 44px, 1380px); margin: 0 auto; padding: 22px 0 32px; border-top: 1px solid var(--line); color: #87918e; font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
+.app-footer { display: flex; justify-content: space-between; width: min(100% - 44px, 1380px); margin: 0 auto; padding: 22px 0 calc(32px + env(safe-area-inset-bottom, 0)); border-top: 1px solid var(--line); color: #87918e; font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
 
 @media (max-width: 980px) {
   .login-page { grid-template-columns: 1fr; }
@@ -521,6 +521,13 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .location-chip button:hover { color: var(--danger); background: var(--danger-soft); }
 .location-add-form { display: flex; gap: 6px; align-items: center; }
 .location-add-form input { height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 12.5px; width: 160px; }
+/* .button--outline's width:100% reads as a huge flex-basis in this row --
+   harmless next to a fixed-width input, but once the input goes flex:1 on
+   mobile the button's oversized basis wins the space fight and squeezes
+   the input to nothing. Give the button its own content-sized box instead
+   of relying on flexbox to sort out two conflicting width:100%/flex:1
+   elements in the same row. */
+.location-add-form .button { width: auto; flex: 0 0 auto; }
 .checklist-preview__group li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .checklist-preview__group select { height: 30px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); font-size: 11.5px; max-width: 130px; }
 
@@ -532,3 +539,39 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .history-week > summary::after { content: "▸"; color: var(--muted); transition: transform .15s; }
 .history-week[open] > summary::after { transform: rotate(90deg); }
 .history-day { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 22px 10px 34px; border-top: 1px solid var(--line); font-size: 13px; }
+
+/* Mobile pass -- this app is run one-handed on a phone in a mechanical
+   room far more than it's run on a desktop, so the details below matter
+   more than they would on a typical admin tool:
+   - iOS Safari zooms the whole page in on focusing any input/select/
+     textarea rendered under 16px. Every form control in this file was
+     written for a mouse-driven desktop layout (12-14px is common) --
+     rather than hunt down and bump each one, force 16px uniformly on
+     small viewports where the zoom bug actually applies.
+   - buttons and icon-buttons get a bit more room to tap without a
+     precision mouse cursor.
+   - notched/home-indicator phones (iPhone with Face ID) get real
+     safe-area padding on the two fixed/sticky chrome elements, not just
+     the fallback 0 every other browser uses.
+   - a couple of specific rows (checklist location select, notice/history
+     rows) that read fine at tablet widths get cramped once a select or a
+     button has to share a ~340px row with a label -- stack them instead
+     of letting them squeeze. */
+@media (max-width: 640px) {
+  input, select, textarea { font-size: 16px !important; }
+  .button { min-height: 46px; }
+  .icon-button { width: 44px; height: 44px; }
+  .checklist-preview__group li { flex-direction: column; align-items: stretch; gap: 6px; }
+  .checklist-preview__group select { max-width: none; width: 100%; height: 40px; }
+  .location-add-form { width: 100%; }
+  .location-add-form input { flex: 1; min-width: 0; }
+  .notice-row { flex-direction: column; align-items: stretch; }
+  .notice-row__meta { justify-content: space-between; }
+  .history-day { flex-direction: column; align-items: stretch; gap: 8px; padding-left: 22px; }
+  .card__header { flex-wrap: wrap; gap: 10px; min-height: 0; }
+  .inspection-card__header-actions { width: 100%; justify-content: space-between; }
+}
+
+@supports (padding: max(0px)) {
+  .command-mode { padding-bottom: env(safe-area-inset-bottom, 0); }
+}
