@@ -2545,6 +2545,82 @@ function exitCommandMode() {
   renderApp();
 }
 
+// A full reset of today's inspection -- every value, flag, and photo
+// reference wiped back to blank. Reuses the regular save endpoint rather
+// than a dedicated "clear" API: upsertDraft only ever touches a column
+// for a tag it's explicitly told about (see worker/inspections.js), so
+// sending every tag with an empty value / false flag / null photo forces
+// exactly that, without needing new backend surface.
+async function handleConfirmClearAll() {
+  const modal = document.querySelector("#clear-all-modal");
+  const button = modal?.querySelector("#confirm-clear-all");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Clearing…";
+  }
+  try {
+    const allTagIds = state.inspection.tags.map((t) => t.id);
+    const readings = Object.fromEntries(allTagIds.map((id) => [id, ""]));
+    const flags = Object.fromEntries(allTagIds.map((id) => [id, false]));
+    const photoKeys = Object.fromEntries(allTagIds.map((id) => [id, null]));
+    const data = await api.inspectionSave({ notes: state.inspection.notes, readings, flags, photoKeys });
+
+    state.inspection.readings = data.readings;
+    state.inspection.flags = data.flags;
+    state.inspection.photoKeys = data.photoKeys;
+    state.confirmedAbnormalTagIds = [];
+
+    const cm = state.commandMode;
+    if (cm) {
+      cm.readings = {};
+      cm.flags = {};
+      cm.photoKeys = {};
+      cm.index = 0;
+      cm.entryMode = "choose";
+      cm.scanResult = null;
+      cm.abnormalPrompt = null;
+      cm.reviewFlags = false;
+      cm.reviewingSingleFlag = false;
+      cm.error = "";
+    }
+    modal?.remove();
+    renderApp();
+  } catch (error) {
+    const modalError = modal?.querySelector("#clear-all-error");
+    if (modalError) {
+      modalError.textContent = error.message;
+      modalError.hidden = false;
+    }
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Yes, clear everything";
+    }
+  }
+}
+
+function renderClearAllConfirmModal() {
+  const existing = document.querySelector("#clear-all-modal");
+  if (existing) existing.remove();
+
+  const wrap = document.createElement("div");
+  wrap.id = "clear-all-modal";
+  wrap.className = "modal-overlay";
+  wrap.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="clear-all-title">
+      <h3 id="clear-all-title">${icon("warning")} Clear everything?</h3>
+      <p class="parameters-intro">This wipes every value, flag, and photo entered for today's inspection on this building — back to a blank sheet. This can't be undone.</p>
+      <p class="form-error" id="clear-all-error" hidden role="alert"></p>
+      <div class="inspection-actions">
+        <button type="button" class="button button--outline" id="cancel-clear-all">Cancel</button>
+        <button type="button" class="button button--danger" id="confirm-clear-all">Yes, clear everything</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  wrap.querySelector("#cancel-clear-all").addEventListener("click", () => wrap.remove());
+  wrap.querySelector("#confirm-clear-all").addEventListener("click", handleConfirmClearAll);
+}
+
 async function commandModeSave() {
   const cm = state.commandMode;
   cm.saving = true;
@@ -2806,6 +2882,7 @@ function renderCommandMode() {
       <div class="command-mode__topbar">
         <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
         <span class="command-mode__progress">${cm.index + 1} of ${total} · ${answeredCount} done</span>
+        <button type="button" class="link-button link-button--danger" id="command-mode-clear-all">Clear all</button>
       </div>
       <div class="command-mode__progress-track"><span style="width:${Math.round((cm.index / Math.max(total - 1, 1)) * 100)}%"></span></div>
 
@@ -2923,6 +3000,7 @@ function renderCommandModeFlagReview(cm, byId) {
     <section class="command-mode">
       <div class="command-mode__topbar">
         <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
+        <button type="button" class="link-button link-button--danger" id="command-mode-clear-all">Clear all</button>
       </div>
       <div class="command-mode__stage command-mode__stage--review">
         <h1 class="command-mode__label">Flagged items</h1>
@@ -2961,6 +3039,7 @@ function bindCommandModeEvents() {
   document.querySelectorAll(".command-mode-resolve-flag").forEach((button) => {
     button.addEventListener("click", () => handleCommandModeResolveFlag(Number(button.dataset.tagId)));
   });
+  document.querySelector("#command-mode-clear-all")?.addEventListener("click", renderClearAllConfirmModal);
 }
 
 async function handleInspectionSubmit(event) {
