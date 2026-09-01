@@ -510,7 +510,7 @@ async function handleSelfRegisterSubmit(event) {
   button.disabled = true;
   try {
     const photoFile = data.get("profilePhoto");
-    const profilePhoto = photoFile && photoFile.size ? await fileToBase64(photoFile) : null;
+    const profilePhoto = photoFile && photoFile.size ? (await compressImageFile(photoFile, { maxDimension: 600, quality: 0.8 })).base64 : null;
     await api.selfRegister({
       role: state.registration.role,
       buildingId: state.registration.building?.id ?? null,
@@ -1151,7 +1151,10 @@ async function handleBuildingSheetPhoto(event) {
   const stopAnimation = startReadingAnimation(status, { estimateSeconds: 6 + files.length * 2 });
   try {
     const images = await Promise.all(
-      files.map(async (file) => ({ data: await fileToBase64(file), mediaType: file.type })),
+      files.map(async (file) => {
+        const { base64, mediaType } = await compressImageFile(file);
+        return { data: base64, mediaType };
+      }),
     );
     const { proposedTags } = await api.managerGenerateTags({
       buildingId: state.buildingWizard.building.id,
@@ -2139,6 +2142,33 @@ async function fileToBase64(file) {
   return btoa(binary);
 }
 
+// A modern phone's camera photo (often 12-48MP, 4-15MB) base64-inflates
+// well past what the AI endpoints accept and takes noticeably longer to
+// upload and process to boot. Gemini doesn't need pixel-for-pixel detail
+// to read a gauge or a label -- downscale + re-encode as JPEG client-side
+// before every photo upload. Falls back to the raw file if this browser
+// can't decode it (rare formats), so a photo can never silently fail to
+// send because of this step.
+async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } = {}) {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (!blob) throw new Error("Canvas produced no image data.");
+    return { base64: await fileToBase64(blob), mediaType: "image/jpeg" };
+  } catch {
+    return { base64: await fileToBase64(file), mediaType: file.type || "image/jpeg" };
+  }
+}
+
 async function handlePhotoCapture(event) {
   const input = event.currentTarget;
   const file = input.files?.[0];
@@ -2152,8 +2182,8 @@ async function handlePhotoCapture(event) {
   status.className = "photo-capture__status photo-capture__status--busy";
   const stopAnimation = startReadingAnimation(status, { estimateSeconds: 6 });
   try {
-    const imageBase64 = await fileToBase64(file);
-    const response = await api.inspectionPhoto({ tagIds, imageBase64, mediaType: file.type });
+    const { base64: imageBase64, mediaType } = await compressImageFile(file);
+    const response = await api.inspectionPhoto({ tagIds, imageBase64, mediaType });
     stopAnimation();
     let filled = 0;
     const unclear = [];
@@ -2196,8 +2226,8 @@ async function handleSinglePhotoCapture(event) {
   const photoButton = field?.querySelector(".inspection-field__photo-button");
   if (photoButton) photoButton.classList.add("inspection-field__photo-button--busy");
   try {
-    const imageBase64 = await fileToBase64(file);
-    const response = await api.inspectionPhoto({ tagIds: [tagId], imageBase64, mediaType: file.type });
+    const { base64: imageBase64, mediaType } = await compressImageFile(file);
+    const response = await api.inspectionPhoto({ tagIds: [tagId], imageBase64, mediaType });
     const result = response.results?.[0];
     if (result && result.value != null && !result.unclear && fieldInput) {
       fieldInput.value = result.value;
@@ -2544,8 +2574,8 @@ async function handleCommandModePhotoInput(event) {
   const status = document.querySelector("#command-mode-busy-status");
   const stopAnimation = status ? startReadingAnimation(status, { estimateSeconds: 4 }) : () => {};
   try {
-    const imageBase64 = await fileToBase64(file);
-    const result = await api.commandModePhoto({ tagId, imageBase64, mediaType: file.type });
+    const { base64: imageBase64, mediaType } = await compressImageFile(file);
+    const result = await api.commandModePhoto({ tagId, imageBase64, mediaType });
     stopAnimation();
     cm.scanResult = result;
     cm.entryMode = "scan-result";

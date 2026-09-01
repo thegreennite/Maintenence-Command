@@ -204,14 +204,16 @@ Return one JSON object: {"value": <string reading exactly as shown, e.g. "140" o
               },
               required: ["value", "unclear", "labelConfirmed"],
             },
-            // 200 sounded generous for one small object but the model
-            // sometimes spends its budget on an unstructured preamble
-            // first ("Here is the JSON requested:") and then gets cut off
-            // by MAX_TOKENS before ever emitting the object -- confirmed
-            // via testing. 500 leaves headroom without adding meaningful
-            // latency (completion tokens are cheap; time-to-first-token
-            // and image processing are what actually cost seconds here).
-            maxOutputTokens: 500,
+            // 200, then 500 both got cut off before finishing the JSON --
+            // first on an unstructured preamble ("Here is the JSON
+            // requested:"), then on invisible reasoning tokens that count
+            // against the same budget (finishReason: MAX_TOKENS both
+            // times, confirmed via testing). generationConfig.thinkingConfig
+            // would be the cleaner fix but this API rejects it with
+            // INVALID_ARGUMENT on this model, so this just leaves a large
+            // margin instead -- extra completion tokens don't meaningfully
+            // add latency next to image processing anyway.
+            maxOutputTokens: 2000,
           },
         }),
       },
