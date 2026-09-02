@@ -28,7 +28,22 @@ import {
   handleGenerateTags,
   handleSaveTags,
   handleBuildingDetail,
+  handleCancelDeleteRequest,
 } from "./buildings.js";
+import {
+  handleDeleteRequestsList,
+  handleApproveDeleteRequest,
+  handleDenyDeleteRequest,
+  handleDeletedBuildingsList,
+  handleRestoreBuilding,
+  purgeExpiredBuildings,
+} from "./building-deletion.js";
+import {
+  handleRemoveAccount,
+  handleRestoreAccount,
+  handleRemovedAccountsList,
+  handleSetClassification,
+} from "./admin-accounts.js";
 import { handleGeocodeSearch } from "./geocode.js";
 import {
   handleFlagIssue,
@@ -149,6 +164,35 @@ export default {
         return handleAdminReturn(session, env, cors.headers);
       }
 
+      if (url.pathname === "/api/admin/accounts/remove" && request.method === "POST") {
+        return handleRemoveAccount(request, session, env, cors.headers);
+      }
+      if (url.pathname === "/api/admin/accounts/restore" && request.method === "POST") {
+        return handleRestoreAccount(request, session, env, cors.headers);
+      }
+      if (url.pathname === "/api/admin/accounts/removed" && request.method === "GET") {
+        return handleRemovedAccountsList(session, env, cors.headers);
+      }
+      if (url.pathname === "/api/admin/accounts/classification" && request.method === "POST") {
+        return handleSetClassification(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/admin/buildings/delete-requests" && request.method === "GET") {
+        return handleDeleteRequestsList(session, env, cors.headers);
+      }
+      if (url.pathname === "/api/admin/buildings/delete-requests/approve" && request.method === "POST") {
+        return handleApproveDeleteRequest(request, session, env, cors.headers);
+      }
+      if (url.pathname === "/api/admin/buildings/delete-requests/deny" && request.method === "POST") {
+        return handleDenyDeleteRequest(request, session, env, cors.headers);
+      }
+      if (url.pathname === "/api/admin/buildings/deleted" && request.method === "GET") {
+        return handleDeletedBuildingsList(session, env, cors.headers);
+      }
+      if (url.pathname === "/api/admin/buildings/restore" && request.method === "POST") {
+        return handleRestoreBuilding(request, session, env, cors.headers);
+      }
+
       if (url.pathname === "/api/inspections/today" && request.method === "GET") {
         if (session.role !== "superintendent") {
           return json({ error: "Superintendent access required" }, 403, cors.headers);
@@ -178,15 +222,15 @@ export default {
       }
 
       if (url.pathname === "/api/manager/work-orders" && request.method === "GET") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleManagerWorkOrders(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/work-orders/resolve" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleResolveWorkOrder(request, session, env, cors.headers);
       }
@@ -206,43 +250,43 @@ export default {
       }
 
       if (url.pathname === "/api/manager/inspection" && request.method === "GET") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleManagerInspection(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/parameters" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleManagerParametersSave(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings" && request.method === "GET") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleBuildingsList(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleBuildingCreate(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/superintendents/unassigned" && request.method === "GET") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleUnassignedSuperintendents(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/assign" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignSuperintendent(request, session, env, cors.headers);
       }
@@ -262,22 +306,22 @@ export default {
       }
 
       if (url.pathname === "/api/manager/tags/generate" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleGenerateTags(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/tags/save" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleSaveTags(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/push-live" && request.method === "POST") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handlePushLive(request, session, env, cors.headers);
       }
@@ -287,6 +331,13 @@ export default {
           return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleDeleteBuilding(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/buildings/delete-cancel" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleCancelDeleteRequest(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/update" && request.method === "POST") {
@@ -423,22 +474,25 @@ export default {
       }
 
       if (url.pathname === "/api/manager/buildings/inspection-history" && request.method === "GET") {
-        if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        // A superintendent may also pull this, but only for their own
+        // assigned building -- handleInspectionHistory's ownsBuilding()
+        // enforces that (buildingId must equal session.building_id).
+        if (session.role !== "regional_manager" && session.role !== "admin" && session.role !== "superintendent") {
+          return json({ error: "Access required" }, 403, cors.headers);
         }
         return handleInspectionHistory(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/inspection-detail" && request.method === "GET") {
-        if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin" && session.role !== "superintendent") {
+          return json({ error: "Access required" }, 403, cors.headers);
         }
         return handleInspectionDetail(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/superintendents" && request.method === "GET") {
-        if (session.role !== "regional_manager") {
-          return json({ error: "Regional Operations Manager access required" }, 403, cors.headers);
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleManagerSuperintendents(session, env, cors.headers);
       }
@@ -484,6 +538,12 @@ export default {
   // Friday in Toronto, rather than trying to express "Friday Toronto time"
   // as a UTC cron expression directly.
   async scheduled(event, env, ctx) {
+    // Runs every day (unlike the digest below): anything an admin
+    // soft-deleted more than 30 days ago gets permanently purged.
+    ctx.waitUntil(
+      purgeExpiredBuildings(env).catch((error) => console.error("Building purge cron failed", error)),
+    );
+
     const todayToronto = new Date().toLocaleDateString("en-US", { timeZone: "America/Toronto", weekday: "short" });
     if (todayToronto !== "Fri") return;
     ctx.waitUntil(
@@ -505,7 +565,7 @@ async function handleLogin(request, env, corsHeaders) {
   // still needs to verify its password before we say anything about status,
   // so a wrong-password guess against a real email doesn't confirm it exists.
   const user = await env.DB.prepare(
-    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id
+    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id, is_active, removed_at, classification
      FROM users WHERE username = ?`,
   )
     .bind(username)
@@ -522,6 +582,11 @@ async function handleLogin(request, env, corsHeaders) {
   }
   if (user.status === "denied") {
     return json({ error: "Your registration request was not approved. Contact your operations manager." }, 403, corsHeaders);
+  }
+  // Admin-removed profile -- password is still valid (it's not a wrong
+  // guess), but the account itself no longer has access.
+  if (!user.is_active || user.removed_at) {
+    return json({ error: "This account has been removed. Contact your administrator." }, 403, corsHeaders);
   }
 
   // Accounts seeded before self-registration existed (admin, alex.kim, ...)
@@ -551,7 +616,7 @@ async function handleVerifyCode(request, env, corsHeaders) {
   if (!result.ok) return json({ error: result.error }, 401, corsHeaders);
 
   const user = await env.DB.prepare(
-    `SELECT id, username, full_name, job_title, role, region, building_id, building_access, status FROM users WHERE id = ?`,
+    `SELECT id, username, full_name, job_title, role, region, building_id, building_access, status, classification FROM users WHERE id = ?`,
   )
     .bind(result.userId)
     .first();
@@ -604,7 +669,7 @@ async function handleAccounts(session, env, corsHeaders) {
   }
 
   const result = await env.DB.prepare(
-    `SELECT id, username, full_name, job_title, role, region
+    `SELECT id, username, full_name, job_title, role, region, classification
      FROM users WHERE is_active = 1 AND role != 'admin'
      ORDER BY CASE role
        WHEN 'regional_manager' THEN 1
@@ -612,7 +677,11 @@ async function handleAccounts(session, env, corsHeaders) {
        ELSE 3 END, full_name`,
   ).all();
 
-  return json({ accounts: result.results.map(publicUser) }, 200, corsHeaders);
+  return json(
+    { accounts: result.results.map((u) => ({ ...publicUser(u), classification: u.classification || "standard" })) },
+    200,
+    corsHeaders,
+  );
 }
 
 async function handleImpersonate(request, session, env, corsHeaders) {
@@ -678,7 +747,7 @@ async function requireSession(request, env) {
 
   const session = await env.DB.prepare(
     `SELECT s.id AS session_id, s.expires_at, s.last_seen_at,
-       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access,
+       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification,
        actor.id AS actor_id, actor.username AS actor_username,
        actor.full_name AS actor_full_name, actor.job_title AS actor_job_title,
        actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access
@@ -732,6 +801,7 @@ function publicUser(user) {
     buildingAccess: user.building_access || "own",
     roleLabel: displayRoleLabel(user.role, user.building_access),
     region: user.region,
+    classification: user.classification || "standard",
   };
 }
 

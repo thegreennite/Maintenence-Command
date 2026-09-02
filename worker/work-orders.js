@@ -68,7 +68,7 @@ export async function handleManagerWorkOrders(session, env, corsHeaders) {
      JOIN buildings b ON b.id = w.building_id
      LEFT JOIN users u ON u.id = w.created_by
      LEFT JOIN users assignee ON assignee.id = w.assigned_to
-     WHERE ${scoped ? "1=1" : `(${ownedOrSharedSql("b")} OR w.assigned_to = ?)`}
+     WHERE b.deleted_at IS NULL AND ${scoped ? "1=1" : `(${ownedOrSharedSql("b")} OR w.assigned_to = ?)`}
      ORDER BY w.status ASC, w.created_at DESC
      LIMIT 50`,
   )

@@ -28,8 +28,8 @@ export async function handleBuildingSharing(request, session, env, corsHeaders) 
   const buildingId = Number.parseInt(new URL(request.url).searchParams.get("buildingId"), 10);
   const scoped = canSeeAllBuildings(session);
   const building = scoped
-    ? await env.DB.prepare("SELECT id FROM buildings WHERE id = ?").bind(buildingId).first()
-    : await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+    ? await env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first()
+    : await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
         .bind(buildingId, session.id, session.id)
         .first();
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
@@ -55,7 +55,7 @@ export async function handleShareBuilding(request, session, env, corsHeaders) {
   const buildingId = Number.parseInt(body.buildingId, 10);
   const userId = Number.parseInt(body.userId, 10);
 
-  const building = await env.DB.prepare("SELECT id FROM buildings WHERE id = ?").bind(buildingId).first();
+  const building = await env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   const rom = await env.DB.prepare(

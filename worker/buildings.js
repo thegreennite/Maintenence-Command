@@ -10,11 +10,11 @@ import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 const VISION_MODEL = "gemini-3.6-flash";
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-async function findOwnedBuilding(env, session, buildingId, columns = "id, name, address, region, inspection_days, status, latitude, longitude, created_by") {
+async function findOwnedBuilding(env, session, buildingId, columns = "id, name, address, region, inspection_days, status, latitude, longitude, created_by, delete_requested_at") {
   if (canSeeAllBuildings(session)) {
-    return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ?`).bind(buildingId).first();
+    return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND deleted_at IS NULL`).bind(buildingId).first();
   }
-  return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+  return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
     .bind(buildingId, session.id, session.id)
     .first();
 }
@@ -23,10 +23,11 @@ export async function handleBuildingsList(session, env, corsHeaders) {
   const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
     `SELECT b.id, b.name, b.address, b.region, b.inspection_days, b.status, b.latitude, b.longitude,
+       b.delete_requested_at,
        (SELECT COUNT(*) FROM inspection_tags t WHERE t.building_id = b.id) AS tag_count,
        (SELECT COUNT(*) FROM users u WHERE u.building_id = b.id AND u.role = 'superintendent' AND u.status = 'active') AS superintendent_count,
        b.created_by = ? AS is_owner
-     FROM buildings b ${scoped ? "" : `WHERE ${ownedOrSharedSql("b")}`} ORDER BY b.id`,
+     FROM buildings b WHERE b.deleted_at IS NULL ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`} ORDER BY b.id`,
   )
     .bind(session.id, ...(scoped ? [] : [session.id, session.id]))
     .all();
@@ -110,12 +111,17 @@ export async function handlePushLive(request, session, env, corsHeaders) {
   return jsonOk({ ok: true }, corsHeaders);
 }
 
+// Deleting a building is two-step now: a Regional/Operations Manager can
+// only REQUEST it (the building stays fully live -- nothing changes except
+// a flag an Administrator can see). An Administrator's own delete IS the
+// approval -- it soft-deletes immediately (see worker/building-deletion.js
+// for the admin-side approve/deny/restore endpoints and the 30-day purge).
 export async function handleDeleteBuilding(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   const buildingId = Number.parseInt(body.buildingId, 10);
   const confirmationText = String(body.confirmationText || "");
 
-  const building = await findOwnedBuilding(env, session, buildingId, "id, name");
+  const building = await findOwnedBuilding(env, session, buildingId, "id, name, delete_requested_at");
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   // Enforced server-side too, not just as a UI gate -- the exact phrase has
@@ -125,33 +131,38 @@ export async function handleDeleteBuilding(request, session, env, corsHeaders) {
     return jsonError(`Type exactly "${required}" to confirm.`, 400, corsHeaders);
   }
 
-  await env.DB.batch([
-    env.DB.prepare(
-      "DELETE FROM inspection_readings WHERE submission_id IN (SELECT id FROM inspection_submissions WHERE building_id = ?)",
-    ).bind(buildingId),
-    env.DB.prepare("DELETE FROM inspection_submissions WHERE building_id = ?").bind(buildingId),
-    env.DB.prepare(
-      "DELETE FROM inspection_parameters WHERE tag_id IN (SELECT id FROM inspection_tags WHERE building_id = ?)",
-    ).bind(buildingId),
-    env.DB.prepare("DELETE FROM inspection_tags WHERE building_id = ?").bind(buildingId),
-    env.DB.prepare("DELETE FROM work_orders WHERE building_id = ?").bind(buildingId),
-    env.DB.prepare("DELETE FROM building_notices WHERE building_id = ?").bind(buildingId),
-    // People aren't deleted, just unassigned -- a building going away
-    // shouldn't take an account with it. They show up as unassigned/
-    // pending-reassignment afterward.
-    env.DB.prepare("UPDATE users SET building_id = NULL WHERE building_id = ?").bind(buildingId),
-    env.DB.prepare("DELETE FROM buildings WHERE id = ?").bind(buildingId),
-  ]);
-
-  if (env.PHOTOS) {
-    const listed = await env.PHOTOS.list({ prefix: `${buildingId}/` }).catch(() => null);
-    if (listed?.objects?.length) {
-      await env.PHOTOS.delete(listed.objects.map((o) => o.key)).catch((error) =>
-        console.error("Photo cleanup failed", error),
-      );
-    }
+  if (session.role === "admin") {
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE buildings SET deleted_at = CURRENT_TIMESTAMP, deleted_by = ?, delete_requested_at = NULL, delete_requested_by = NULL WHERE id = ?",
+      ).bind(session.id, buildingId),
+      env.DB.prepare("UPDATE users SET building_id = NULL WHERE building_id = ?").bind(buildingId),
+    ]);
+    return jsonOk({ ok: true, deleted: true }, corsHeaders);
   }
 
+  if (building.delete_requested_at) {
+    return jsonOk({ ok: true, alreadyRequested: true }, corsHeaders);
+  }
+  await env.DB.prepare("UPDATE buildings SET delete_requested_at = CURRENT_TIMESTAMP, delete_requested_by = ? WHERE id = ?")
+    .bind(session.id, buildingId)
+    .run();
+  return jsonOk({ ok: true, requested: true }, corsHeaders);
+}
+
+export async function handleCancelDeleteRequest(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const buildingId = Number.parseInt(body.buildingId, 10);
+
+  const building = await findOwnedBuilding(env, session, buildingId, "id, delete_requested_by");
+  if (!building) return jsonError("Building not found.", 404, corsHeaders);
+  if (session.role !== "admin" && building.delete_requested_by !== session.id) {
+    return jsonError("Only whoever requested the deletion can cancel it.", 403, corsHeaders);
+  }
+
+  await env.DB.prepare("UPDATE buildings SET delete_requested_at = NULL, delete_requested_by = NULL WHERE id = ?")
+    .bind(buildingId)
+    .run();
   return jsonOk({ ok: true }, corsHeaders);
 }
 

@@ -45,18 +45,22 @@ async function resolveBuilding(env, session, buildingId) {
   const scoped = canSeeAllBuildings(session);
   if (buildingId) {
     if (scoped) {
-      return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE id = ?")
+      return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND deleted_at IS NULL")
         .bind(buildingId)
         .first();
     }
-    return env.DB.prepare(`SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+    return env.DB.prepare(
+      `SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`,
+    )
       .bind(buildingId, session.id, session.id)
       .first();
   }
   if (scoped) {
-    return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings ORDER BY id LIMIT 1").first();
+    return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE deleted_at IS NULL ORDER BY id LIMIT 1").first();
   }
-  return env.DB.prepare(`SELECT id, name, region, inspection_days FROM buildings WHERE ${ownedOrSharedSql("buildings")} ORDER BY id LIMIT 1`)
+  return env.DB.prepare(
+    `SELECT id, name, region, inspection_days FROM buildings WHERE deleted_at IS NULL AND ${ownedOrSharedSql("buildings")} ORDER BY id LIMIT 1`,
+  )
     .bind(session.id, session.id)
     .first();
 }

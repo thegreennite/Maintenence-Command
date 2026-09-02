@@ -12,7 +12,7 @@ async function gatherBuildingWeeks(env) {
   const dates = weekDates(today);
 
   const buildings = await env.DB.prepare(
-    "SELECT id, name, inspection_days FROM buildings WHERE status = 'active' ORDER BY name",
+    "SELECT id, name, inspection_days FROM buildings WHERE status = 'active' AND deleted_at IS NULL ORDER BY name",
   ).all();
   const rows = buildings.results;
   if (!rows.length) return [];

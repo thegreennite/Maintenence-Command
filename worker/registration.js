@@ -25,7 +25,7 @@ export async function handleBuildingSearchForRegistration(request, env, corsHead
   if (q.length < 2) return jsonOk({ buildings: [] }, corsHeaders);
 
   const result = await env.DB.prepare(
-    `SELECT id, name, address FROM buildings WHERE name LIKE ? ORDER BY name LIMIT 10`,
+    `SELECT id, name, address FROM buildings WHERE deleted_at IS NULL AND name LIKE ? ORDER BY name LIMIT 10`,
   )
     .bind(`%${q}%`)
     .all();

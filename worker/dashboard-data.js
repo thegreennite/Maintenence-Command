@@ -73,7 +73,7 @@ async function visibleActiveBuildings(env, session) {
   const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
     `SELECT id, name, inspection_days, created_by FROM buildings
-     WHERE status = 'active' AND ${scoped ? "1=1" : ownedOrSharedSql("buildings")}`,
+     WHERE status = 'active' AND deleted_at IS NULL AND ${scoped ? "1=1" : ownedOrSharedSql("buildings")}`,
   )
     .bind(...(scoped ? [] : [session.id, session.id]))
     .all();
@@ -118,7 +118,7 @@ async function buildManagerDashboard(env, session, fullName) {
       `SELECT COUNT(*) AS open_count, COUNT(DISTINCT w.building_id) AS building_count,
          SUM(CASE WHEN w.assigned_to IS NULL THEN 1 ELSE 0 END) AS unassigned_count
        FROM work_orders w JOIN buildings b ON b.id = w.building_id
-       WHERE w.status = 'open' AND ${scoped ? "1=1" : ownedOrSharedSql("b")}`,
+       WHERE w.status = 'open' AND b.deleted_at IS NULL AND ${scoped ? "1=1" : ownedOrSharedSql("b")}`,
     )
       .bind(...(scoped ? [] : [session.id, session.id]))
       .first(),

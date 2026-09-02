@@ -37,8 +37,8 @@ async function resolveAllowedBuildingIds(session, env, requestedBuildingId) {
   }
   if (session.role === "regional_manager" || session.role === "admin") {
     const row = canSeeAllBuildings(session)
-      ? await env.DB.prepare("SELECT id FROM buildings WHERE id = ?").bind(requestedBuildingId).first()
-      : await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+      ? await env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(requestedBuildingId).first()
+      : await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
           .bind(requestedBuildingId, session.id, session.id)
           .first();
     return row ? [requestedBuildingId] : [];

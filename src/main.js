@@ -58,6 +58,11 @@ const state = {
   buildingWorldManagingLocations: false,
   buildingWorldHistory: null,
   commandMode: null,
+  // Admin-only: pending building-deletion requests, buildings already
+  // soft-deleted (kept 30 days), and removed user profiles.
+  adminDeleteRequests: [],
+  adminDeletedBuildings: [],
+  adminRemovedAccounts: [],
   // Which building rows on the central portfolio list are expanded inline
   // -- an arrow toggle instead of always fully opening the building world
   // page just to check its region/address/coverage at a glance.
@@ -172,6 +177,36 @@ const api = {
   },
   managerDeleteBuilding(payload) {
     return this.request("/manager/buildings/delete", { method: "POST", body: JSON.stringify(payload) });
+  },
+  managerCancelDeleteRequest(payload) {
+    return this.request("/manager/buildings/delete-cancel", { method: "POST", body: JSON.stringify(payload) });
+  },
+  adminDeleteRequests() {
+    return this.request("/admin/buildings/delete-requests");
+  },
+  adminApproveDeleteRequest(payload) {
+    return this.request("/admin/buildings/delete-requests/approve", { method: "POST", body: JSON.stringify(payload) });
+  },
+  adminDenyDeleteRequest(payload) {
+    return this.request("/admin/buildings/delete-requests/deny", { method: "POST", body: JSON.stringify(payload) });
+  },
+  adminDeletedBuildings() {
+    return this.request("/admin/buildings/deleted");
+  },
+  adminRestoreBuilding(payload) {
+    return this.request("/admin/buildings/restore", { method: "POST", body: JSON.stringify(payload) });
+  },
+  adminRemoveAccount(payload) {
+    return this.request("/admin/accounts/remove", { method: "POST", body: JSON.stringify(payload) });
+  },
+  adminRestoreAccount(payload) {
+    return this.request("/admin/accounts/restore", { method: "POST", body: JSON.stringify(payload) });
+  },
+  adminRemovedAccounts() {
+    return this.request("/admin/accounts/removed");
+  },
+  adminSetClassification(payload) {
+    return this.request("/admin/accounts/classification", { method: "POST", body: JSON.stringify(payload) });
   },
   managerSuperintendents() {
     return this.request("/manager/superintendents");
@@ -717,15 +752,21 @@ async function loadDashboard() {
       isPropertyManager ? api.propertyInspections() : Promise.resolve(null),
     ]);
   state.adminStats = isAdminViewing ? await api.adminStats().catch(() => null) : null;
-  if (isAdminViewing) {
-    state.pendingRequests = (await api.managerPendingRequests().catch(() => ({ requests: [] }))).requests;
-  }
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
   state.inspection = inspectionResponse;
   state.managerInspection = managerInspectionResponse;
   state.propertyInspections = propertyResponse;
-  if (isRegionalManager) {
+  if (isSuperintendent && inspectionResponse?.building) {
+    state.buildingWorldHistory = (
+      await api.inspectionHistory(inspectionResponse.building.id).catch(() => ({ submissions: [] }))
+    ).submissions;
+  }
+  // An Administrator gets the same building/superintendent/work-order
+  // surface a Regional/Operations Manager does -- canSeeAllBuildings()
+  // already covers admin on the backend, this is just wiring the frontend
+  // up to actually fetch and show it for that role too.
+  if (isRegionalManager || isAdminViewing) {
     const [buildingsResponse, pendingResponse, superintendentsResponse, workOrdersResponse] = await Promise.all([
       api.managerBuildings(),
       api.managerPendingRequests(),
@@ -737,6 +778,16 @@ async function loadDashboard() {
     state.managerSuperintendents = superintendentsResponse.superintendents;
     state.workOrders = workOrdersResponse.workOrders;
     state.selectedExceptionId = state.workOrders.find((w) => w.status === "open")?.id || null;
+  }
+  if (isAdminViewing) {
+    const [deleteRequestsResponse, deletedBuildingsResponse, removedAccountsResponse] = await Promise.all([
+      api.adminDeleteRequests().catch(() => ({ requests: [] })),
+      api.adminDeletedBuildings().catch(() => ({ buildings: [] })),
+      api.adminRemovedAccounts().catch(() => ({ accounts: [] })),
+    ]);
+    state.adminDeleteRequests = deleteRequestsResponse.requests;
+    state.adminDeletedBuildings = deletedBuildingsResponse.buildings;
+    state.adminRemovedAccounts = removedAccountsResponse.accounts;
   }
   renderApp();
 
@@ -828,7 +879,12 @@ function renderDashboard(data) {
         : data.kind === "superintendent"
           ? renderInspectionView(state.inspection) +
             renderFlagIssuePanel() +
-            (state.inspection?.building ? renderPhotoLibraryCard(state.inspection.building.id, null) : "")
+            (state.inspection?.building
+              ? `<section class="card building-world__checklist">
+                   <div class="card__header"><div><p class="section-kicker">Inspection history</p><h2>Submitted, by week</h2></div></div>
+                   ${renderInspectionHistory(state.inspection.building.id)}
+                 </section>` + renderPhotoLibraryCard(state.inspection.building.id, null)
+              : "")
           : data.kind === "property_manager"
             ? renderPropertyView(state.propertyInspections)
             : renderRoleShell(data);
@@ -943,15 +999,20 @@ function renderBuildingsPanel() {
 
 function renderDeleteBuildingPanel(building) {
   const required = `I WANT TO DELETE ${building.name}`;
+  const isAdmin = state.session?.user?.role === "admin";
   return `<div class="wizard-panel delete-building-panel">
-    <h3>${icon("warning")} Delete ${escapeHtml(building.name)}?</h3>
-    <p class="parameters-intro">This permanently removes the building, its checklist, every past inspection, and its work orders. Anyone assigned to it becomes unassigned — their accounts aren't deleted. This can't be undone.</p>
+    <h3>${icon("warning")} ${isAdmin ? "Delete" : "Request deletion of"} ${escapeHtml(building.name)}?</h3>
+    <p class="parameters-intro">${
+      isAdmin
+        ? "This soft-deletes the building immediately — it disappears from every view, but the full record (checklist, every past inspection, work orders) is kept for 30 days in case it needs to be restored. Anyone assigned to it becomes unassigned; their accounts aren't touched."
+        : "This doesn't delete anything yet — it sends a request to an Administrator, who has to approve it before the building actually goes away. You can cancel the request any time before then."
+    }</p>
     <label class="inspection-field"><span>Type exactly: <code>${escapeHtml(required)}</code></span>
       <input type="text" id="delete-building-confirm-text" autocomplete="off" placeholder="${escapeHtml(required)}" />
     </label>
     <div class="inspection-actions">
       <button type="button" class="button button--outline" id="cancel-delete-building">Cancel</button>
-      <button type="button" class="button button--danger" id="confirm-delete-building" data-building-id="${building.id}" data-required="${escapeHtml(required)}" disabled>Delete permanently</button>
+      <button type="button" class="button button--danger" id="confirm-delete-building" data-building-id="${building.id}" data-required="${escapeHtml(required)}" disabled>${isAdmin ? "Delete permanently" : "Request deletion"}</button>
     </div>
     <p class="form-error" id="delete-building-error" hidden role="alert"></p>
   </div>`;
@@ -960,11 +1021,14 @@ function renderDeleteBuildingPanel(building) {
 function renderBuildingRow(building) {
   const isRegistering = building.status === "registering";
   const expanded = state.expandedBuildingRowIds.has(building.id);
+  const isAdmin = state.session?.user?.role === "admin";
+  const pendingDeletion = Boolean(building.delete_requested_at);
   return `
     <div class="building-row">
       <div class="building-row__name">
         <button type="button" class="building-name-link" data-building-id="${building.id}"><strong>${escapeHtml(building.name)}</strong></button>
         ${isRegistering ? '<span class="status-chip status-chip--registering">Registering</span>' : ""}
+        ${pendingDeletion ? '<span class="status-chip status-chip--registering">Pending deletion approval</span>' : ""}
         <small>${escapeHtml(building.address || "No address on file")}</small>
       </div>
       <span class="quiet-label">${building.tag_count} reading${building.tag_count === 1 ? "" : "s"}</span>
@@ -976,7 +1040,11 @@ function renderBuildingRow(building) {
             ? `<button type="button" class="button button--primary button--small push-live-button" data-building-id="${building.id}">Push to Super</button>`
             : ""
       }
-      <button type="button" class="icon-button delete-building-button" data-building-id="${building.id}" data-building-name="${escapeHtml(building.name)}" title="Delete building" aria-label="Delete ${escapeHtml(building.name)}">${icon("close")}</button>
+      ${
+        pendingDeletion && !isAdmin
+          ? `<button type="button" class="button button--outline button--small cancel-delete-request" data-building-id="${building.id}">Cancel deletion request</button>`
+          : `<button type="button" class="icon-button delete-building-button" data-building-id="${building.id}" data-building-name="${escapeHtml(building.name)}" title="${isAdmin ? "Delete building" : "Request deletion"}" aria-label="${isAdmin ? "Delete" : "Request deletion for"} ${escapeHtml(building.name)}">${icon("close")}</button>`
+      }
       <button type="button" class="icon-button building-row-toggle ${expanded ? "is-expanded" : ""}" data-building-id="${building.id}" title="${expanded ? "Hide" : "Show"} building info" aria-label="${expanded ? "Hide" : "Show"} building info" aria-expanded="${expanded}">${icon("arrow")}</button>
     </div>
     ${expanded ? renderBuildingRowPreview(building) : ""}`;
@@ -1540,6 +1608,9 @@ function renderAdminDashboard(data) {
   return `
     <div class="metric-grid metric-grid--three">${data.stats.map(renderStat).join("")}</div>
     ${renderPendingRequestsPanel()}
+    ${renderBuildingsPanel()}
+    ${renderAdminBuildingDeletionsPanel()}
+    ${renderAdminAccountsManagePanel()}
     <section class="card admin-panel">
       <div class="card__header"><div><p class="section-kicker">Role Preview</p><h2>Choose a command view</h2></div><span class="quiet-label">Administrator access</span></div>
       <p class="admin-panel__intro">Open another user’s dashboard without using or changing their credentials. Your administrator session remains active.</p>
@@ -1548,6 +1619,88 @@ function renderAdminDashboard(data) {
       </div>
     </section>
     ${renderStatsPanel()}`;
+}
+
+const CLASSIFICATION_LABELS = { standard: "Standard", beta_tester: "Beta Tester" };
+
+function renderAdminAccountsManagePanel() {
+  const removed = state.adminRemovedAccounts || [];
+  return `
+    <section class="card">
+      <div class="card__header"><div><p class="section-kicker">Accounts</p><h2>Manage profiles</h2></div></div>
+      <div class="buildings-list">
+        ${state.accounts
+          .map(
+            (a) => `<div class="building-row">
+              <div class="building-row__name"><strong>${escapeHtml(a.fullName)}</strong><small>${escapeHtml(a.roleLabel)}${a.region ? ` · ${escapeHtml(a.region)}` : ""}</small></div>
+              <select class="account-classification" data-user-id="${a.id}">
+                ${Object.entries(CLASSIFICATION_LABELS)
+                  .map(([value, label]) => `<option value="${value}" ${a.classification === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
+                  .join("")}
+              </select>
+              <button type="button" class="button button--outline button--small remove-account" data-user-id="${a.id}" data-user-name="${escapeHtml(a.fullName)}">Remove</button>
+            </div>`,
+          )
+          .join("")}
+      </div>
+      ${
+        removed.length
+          ? `<details style="margin: 10px 22px 18px;"><summary>Removed (${removed.length})</summary>
+              <div class="buildings-list">
+                ${removed
+                  .map(
+                    (a) => `<div class="building-row">
+                      <div class="building-row__name"><strong>${escapeHtml(a.full_name)}</strong><small>Removed ${formatTimestamp(a.removed_at)}</small></div>
+                      <button type="button" class="button button--outline button--small restore-account" data-user-id="${a.id}">Restore</button>
+                    </div>`,
+                  )
+                  .join("")}
+              </div>
+            </details>`
+          : ""
+      }
+    </section>`;
+}
+
+function renderAdminBuildingDeletionsPanel() {
+  const requests = state.adminDeleteRequests || [];
+  const deleted = state.adminDeletedBuildings || [];
+  if (!requests.length && !deleted.length) return "";
+  return `
+    <section class="card">
+      <div class="card__header"><div><p class="section-kicker">Building deletions</p><h2>Requests &amp; recently deleted</h2></div></div>
+      <div class="buildings-list">
+        ${
+          requests.length
+            ? requests
+                .map(
+                  (r) => `<div class="building-row">
+                    <div class="building-row__name"><strong>${escapeHtml(r.name)}</strong><small>Requested by ${escapeHtml(r.requested_by_name || "Unknown")} · ${formatTimestamp(r.delete_requested_at)}</small></div>
+                    <button type="button" class="button button--outline button--small deny-delete-request" data-building-id="${r.id}">Deny</button>
+                    <button type="button" class="button button--danger button--small approve-delete-request" data-building-id="${r.id}">Approve delete</button>
+                  </div>`,
+                )
+                .join("")
+            : `<p class="quiet-label" style="padding: 14px 4px;">No pending delete requests.</p>`
+        }
+      </div>
+      ${
+        deleted.length
+          ? `<details style="margin: 10px 22px 18px;" open><summary>Recently deleted (${deleted.length})</summary>
+              <div class="buildings-list">
+                ${deleted
+                  .map(
+                    (b) => `<div class="building-row">
+                      <div class="building-row__name"><strong>${escapeHtml(b.name)}</strong><small>Deleted by ${escapeHtml(b.deleted_by_name || "Unknown")} · ${formatTimestamp(b.deleted_at)} · ${b.daysRemaining} day${b.daysRemaining === 1 ? "" : "s"} left before it's gone for good</small></div>
+                      <button type="button" class="button button--outline button--small restore-building" data-building-id="${b.id}">Restore</button>
+                    </div>`,
+                  )
+                  .join("")}
+              </div>
+            </details>`
+          : ""
+      }
+    </section>`;
 }
 
 async function openBuildingWorld(buildingId) {
@@ -2438,6 +2591,13 @@ function renderInspectionStatusBadge(data) {
   return `<span class="status-pill">${icon("clock")} Not started</span>`;
 }
 
+// AI photo reading is manual-entry-only for everyone right now except the
+// beta tester (see worker/admin-accounts.js's CLASSIFICATIONS and the
+// admin accounts panel that sets this per account).
+function aiPhotoEnabled() {
+  return state.session?.user?.classification === "beta_tester";
+}
+
 function renderInspectionGroup(section, readings, locked, flags = {}, groupNotes = {}) {
   const { groupId, name, tags } = section;
   const photoInputId = `photo-${slugify(name)}`;
@@ -2446,7 +2606,7 @@ function renderInspectionGroup(section, readings, locked, flags = {}, groupNotes
     <fieldset class="inspection-group">
       <legend>${escapeHtml(name)}</legend>
       ${
-        locked
+        locked || !aiPhotoEnabled()
           ? ""
           : `<div class="photo-capture">
               <label class="button button--outline button--small photo-capture__button" for="${photoInputId}">
@@ -2487,7 +2647,7 @@ function renderInspectionField(tag, value, locked, flagged) {
           autocomplete="off"
         />
         ${
-          locked
+          locked || !aiPhotoEnabled()
             ? ""
             : `<label class="icon-button inspection-field__photo-button" for="single-photo-${tag.id}" title="Attach a photo for this reading">${icon("camera")}</label>
                <input type="file" accept="image/*" capture="environment" id="single-photo-${tag.id}" data-single-photo-tag-id="${tag.id}" hidden />`
@@ -3264,11 +3424,15 @@ function renderCommandModeChoose(currentValue, isFlagged, tag) {
         : `<p class="command-mode__empty">${isFlagged ? "🚩 Flagged for later — no value yet" : "No value yet"}</p>`
     }
     <div class="command-mode__actions">
-      <label class="button button--primary command-mode__action" for="command-mode-camera">${icon("camera")} Take picture</label>
-      <input type="file" accept="image/*" capture="environment" id="command-mode-camera" hidden />
-      <label class="button button--outline command-mode__action" for="command-mode-upload">${icon("image")} Upload from device</label>
-      <input type="file" accept="image/*" id="command-mode-upload" hidden />
-      <button type="button" class="button button--outline command-mode__action" id="command-mode-manual">${icon("edit")} Enter manually</button>
+      ${
+        aiPhotoEnabled()
+          ? `<label class="button button--primary command-mode__action" for="command-mode-camera">${icon("camera")} Take picture</label>
+             <input type="file" accept="image/*" capture="environment" id="command-mode-camera" hidden />
+             <label class="button button--outline command-mode__action" for="command-mode-upload">${icon("image")} Upload from device</label>
+             <input type="file" accept="image/*" id="command-mode-upload" hidden />`
+          : ""
+      }
+      <button type="button" class="button ${aiPhotoEnabled() ? "button--outline" : "button--primary"} command-mode__action" id="command-mode-manual">${icon("edit")} Enter manually</button>
     </div>`;
 }
 
@@ -3715,6 +3879,27 @@ function bindDashboardEvents() {
     confirmButton.disabled = event.currentTarget.value !== confirmButton.dataset.required;
   });
   document.querySelector("#confirm-delete-building")?.addEventListener("click", (event) => handleDeleteBuilding(event.currentTarget));
+  document.querySelectorAll(".cancel-delete-request").forEach((button) => {
+    button.addEventListener("click", () => handleCancelDeleteRequest(button));
+  });
+  document.querySelectorAll(".approve-delete-request").forEach((button) => {
+    button.addEventListener("click", () => handleApproveDeleteRequest(button));
+  });
+  document.querySelectorAll(".deny-delete-request").forEach((button) => {
+    button.addEventListener("click", () => handleDenyDeleteRequest(button));
+  });
+  document.querySelectorAll(".restore-building").forEach((button) => {
+    button.addEventListener("click", () => handleRestoreBuilding(button));
+  });
+  document.querySelectorAll(".remove-account").forEach((button) => {
+    button.addEventListener("click", () => handleRemoveAccount(button));
+  });
+  document.querySelectorAll(".restore-account").forEach((button) => {
+    button.addEventListener("click", () => handleRestoreAccount(button));
+  });
+  document.querySelectorAll(".account-classification").forEach((select) => {
+    select.addEventListener("change", () => handleSetClassification(select));
+  });
   document.querySelectorAll(".continue-setup-button").forEach((button) => {
     button.addEventListener("click", () => {
       buildingMap = null;
@@ -3938,13 +4123,21 @@ async function handleResolveWorkOrder(button) {
 async function handleDeleteBuilding(button) {
   button.disabled = true;
   const originalLabel = button.textContent;
-  button.textContent = "Deleting…";
+  button.textContent = state.session?.user?.role === "admin" ? "Deleting…" : "Requesting…";
   const error = document.querySelector("#delete-building-error");
   try {
     const buildingId = Number(button.dataset.buildingId);
     const confirmationText = document.querySelector("#delete-building-confirm-text").value;
-    await api.managerDeleteBuilding({ buildingId, confirmationText });
-    state.managerBuildings = state.managerBuildings.filter((b) => b.id !== buildingId);
+    const result = await api.managerDeleteBuilding({ buildingId, confirmationText });
+    if (result.deleted) {
+      // Admin's delete IS the approval -- gone immediately.
+      state.managerBuildings = state.managerBuildings.filter((b) => b.id !== buildingId);
+    } else {
+      // ROM/OM: nothing is gone -- just flag it pending on the row.
+      state.managerBuildings = state.managerBuildings.map((b) =>
+        b.id === buildingId ? { ...b, delete_requested_at: new Date().toISOString() } : b,
+      );
+    }
     state.deleteBuildingTarget = null;
     renderApp();
   } catch (requestError) {
@@ -3952,6 +4145,115 @@ async function handleDeleteBuilding(button) {
     button.textContent = originalLabel;
     error.textContent = requestError.message;
     error.hidden = false;
+  }
+}
+
+async function handleCancelDeleteRequest(button) {
+  button.disabled = true;
+  try {
+    const buildingId = Number(button.dataset.buildingId);
+    await api.managerCancelDeleteRequest({ buildingId });
+    state.managerBuildings = state.managerBuildings.map((b) =>
+      b.id === buildingId ? { ...b, delete_requested_at: null } : b,
+    );
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleApproveDeleteRequest(button) {
+  button.disabled = true;
+  try {
+    const buildingId = Number(button.dataset.buildingId);
+    await api.adminApproveDeleteRequest({ buildingId });
+    state.adminDeleteRequests = state.adminDeleteRequests.filter((r) => r.id !== buildingId);
+    state.managerBuildings = state.managerBuildings.filter((b) => b.id !== buildingId);
+    const deleted = await api.adminDeletedBuildings().catch(() => null);
+    if (deleted) state.adminDeletedBuildings = deleted.buildings;
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleDenyDeleteRequest(button) {
+  button.disabled = true;
+  try {
+    const buildingId = Number(button.dataset.buildingId);
+    await api.adminDenyDeleteRequest({ buildingId });
+    state.adminDeleteRequests = state.adminDeleteRequests.filter((r) => r.id !== buildingId);
+    state.managerBuildings = state.managerBuildings.map((b) =>
+      b.id === buildingId ? { ...b, delete_requested_at: null } : b,
+    );
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleRestoreBuilding(button) {
+  button.disabled = true;
+  try {
+    const buildingId = Number(button.dataset.buildingId);
+    await api.adminRestoreBuilding({ buildingId });
+    state.adminDeletedBuildings = state.adminDeletedBuildings.filter((b) => b.id !== buildingId);
+    const buildings = await api.managerBuildings().catch(() => null);
+    if (buildings) state.managerBuildings = buildings.buildings;
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleRemoveAccount(button) {
+  if (!confirm(`Remove ${button.dataset.userName}'s account? They won't be able to log in, but their inspection history is kept.`)) return;
+  button.disabled = true;
+  try {
+    const userId = Number(button.dataset.userId);
+    await api.adminRemoveAccount({ userId });
+    const removedAccount = state.accounts.find((a) => a.id === userId);
+    state.accounts = state.accounts.filter((a) => a.id !== userId);
+    if (removedAccount) {
+      state.adminRemovedAccounts = [{ id: userId, full_name: removedAccount.fullName, removed_at: new Date().toISOString() }, ...state.adminRemovedAccounts];
+    }
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleRestoreAccount(button) {
+  button.disabled = true;
+  try {
+    const userId = Number(button.dataset.userId);
+    await api.adminRestoreAccount({ userId });
+    state.adminRemovedAccounts = state.adminRemovedAccounts.filter((a) => a.id !== userId);
+    const accounts = await api.accounts().catch(() => null);
+    if (accounts) state.accounts = accounts.accounts;
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+async function handleSetClassification(select) {
+  select.disabled = true;
+  try {
+    const userId = Number(select.dataset.userId);
+    await api.adminSetClassification({ userId, classification: select.value });
+    const account = state.accounts.find((a) => a.id === userId);
+    if (account) account.classification = select.value;
+  } catch (error) {
+    select.title = error.message;
+  } finally {
+    select.disabled = false;
   }
 }
 

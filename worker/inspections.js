@@ -127,7 +127,7 @@ export async function handleInspectionToday(session, env, corsHeaders) {
   }
 
   const [building, tags, { submission, readings, flags, photoKeys, groupNotes }, notices] = await Promise.all([
-    env.DB.prepare("SELECT id, name, region, inspection_days, status FROM buildings WHERE id = ?")
+    env.DB.prepare("SELECT id, name, region, inspection_days, status, deleted_at FROM buildings WHERE id = ?")
       .bind(buildingId)
       .first(),
     loadTags(env, buildingId),
@@ -141,7 +141,7 @@ export async function handleInspectionToday(session, env, corsHeaders) {
       .all(),
   ]);
 
-  if (building?.status !== "active") {
+  if (building?.status !== "active" || building?.deleted_at) {
     return jsonError(
       "This building is still being set up by your operations manager and isn't live yet.",
       409,
@@ -172,8 +172,8 @@ async function upsertDraft(session, env, { notes, readings, flags, photoKeys, gr
   const buildingId = session.building_id;
   const date = today();
 
-  const building = await env.DB.prepare("SELECT status FROM buildings WHERE id = ?").bind(buildingId).first();
-  if (building?.status !== "active") {
+  const building = await env.DB.prepare("SELECT status, deleted_at FROM buildings WHERE id = ?").bind(buildingId).first();
+  if (building?.status !== "active" || building?.deleted_at) {
     const err = new Error("This building isn't live yet.");
     err.status = 409;
     throw err;

@@ -8,9 +8,9 @@ import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 async function ownsBuilding(env, session, buildingId) {
   if (canSeeAllBuildings(session)) {
-    return env.DB.prepare("SELECT id FROM buildings WHERE id = ?").bind(buildingId).first();
+    return env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
   }
-  return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+  return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
     .bind(buildingId, session.id, session.id)
     .first();
 }

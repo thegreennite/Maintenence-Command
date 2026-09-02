@@ -19,6 +19,12 @@ export async function handleInspectionPhoto(request, session, env, corsHeaders) 
   if (!env.GOOGLE_AI_KEY) {
     return jsonError("AI photo reading isn't configured on this deployment yet.", 503, corsHeaders);
   }
+  // Manual entry only for now, except the beta tester -- see
+  // worker/admin-accounts.js's CLASSIFICATIONS and the admin accounts
+  // panel that sets this per account.
+  if (session.classification !== "beta_tester") {
+    return jsonError("AI photo reading isn't available on this account yet.", 403, corsHeaders);
+  }
 
   const body = await request.json().catch(() => ({}));
   const tagIds = Array.isArray(body.tagIds) ? body.tagIds.map((id) => Number.parseInt(id, 10)) : [];
@@ -156,6 +162,9 @@ Return a JSON array of exactly ${orderedTags.length} objects, one per numbered r
 export async function handleCommandModePhoto(request, session, env, corsHeaders) {
   if (!env.GOOGLE_AI_KEY) {
     return jsonError("AI photo reading isn't configured on this deployment yet.", 503, corsHeaders);
+  }
+  if (session.classification !== "beta_tester") {
+    return jsonError("AI photo reading isn't available on this account yet.", 403, corsHeaders);
   }
 
   const body = await request.json().catch(() => ({}));

@@ -6,10 +6,17 @@
 import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 async function ownsBuilding(env, session, buildingId) {
-  if (canSeeAllBuildings(session)) {
-    return env.DB.prepare("SELECT id, name FROM buildings WHERE id = ?").bind(buildingId).first();
+  // A superintendent can pull their own building's history (read-only --
+  // there's nothing to edit here, just weekly folders + PDF export), but
+  // only their own building, never another one.
+  if (session.role === "superintendent") {
+    if (session.building_id !== buildingId) return null;
+    return env.DB.prepare("SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
   }
-  return env.DB.prepare(`SELECT id, name FROM buildings WHERE id = ? AND ${ownedOrSharedSql("buildings")}`)
+  if (canSeeAllBuildings(session)) {
+    return env.DB.prepare("SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
+  }
+  return env.DB.prepare(`SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
     .bind(buildingId, session.id, session.id)
     .first();
 }
