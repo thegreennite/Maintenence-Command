@@ -1249,7 +1249,11 @@ function renderBuildingReviewStep(wizard) {
 // review dropdown, the manager's "Expected" parameter picker, and command
 // mode's one-tap choice buttons. Add a future type here only.
 const CLOSED_CHOICE_TYPES = {
-  on_off: { label: "On/off", options: ["on", "off"] },
+  // Boilers, compressors, and most equipment with an on/off state also
+  // have an auto mode in real mechanical rooms -- same three-state idea
+  // as Hand-Off-Auto below, just labeled the way most supers actually
+  // say it out loud ("on, off, or auto").
+  on_off: { label: "On/off/auto", options: ["on", "off", "auto"] },
   hoa: { label: "Hand-Off-Auto", options: ["Hand", "Off", "Auto"] },
   open_closed: { label: "Open/Closed", options: ["Open", "Closed"] },
 };
@@ -3016,6 +3020,7 @@ function startCommandMode() {
     photoKeys,
     entryMode: "choose",
     manualDraft: "",
+    tempUnit: "C",
     scanResult: null,
     abnormalPrompt: null,
     reviewFlags: false,
@@ -3135,6 +3140,12 @@ function commandModeAdvance() {
     cm.entryMode = "choose";
     cm.abnormalPrompt = null;
     cm.scanResult = null;
+    cm.tempUnit = "C";
+    // Skipping straight to the manual box (see skipToManual) bypasses
+    // handleCommandModeManualOpen, which is normally what copies an
+    // already-recorded value into the draft -- do that here too, or the
+    // box would look empty for a tag that's actually already answered.
+    cm.manualDraft = cm.readings[cm.order[cm.index]] || "";
     renderApp();
     return;
   }
@@ -3252,6 +3263,8 @@ function handleCommandModePrev() {
   cm.entryMode = "choose";
   cm.abnormalPrompt = null;
   cm.scanResult = null;
+  cm.tempUnit = "C";
+  cm.manualDraft = cm.readings[cm.order[cm.index]] || "";
   renderApp();
 }
 
@@ -3277,12 +3290,26 @@ function handleCommandModeManualCancel() {
   renderApp();
 }
 
+// Everything in this app assumes one consistent unit per gauge over
+// time (min/max parameters, the 7-day trend check) -- so no matter which
+// button a super hits, what actually gets stored is always Celsius. The
+// °F button is just so they don't have to do the math by hand off an
+// old Fahrenheit gauge.
+function fahrenheitToCelsius(f) {
+  return Math.round(((f - 32) * (5 / 9)) * 10) / 10;
+}
+
 function handleCommandModeManualSubmit(event) {
   event.preventDefault();
   const cm = state.commandMode;
   const tagId = cm.order[cm.index];
-  const value = document.querySelector("#command-mode-manual-input").value.trim();
+  const tag = state.inspection.tags.find((t) => t.id === tagId);
+  let value = document.querySelector("#command-mode-manual-input").value.trim();
   if (!value) return;
+  if (isTemperatureTag(tag) && cm.tempUnit === "F") {
+    const num = Number.parseFloat(value);
+    if (!Number.isNaN(num)) value = String(fahrenheitToCelsius(num));
+  }
   commandModeAcceptValue(tagId, value);
 }
 
@@ -3368,6 +3395,11 @@ function renderCommandMode() {
   const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
   const currentValue = cm.readings[tagId];
   const isFlagged = !!cm.flags[tagId];
+  // Manual entry is the only option left once camera/upload aren't
+  // available (i.e. everyone except the beta tester -- see
+  // aiPhotoEnabled()), so skip straight past the "choose" stage's single
+  // "Enter manually" button and land right in the input box instead.
+  const skipToManual = cm.entryMode === "choose" && !aiPhotoEnabled();
 
   return `
     <section class="command-mode">
@@ -3396,7 +3428,7 @@ function renderCommandMode() {
             ? renderCommandModeAbnormal(cm.abnormalPrompt, tag)
             : cm.entryMode === "scan-result"
               ? renderCommandModeScanResult(cm, tag)
-              : cm.entryMode === "manual"
+              : cm.entryMode === "manual" || skipToManual
                 ? renderCommandModeManualEntry(cm, tag)
                 : cm.entryMode === "busy"
                   ? `<div class="command-mode__busy"><span class="loading-bar"><span></span></span><p id="command-mode-busy-status">Reading…</p></div>`
@@ -3436,7 +3468,20 @@ function renderCommandModeChoose(currentValue, isFlagged, tag) {
     </div>`;
 }
 
+// A tag reading in whole degrees with no closed-choice type is a
+// temperature -- "°" is the only unit this app hands a super for that.
+function isTemperatureTag(tag) {
+  return tag.unit === "°" && !CLOSED_CHOICE_TYPES[tag.value_type];
+}
+
 function renderCommandModeManualEntry(cm, tag) {
+  // Once camera/upload aren't an option (everyone but the beta tester),
+  // command mode skips straight to this box -- there's no "choose"
+  // screen underneath to cancel back to, so don't offer a Cancel that
+  // would just redraw the same box. Back/Flag/Skip in the nav bar below
+  // still cover leaving a reading blank.
+  const showCancel = aiPhotoEnabled();
+
   // A one-tap choice beats typing "hand" or "auto" on a phone keyboard,
   // and it can't typo into something the flag-matching logic won't
   // recognize -- reuses the same closed-choice list as the checklist
@@ -3453,13 +3498,20 @@ function renderCommandModeManualEntry(cm, tag) {
             )
             .join("")}
         </div>
-        <div class="command-mode__manual-actions">
-          <button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button>
-        </div>
+        ${showCancel ? `<div class="command-mode__manual-actions"><button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button></div>` : ""}
       </div>`;
   }
+  const isTemp = isTemperatureTag(tag);
   return `
     <form id="command-mode-manual-form" class="command-mode__manual">
+      ${
+        isTemp
+          ? `<div class="command-mode__unit-toggle" role="group" aria-label="Unit for the value you're about to type">
+              <button type="button" class="command-mode-temp-unit ${cm.tempUnit === "C" ? "is-selected" : ""}" data-unit="C">°C</button>
+              <button type="button" class="command-mode-temp-unit ${cm.tempUnit === "F" ? "is-selected" : ""}" data-unit="F">°F</button>
+            </div>`
+          : ""
+      }
       <input
         type="text"
         inputmode="decimal"
@@ -3469,7 +3521,7 @@ function renderCommandModeManualEntry(cm, tag) {
         autocomplete="off"
       />
       <div class="command-mode__manual-actions">
-        <button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button>
+        ${showCancel ? `<button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button>` : ""}
         <button type="submit" class="button button--primary">Confirm</button>
       </div>
     </form>`;
@@ -3548,6 +3600,18 @@ function bindCommandModeEvents() {
   document.querySelector("#command-mode-manual-form")?.addEventListener("submit", handleCommandModeManualSubmit);
   document.querySelectorAll(".command-mode-manual-choice").forEach((button) => {
     button.addEventListener("click", () => handleCommandModeManualChoice(button));
+  });
+  document.querySelectorAll(".command-mode-temp-unit").forEach((button) => {
+    button.addEventListener("click", () => {
+      // Preserve whatever's already typed -- re-rendering to flip the
+      // selected-button style would otherwise redraw the input from
+      // manualDraft, which is only synced at a few transition points,
+      // not on every keystroke.
+      const input = document.querySelector("#command-mode-manual-input");
+      if (input) state.commandMode.manualDraft = input.value;
+      state.commandMode.tempUnit = button.dataset.unit;
+      renderApp();
+    });
   });
   document.querySelector("#command-mode-camera")?.addEventListener("change", handleCommandModePhotoInput);
   document.querySelector("#command-mode-upload")?.addEventListener("change", handleCommandModePhotoInput);
