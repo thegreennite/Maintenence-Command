@@ -11,6 +11,7 @@ import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit } f
 import { handleManagerInspection, handleManagerParametersSave, handleManagerSuperintendents } from "./manager.js";
 import { handlePropertyInspections } from "./property.js";
 import { handleInspectionPhoto, handleCommandModePhoto } from "./vision.js";
+import { handleGroupPhotoUpload } from "./group-photos.js";
 import { handleListLocations, handleCreateLocation, handleDeleteLocation, handleAssignTagLocation } from "./locations.js";
 import { handleListGroups, handleCreateGroup, handleDeleteGroup, handleAssignTagGroup, handleAssignGroupLocation } from "./groups.js";
 import { handleListRoms, handleBuildingSharing, handleShareBuilding, handleUnshareBuilding } from "./sharing.js";
@@ -247,6 +248,13 @@ export default {
           return json({ error: "Superintendent access required" }, 403, cors.headers);
         }
         return handleCommandModePhoto(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/inspections/group-photo" && request.method === "POST") {
+        if (session.role !== "superintendent") {
+          return json({ error: "Superintendent access required" }, 403, cors.headers);
+        }
+        return handleGroupPhotoUpload(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/inspection" && request.method === "GET") {

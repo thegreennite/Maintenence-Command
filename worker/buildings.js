@@ -398,7 +398,7 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
   const building = await findOwnedBuilding(env, session, buildingId);
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
-  const [tags, workOrders, notices, recentNotes, superintendents, locations, groups, groupNotes] = await Promise.all([
+  const [tags, workOrders, notices, recentNotes, superintendents, locations, groups, groupNotes, todayGroupPhotos] = await Promise.all([
     env.DB.prepare(
       `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.answer_kind AS value_type,
          t.location_id, l.name AS location_name, t.equipment_group_id, g.name AS equipment_group_name
@@ -453,6 +453,14 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
     )
       .bind(buildingId)
       .all(),
+    env.DB.prepare(
+      `SELECT gp.equipment_group_id, gp.photo_key, gp.captured_at, gp.latitude, gp.longitude
+       FROM group_photos gp
+       JOIN inspection_submissions s ON s.id = gp.submission_id
+       WHERE s.building_id = ? AND s.inspection_date = ?`,
+    )
+      .bind(buildingId, todayToronto())
+      .all(),
   ]);
 
   return jsonOk(
@@ -463,12 +471,20 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
       notices: notices.results,
       recentNotes: recentNotes.results,
       groupNotes: groupNotes.results,
+      todayGroupPhotos: todayGroupPhotos.results,
       superintendents: superintendents.results,
       locations: locations.results,
       groups: groups.results,
     },
     corsHeaders,
   );
+}
+
+// Toronto time, not UTC -- same reasoning as every other "today" in this
+// app (worker/inspections.js): an inspection day turns over at midnight
+// ET, not whenever UTC happens to roll.
+function todayToronto() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 }
 
 function jsonOk(data, headers) {

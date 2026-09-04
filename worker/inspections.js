@@ -97,13 +97,16 @@ async function loadSubmission(env, buildingId, date) {
   )
     .bind(buildingId, date)
     .first();
-  if (!submission) return { submission: null, readings: {}, flags: {}, photoKeys: {}, groupNotes: {} };
+  if (!submission) return { submission: null, readings: {}, flags: {}, photoKeys: {}, groupNotes: {}, groupPhotos: {} };
 
-  const [readings, groupNotes] = await Promise.all([
+  const [readings, groupNotes, groupPhotos] = await Promise.all([
     env.DB.prepare(`SELECT tag_id, value, flagged, photo_key FROM inspection_readings WHERE submission_id = ?`)
       .bind(submission.id)
       .all(),
     env.DB.prepare(`SELECT equipment_group_id, note FROM group_notes WHERE submission_id = ?`)
+      .bind(submission.id)
+      .all(),
+    env.DB.prepare(`SELECT equipment_group_id, photo_key, captured_at, latitude, longitude FROM group_photos WHERE submission_id = ?`)
       .bind(submission.id)
       .all(),
   ]);
@@ -117,7 +120,23 @@ async function loadSubmission(env, buildingId, date) {
   }
   const groupNotesById = {};
   for (const row of groupNotes.results) groupNotesById[row.equipment_group_id] = row.note;
-  return { submission, readings: readingsByTag, flags: flagsByTag, photoKeys: photoKeysByTag, groupNotes: groupNotesById };
+  const groupPhotosById = {};
+  for (const row of groupPhotos.results) {
+    groupPhotosById[row.equipment_group_id] = {
+      photoKey: row.photo_key,
+      capturedAt: row.captured_at,
+      latitude: row.latitude,
+      longitude: row.longitude,
+    };
+  }
+  return {
+    submission,
+    readings: readingsByTag,
+    flags: flagsByTag,
+    photoKeys: photoKeysByTag,
+    groupNotes: groupNotesById,
+    groupPhotos: groupPhotosById,
+  };
 }
 
 export async function handleInspectionToday(session, env, corsHeaders) {
@@ -126,7 +145,7 @@ export async function handleInspectionToday(session, env, corsHeaders) {
     return jsonError("No building is assigned to this account yet.", 409, corsHeaders);
   }
 
-  const [building, tags, { submission, readings, flags, photoKeys, groupNotes }, notices] = await Promise.all([
+  const [building, tags, { submission, readings, flags, photoKeys, groupNotes, groupPhotos }, notices] = await Promise.all([
     env.DB.prepare("SELECT id, name, region, inspection_days, status, deleted_at FROM buildings WHERE id = ?")
       .bind(buildingId)
       .first(),
@@ -162,13 +181,18 @@ export async function handleInspectionToday(session, env, corsHeaders) {
       flags,
       photoKeys,
       groupNotes,
+      groupPhotos,
       notices: notices.results,
     },
     corsHeaders,
   );
 }
 
-async function upsertDraft(session, env, { notes, readings, flags, photoKeys, groupNotes }) {
+// Shared by upsertDraft (below) and the group-photo upload endpoint --
+// both need today's submission row to exist before they can write
+// anything against it, and a photo can be the very first thing a super
+// does that day, before typing a single reading.
+export async function ensureSubmission(session, env) {
   const buildingId = session.building_id;
   const date = today();
 
@@ -191,16 +215,20 @@ async function upsertDraft(session, env, { notes, readings, flags, photoKeys, gr
     throw err;
   }
 
-  let submissionId = existing?.id;
-  if (!submissionId) {
-    const inserted = await env.DB.prepare(
-      `INSERT INTO inspection_submissions (building_id, superintendent_id, inspection_date, status, notes)
-       VALUES (?, ?, ?, 'draft', ?)`,
-    )
-      .bind(buildingId, session.id, date, notes ?? "")
-      .run();
-    submissionId = inserted.meta.last_row_id;
-  } else {
+  if (existing?.id) return { submissionId: existing.id, buildingId, date };
+
+  const inserted = await env.DB.prepare(
+    `INSERT INTO inspection_submissions (building_id, superintendent_id, inspection_date, status, notes)
+     VALUES (?, ?, ?, 'draft', '')`,
+  )
+    .bind(buildingId, session.id, date)
+    .run();
+  return { submissionId: inserted.meta.last_row_id, buildingId, date };
+}
+
+async function upsertDraft(session, env, { notes, readings, flags, photoKeys, groupNotes }) {
+  const { submissionId, buildingId } = await ensureSubmission(session, env);
+  if (notes != null) {
     await env.DB.prepare("UPDATE inspection_submissions SET notes = ? WHERE id = ?")
       .bind(notes ?? "", submissionId)
       .run();
@@ -334,6 +362,25 @@ export async function handleInspectionSubmit(request, session, env, corsHeaders)
   if (stillFlagged.results.length) {
     const labels = stillFlagged.results.map((t) => [t.tag_no, t.reading_type].filter(Boolean).join(" — ")).join(", ");
     return jsonError(`Resolve these flagged readings before submitting: ${labels}`, 409, corsHeaders);
+  }
+
+  // Every equipment group actually in use on this building's checklist
+  // needs its own timestamped proof photo for today before the day can
+  // be closed out -- see migrations/0017_group_photos.sql for why (it's
+  // an anti-fraud measure, not an AI feature, so this applies to every
+  // superintendent, not just the beta tester).
+  const missingGroupPhotos = await env.DB.prepare(
+    `SELECT g.id, g.name FROM equipment_groups g
+     WHERE g.building_id = ?
+       AND EXISTS (SELECT 1 FROM inspection_tags t WHERE t.equipment_group_id = g.id)
+       AND NOT EXISTS (SELECT 1 FROM group_photos p WHERE p.submission_id = ? AND p.equipment_group_id = g.id)
+     ORDER BY g.sort_order, g.name`,
+  )
+    .bind(session.building_id, submissionId)
+    .all();
+  if (missingGroupPhotos.results.length) {
+    const names = missingGroupPhotos.results.map((g) => g.name).join(", ");
+    return jsonError(`Take a timestamped photo of these before submitting: ${names}`, 409, corsHeaders);
   }
 
   await env.DB.prepare(

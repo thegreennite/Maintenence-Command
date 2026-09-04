@@ -306,6 +306,17 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .inspection-group__note .icon { width: 12px; }
 .inspection-group__note textarea { padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font: 500 13px/1.4 inherit; color: var(--ink); resize: vertical; }
 .inspection-group__note textarea:disabled { color: var(--muted); background: var(--canvas); }
+/* The mandatory, timestamped "this machine was actually checked today"
+   photo -- required per equipment group before the day can be submitted.
+   Deliberately louder (amber) than the optional AI-reading photo button
+   above until it's done, then settles into a quiet green confirmation. */
+.machine-photo { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); }
+.machine-photo--required { background: var(--warning-soft); border-color: #f0d9a8; }
+.machine-photo--done { background: var(--success-soft); border-color: #bfe0cf; }
+.machine-photo__status { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12.5px; font-weight: 600; }
+.machine-photo--required .machine-photo__status { color: #8a5a10; }
+.machine-photo--done .machine-photo__status { color: var(--success); }
+.machine-photo__status .icon { width: 14px; flex: 0 0 auto; }
 .inspection-actions { display: flex; gap: 12px; justify-content: flex-end; }
 .inspection-actions .button { min-width: 150px; }
 .inspection-locked-note { display: flex; align-items: center; gap: 8px; margin: 0; padding: 12px 14px; border-radius: 6px; color: var(--success); background: var(--success-soft); font-size: 13px; font-weight: 600; }
@@ -505,6 +516,10 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .checklist-section__header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .checklist-section__header h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 700; }
 .checklist-section__header h4 .quiet-label { text-transform: none; letter-spacing: 0; font-size: 11px; }
+.machine-photo-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px; font: 600 11px/1 "Avenir Next", Avenir, system-ui, sans-serif; text-transform: none; letter-spacing: 0; }
+.machine-photo-badge .icon { width: 11px; }
+.machine-photo-badge--done { background: var(--success-soft); color: var(--success); }
+.machine-photo-badge--missing { background: var(--warning-soft); color: #8a5a10; }
 .checklist-section__note { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-2, #eef1ef); color: var(--muted); font-size: 12.5px; line-height: 1.4; }
 .checklist-section__note .icon { width: 13px; flex: 0 0 auto; margin-top: 2px; }
 .checklist-section__note strong { color: var(--ink); }

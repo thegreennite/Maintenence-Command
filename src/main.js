@@ -271,6 +271,9 @@ const api = {
   commandModePhoto(payload) {
     return this.request("/inspections/command-photo", { method: "POST", body: JSON.stringify(payload) });
   },
+  groupPhotoUpload(payload) {
+    return this.request("/inspections/group-photo", { method: "POST", body: JSON.stringify(payload) });
+  },
   managerLocations(buildingId) {
     return this.request(`/manager/locations?buildingId=${buildingId}`);
   },
@@ -2196,13 +2199,17 @@ function renderChecklistSection(section, world) {
   const recentNote = section.groupId
     ? (world.groupNotes || []).find((n) => n.equipment_group_id === section.groupId)
     : null;
+  const todayPhoto = section.groupId
+    ? (world.todayGroupPhotos || []).find((p) => p.equipment_group_id === section.groupId)
+    : null;
   return `
     <div class="checklist-section">
       <div class="checklist-section__header">
         <h4>${escapeHtml(section.name)}${section.groupId ? "" : ' <span class="quiet-label">(ungrouped)</span>'}<span class="quiet-label"> · ${section.tags.length}</span></h4>
         ${
           section.groupId
-            ? `<select class="assign-group-location" data-group-id="${section.groupId}">
+            ? `<span class="machine-photo-badge ${todayPhoto ? "machine-photo-badge--done" : "machine-photo-badge--missing"}" title="${todayPhoto ? `Photographed ${escapeHtml(formatTimestamp(todayPhoto.captured_at))}` : "No photo yet today"}">${todayPhoto ? icon("check") : icon("camera")} ${todayPhoto ? "Photo taken today" : "No photo today"}</span>
+              <select class="assign-group-location" data-group-id="${section.groupId}">
                 <option value="">Set location for all…</option>
                 ${(world.locations || []).map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join("")}
               </select>`
@@ -2408,6 +2415,7 @@ function renderInspectionView(data) {
   // lines up with the group they can leave a note against below.
   const sections = groupTagsForChecklist(data.tags);
   const groupNotes = data.groupNotes || {};
+  const groupPhotos = data.groupPhotos || {};
 
   return `
     <section class="card inspection-card" aria-labelledby="inspection-title">
@@ -2427,7 +2435,7 @@ function renderInspectionView(data) {
       </div>
       <form id="inspection-form" class="inspection-form">
         ${sections
-          .map((section) => renderInspectionGroup(section, data.readings, locked, data.flags, groupNotes))
+          .map((section) => renderInspectionGroup(section, data.readings, locked, data.flags, groupNotes, groupPhotos))
           .join("")}
         <label class="inspection-notes">
           <span>Comments</span>
@@ -2602,10 +2610,11 @@ function aiPhotoEnabled() {
   return state.session?.user?.classification === "beta_tester";
 }
 
-function renderInspectionGroup(section, readings, locked, flags = {}, groupNotes = {}) {
+function renderInspectionGroup(section, readings, locked, flags = {}, groupNotes = {}, groupPhotos = {}) {
   const { groupId, name, tags } = section;
   const photoInputId = `photo-${slugify(name)}`;
   const note = groupId ? groupNotes[groupId] || "" : "";
+  const proof = groupId ? groupPhotos[groupId] : null;
   return `
     <fieldset class="inspection-group">
       <legend>${escapeHtml(name)}</legend>
@@ -2628,10 +2637,37 @@ function renderInspectionGroup(section, readings, locked, flags = {}, groupNotes
           ? `<label class="inspection-group__note">
               <span>${icon("edit")} Note for ${escapeHtml(name)} today</span>
               <textarea data-group-note-id="${groupId}" rows="2" ${locked ? "disabled" : ""} placeholder="Anything worth flagging for this group today — leave blank if nothing to report.">${escapeHtml(note)}</textarea>
-            </label>`
+            </label>
+            ${renderMachinePhotoBlock(groupId, name, proof, locked)}`
           : ""
       }
     </fieldset>`;
+}
+
+// The mandatory, timestamped "this machine was actually checked today"
+// photo -- required for every equipment group before the whole day can
+// be submitted (see missingGroupPhotoNames() and worker/inspections.js's
+// matching submit-time check). Separate from the optional AI-reading
+// photo-capture block above, which is beta-tester-only and costs a
+// Gemini call; this one is a plain upload, free to retake.
+function renderMachinePhotoBlock(groupId, name, proof, locked) {
+  const inputId = `machine-photo-${groupId}`;
+  return `
+    <div class="machine-photo ${proof ? "machine-photo--done" : "machine-photo--required"}" data-machine-photo-group="${groupId}">
+      <p class="machine-photo__status">
+        ${
+          proof
+            ? `${icon("check")} Photo taken ${escapeHtml(formatTimestamp(proof.capturedAt))}${proof.latitude != null ? " · location tagged" : ""}`
+            : `${icon("warning")} Required before submitting: a timestamped photo of ${escapeHtml(name)}`
+        }
+      </p>
+      ${
+        locked
+          ? ""
+          : `<label class="button button--outline button--small" for="${inputId}">${proof ? "Retake photo" : "Take photo"}</label>
+             <input type="file" accept="image/*" capture="environment" id="${inputId}" data-machine-photo-id="${groupId}" hidden />`
+      }
+    </div>`;
 }
 
 function renderInspectionField(tag, value, locked, flagged) {
@@ -2786,6 +2822,83 @@ async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } =
   }
 }
 
+// Best-effort, short-timeout location fix -- never blocks the photo on
+// it. Free (a browser API, not a paid one), so unlike Gemini calls there's
+// no cost reason to hold back; it just quietly omits itself if the
+// device/browser won't grant it in time.
+function getGeolocation(timeoutMs = 4000) {
+  if (!navigator.geolocation) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        clearTimeout(timer);
+        resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+      { enableHighAccuracy: false, timeout: timeoutMs, maximumAge: 60_000 },
+    );
+  });
+}
+
+function formatCoords(latitude, longitude) {
+  const lat = `${Math.abs(latitude).toFixed(5)}°${latitude >= 0 ? "N" : "S"}`;
+  const lon = `${Math.abs(longitude).toFixed(5)}°${longitude >= 0 ? "E" : "W"}`;
+  return `${lat}, ${lon}`;
+}
+
+// The mandatory "proof this machine was actually checked today" photo --
+// burns a visible timestamp (and geolocation, if granted) directly into
+// the image's pixels client-side before it's ever uploaded, specifically
+// so it can't be a photo from a previous day. Deliberately a separate,
+// plain-upload path from compressImageFile's -- this never goes through
+// Gemini, so retaking it costs nothing.
+async function captureComplianceProof(file) {
+  const geo = await getGeolocation();
+  const sourceFile = await normalizeToDecodableImage(file);
+  const bitmap = await createImageBitmap(sourceFile);
+  const maxDimension = 1600;
+  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+
+  const capturedAt = new Date();
+  const stampLine1 = `${capturedAt.toLocaleString("en-US", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" })} ET`;
+  const stampLine2 = geo ? formatCoords(geo.latitude, geo.longitude) : null;
+  const barHeight = stampLine2 ? 52 : 32;
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillRect(0, height - barHeight, width, barHeight);
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "600 15px Arial, sans-serif";
+  ctx.fillText(stampLine1, 12, height - (stampLine2 ? 30 : 11));
+  if (stampLine2) {
+    ctx.font = "500 13px Arial, sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.fillText(stampLine2, 12, height - 11);
+  }
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+  if (!blob) throw new Error("Couldn't process that photo. Try again.");
+  return {
+    imageBase64: await fileToBase64(blob),
+    mediaType: "image/jpeg",
+    capturedAt: capturedAt.toISOString(),
+    latitude: geo?.latitude ?? null,
+    longitude: geo?.longitude ?? null,
+  };
+}
+
 async function handlePhotoCapture(event) {
   const input = event.currentTarget;
   const file = input.files?.[0];
@@ -2857,6 +2970,31 @@ async function handleSinglePhotoCapture(event) {
   } finally {
     if (photoButton) photoButton.classList.remove("inspection-field__photo-button--busy");
     input.value = "";
+  }
+}
+
+async function handleMachinePhotoCapture(groupId, file) {
+  const block = document.querySelector(`[data-machine-photo-group="${groupId}"]`);
+  const statusEl = block?.querySelector(".machine-photo__status");
+  const originalStatus = statusEl?.innerHTML;
+  if (statusEl) statusEl.innerHTML = `${icon("clock")} Stamping and uploading…`;
+  try {
+    const proof = await captureComplianceProof(file);
+    const result = await api.groupPhotoUpload({ groupId, ...proof });
+    state.inspection.groupPhotos = {
+      ...(state.inspection.groupPhotos || {}),
+      [groupId]: { capturedAt: result.capturedAt, latitude: result.latitude, longitude: result.longitude },
+    };
+    const error = document.querySelector("#inspection-error");
+    if (error && !missingGroupPhotoNames().length) error.hidden = true;
+    renderApp();
+  } catch (error) {
+    if (statusEl) statusEl.innerHTML = originalStatus;
+    const errorEl = document.querySelector("#inspection-error");
+    if (errorEl) {
+      errorEl.textContent = error.message;
+      errorEl.hidden = false;
+    }
   }
 }
 
@@ -3009,6 +3147,7 @@ function startCommandMode() {
   const readings = { ...(state.inspection.readings || {}) };
   const flags = { ...(state.inspection.flags || {}) };
   const photoKeys = { ...(state.inspection.photoKeys || {}) };
+  const groupPhotos = { ...(state.inspection.groupPhotos || {}) };
   const resumeIndex = order.findIndex((id) => !readings[id] && !flags[id]);
 
   state.commandMode = {
@@ -3018,6 +3157,9 @@ function startCommandMode() {
     readings,
     flags,
     photoKeys,
+    groupPhotos,
+    pendingGroupPhoto: null,
+    groupPhotoUploading: false,
     entryMode: "choose",
     manualDraft: "",
     tempUnit: "C",
@@ -3133,7 +3275,30 @@ async function commandModeSave() {
   }
 }
 
+// A tag's group requires its own timestamped photo before the day can be
+// submitted (see migrations/0017_group_photos.sql). Command mode is
+// sequential, so "requires a photo now" means: this was the last reading
+// in its group -- the next tag belongs to a different group, or there's
+// nothing left -- and that group doesn't have today's photo yet.
+function groupNeedsPhotoNow(cm, finishedTag) {
+  if (!finishedTag?.equipment_group_id) return false;
+  if (cm.groupPhotos[finishedTag.equipment_group_id]) return false;
+  const nextTag = state.inspection.tags.find((t) => t.id === cm.order[cm.index + 1]);
+  return !nextTag || nextTag.equipment_group_id !== finishedTag.equipment_group_id;
+}
+
 function commandModeAdvance() {
+  const cm = state.commandMode;
+  const finishedTag = state.inspection.tags.find((t) => t.id === cm.order[cm.index]);
+  if (groupNeedsPhotoNow(cm, finishedTag)) {
+    cm.pendingGroupPhoto = { groupId: finishedTag.equipment_group_id, groupName: finishedTag.equipment_group_name };
+    renderApp();
+    return;
+  }
+  commandModeContinueAdvance();
+}
+
+function commandModeContinueAdvance() {
   const cm = state.commandMode;
   if (cm.index < cm.order.length - 1) {
     cm.index += 1;
@@ -3155,6 +3320,40 @@ function commandModeAdvance() {
     renderApp();
   } else {
     exitCommandMode();
+  }
+}
+
+// Deferring is allowed mid-walkthrough (hands full, camera acting up) --
+// the hard stop is at submit, both client-side (submitInspection) and
+// server-side (worker/inspections.js), not here.
+function commandModeSkipGroupPhoto() {
+  const cm = state.commandMode;
+  cm.pendingGroupPhoto = null;
+  commandModeContinueAdvance();
+}
+
+async function commandModeCaptureGroupPhoto(file) {
+  const cm = state.commandMode;
+  const groupId = cm.pendingGroupPhoto.groupId;
+  cm.groupPhotoUploading = true;
+  cm.error = "";
+  renderApp();
+  try {
+    const proof = await captureComplianceProof(file);
+    const result = await api.groupPhotoUpload({ groupId, ...proof });
+    cm.groupPhotos[groupId] = {
+      photoKey: result.photoKey,
+      capturedAt: result.capturedAt,
+      latitude: result.latitude,
+      longitude: result.longitude,
+    };
+    cm.pendingGroupPhoto = null;
+    cm.groupPhotoUploading = false;
+    commandModeContinueAdvance();
+  } catch (error) {
+    cm.groupPhotoUploading = false;
+    cm.error = error.message;
+    renderApp();
   }
 }
 
@@ -3387,6 +3586,7 @@ function renderCommandMode() {
   const byId = Object.fromEntries(tags.map((t) => [t.id, t]));
 
   if (cm.reviewFlags) return renderCommandModeFlagReview(cm, byId);
+  if (cm.pendingGroupPhoto) return renderCommandModeGroupPhoto(cm);
 
   const tagId = cm.order[cm.index];
   const tag = byId[tagId];
@@ -3563,6 +3763,33 @@ function renderCommandModeAbnormal(prompt, tag) {
     </div>`;
 }
 
+function renderCommandModeGroupPhoto(cm) {
+  const { groupName } = cm.pendingGroupPhoto;
+  return `
+    <section class="command-mode">
+      <div class="command-mode__topbar">
+        <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
+        <span class="command-mode__progress">${cm.index + 1} of ${cm.order.length}</span>
+        <span></span>
+      </div>
+      <div class="command-mode__stage">
+        <p class="command-mode__location">Required before moving on</p>
+        <h1 class="command-mode__label">${icon("camera")} Photo of ${escapeHtml(groupName || "this machine")}</h1>
+        <p class="command-mode__scan-note">${icon("warning")} A timestamp gets stamped onto the photo automatically — this is how we confirm every machine was actually checked today, not just filled in from memory.</p>
+        ${cm.error ? `<p class="form-error">${escapeHtml(cm.error)}</p>` : ""}
+        ${
+          cm.groupPhotoUploading
+            ? `<div class="command-mode__busy"><span class="loading-bar"><span></span></span><p>Stamping and uploading…</p></div>`
+            : `<div class="command-mode__actions">
+                <label class="button button--primary command-mode__action" for="command-mode-group-photo">${icon("camera")} Take the photo</label>
+                <input type="file" accept="image/*" capture="environment" id="command-mode-group-photo" hidden />
+                <button type="button" class="button button--outline command-mode__action" id="command-mode-group-photo-skip">I'll do this later</button>
+              </div>`
+        }
+      </div>
+    </section>`;
+}
+
 function renderCommandModeFlagReview(cm, byId) {
   const flaggedIds = cm.order.filter((id) => cm.flags[id]);
   return `
@@ -3592,6 +3819,11 @@ function renderCommandModeFlagReview(cm, byId) {
 
 function bindCommandModeEvents() {
   document.querySelector("#command-mode-exit")?.addEventListener("click", exitCommandMode);
+  document.querySelector("#command-mode-group-photo")?.addEventListener("change", (event) => {
+    const file = event.currentTarget.files?.[0];
+    if (file) commandModeCaptureGroupPhoto(file);
+  });
+  document.querySelector("#command-mode-group-photo-skip")?.addEventListener("click", commandModeSkipGroupPhoto);
   document.querySelector("#command-mode-prev")?.addEventListener("click", handleCommandModePrev);
   document.querySelector("#command-mode-next")?.addEventListener("click", handleCommandModeNext);
   document.querySelector("#command-mode-flag")?.addEventListener("click", handleCommandModeFlag);
@@ -3626,9 +3858,34 @@ function bindCommandModeEvents() {
   document.querySelector("#command-mode-clear-all")?.addEventListener("click", renderClearAllConfirmModal);
 }
 
+// Which equipment groups still need today's required photo -- mirrors
+// worker/inspections.js's submit-time check so a super finds out
+// immediately instead of after a round trip (the backend still enforces
+// this regardless, in case this check is ever out of sync or bypassed).
+function missingGroupPhotoNames() {
+  const tags = state.inspection?.tags || [];
+  const groupPhotos = state.inspection?.groupPhotos || {};
+  const seen = new Map();
+  for (const tag of tags) {
+    if (tag.equipment_group_id && !seen.has(tag.equipment_group_id)) {
+      seen.set(tag.equipment_group_id, tag.equipment_group_name);
+    }
+  }
+  return [...seen.entries()].filter(([id]) => !groupPhotos[id]).map(([, name]) => name);
+}
+
 async function handleInspectionSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
+  const error = document.querySelector("#inspection-error");
+  const missing = missingGroupPhotoNames();
+  if (missing.length) {
+    if (error) {
+      error.textContent = `Take a timestamped photo of these before submitting: ${missing.join(", ")}`;
+      error.hidden = false;
+    }
+    return;
+  }
   const { readings } = collectInspectionForm(form);
   const flagged = findFlaggedReadings(readings);
 
@@ -3869,6 +4126,12 @@ function bindDashboardEvents() {
   });
   document.querySelectorAll("[data-single-photo-tag-id]").forEach((input) => {
     input.addEventListener("change", handleSinglePhotoCapture);
+  });
+  document.querySelectorAll("[data-machine-photo-id]").forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const file = event.currentTarget.files?.[0];
+      if (file) handleMachinePhotoCapture(Number(event.currentTarget.dataset.machinePhotoId), file);
+    });
   });
   document.querySelector("#start-command-mode")?.addEventListener("click", startCommandMode);
   document.querySelector("#parameters-form")?.addEventListener("submit", handleParametersSave);
