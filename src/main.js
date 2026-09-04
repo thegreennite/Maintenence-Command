@@ -3045,12 +3045,24 @@ function formatInspectionDate(isoDate) {
 
 function formatTimestamp(isoValue) {
   if (!isoValue) return "";
-  return new Date(isoValue).toLocaleString(undefined, {
+  // Every timestamp column in this app (submitted_at, created_at, etc.)
+  // is SQLite's CURRENT_TIMESTAMP -- real UTC, but formatted as
+  // "YYYY-MM-DD HH:MM:SS" with no "Z" or offset. Browsers parse that
+  // exact shape as LOCAL time instead of UTC, which was the real bug
+  // behind submissions showing hours off (a 2pm Toronto submit reading
+  // back as ~6pm -- exactly the UTC-4 gap, read as if it were already
+  // Toronto time). Normalize to a real UTC instant before parsing, then
+  // always render in Toronto time regardless of the viewer's own device
+  // timezone, matching every other "today" boundary in this app.
+  const normalized = /[TZ]/.test(isoValue) ? isoValue : `${isoValue.replace(" ", "T")}Z`;
+  const formatted = new Date(normalized).toLocaleString("en-US", {
+    timeZone: "America/Toronto",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
   });
+  return `${formatted} ET`;
 }
 
 function collectInspectionForm(form) {
