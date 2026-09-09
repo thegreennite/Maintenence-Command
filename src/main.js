@@ -3607,11 +3607,16 @@ function renderCommandMode() {
   const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
   const currentValue = cm.readings[tagId];
   const isFlagged = !!cm.flags[tagId];
-  // Manual entry is the only option left once camera/upload aren't
-  // available (i.e. everyone except the beta tester -- see
-  // aiPhotoEnabled()), so skip straight past the "choose" stage's single
-  // "Enter manually" button and land right in the input box instead.
-  const skipToManual = cm.entryMode === "choose" && !aiPhotoEnabled();
+  // TEMPORARY, per Lucas 2026-09-09: always skip the "choose" stage
+  // (camera / upload / enter manually) and land straight in the manual
+  // box, for every account -- not just non-beta ones -- while he's doing
+  // live speed-matters demos building to building. This has to survive
+  // a full page reload (phone locks, Chrome gets closed and reopened)
+  // every time command mode is re-entered, which it does automatically
+  // since this is evaluated fresh on every render, not sticky state.
+  // aiPhotoEnabled() plumbing is untouched below -- restore
+  // `&& !aiPhotoEnabled()` here once the photo-entry flow is revisited.
+  const skipToManual = cm.entryMode === "choose";
 
   return `
     <section class="command-mode">
@@ -3687,12 +3692,13 @@ function isTemperatureTag(tag) {
 }
 
 function renderCommandModeManualEntry(cm, tag) {
-  // Once camera/upload aren't an option (everyone but the beta tester),
-  // command mode skips straight to this box -- there's no "choose"
-  // screen underneath to cancel back to, so don't offer a Cancel that
-  // would just redraw the same box. Back/Flag/Skip in the nav bar below
-  // still cover leaving a reading blank.
-  const showCancel = aiPhotoEnabled();
+  // Matches skipToManual above (TEMPORARY, everyone skips the "choose"
+  // stage right now) -- there's no "choose" screen underneath to cancel
+  // back to for anyone at the moment, so don't offer a Cancel that would
+  // just redraw the same box. Back/Flag/Skip in the nav bar below still
+  // cover leaving a reading blank. Restore `aiPhotoEnabled()` here
+  // alongside skipToManual once the photo-entry flow is revisited.
+  const showCancel = false;
 
   // A one-tap choice beats typing "hand" or "auto" on a phone keyboard,
   // and it can't typo into something the flag-matching logic won't
