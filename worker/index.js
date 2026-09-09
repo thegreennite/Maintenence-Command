@@ -13,7 +13,7 @@ import { handlePropertyInspections } from "./property.js";
 import { handleInspectionPhoto, handleCommandModePhoto } from "./vision.js";
 import { handleGroupPhotoUpload } from "./group-photos.js";
 import { handleListLocations, handleCreateLocation, handleDeleteLocation, handleAssignTagLocation } from "./locations.js";
-import { handleListGroups, handleCreateGroup, handleDeleteGroup, handleAssignTagGroup, handleAssignGroupLocation } from "./groups.js";
+import { handleListGroups, handleCreateGroup, handleDeleteGroup, handleAssignTagGroup, handleAssignGroupLocation, handleRenameGroup } from "./groups.js";
 import { handleListRoms, handleBuildingSharing, handleShareBuilding, handleUnshareBuilding } from "./sharing.js";
 import { handleInspectionHistory, handleInspectionDetail } from "./inspection-history.js";
 import {
@@ -224,14 +224,14 @@ export default {
 
       if (url.pathname === "/api/manager/work-orders" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleManagerWorkOrders(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/work-orders/resolve" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleResolveWorkOrder(request, session, env, cors.headers);
       }
@@ -259,224 +259,231 @@ export default {
 
       if (url.pathname === "/api/manager/inspection" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleManagerInspection(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/parameters" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleManagerParametersSave(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleBuildingsList(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleBuildingCreate(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/superintendents/unassigned" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleUnassignedSuperintendents(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/assign" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignSuperintendent(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/superintendents/assignable" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignableSuperintendents(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/superintendents/remove" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleRemoveSuperintendent(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/tags/generate" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleGenerateTags(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/tags/save" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleSaveTags(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/push-live" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handlePushLive(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/delete" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleDeleteBuilding(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/delete-cancel" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleCancelDeleteRequest(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/update" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleUpdateBuilding(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/detail" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleBuildingDetail(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/notices/create" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleCreateNotice(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/notices/delete" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleDeleteNotice(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/work-orders/assignable" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignableUsers(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/work-orders/assign" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignWorkOrder(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/locations" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleListLocations(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/locations/create" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleCreateLocation(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/locations/delete" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleDeleteLocation(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/tags/location" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignTagLocation(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/groups" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleListGroups(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/groups/create" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleCreateGroup(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/groups/delete" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleDeleteGroup(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/tags/group" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignTagGroup(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/groups/assign-location" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleAssignGroupLocation(request, session, env, cors.headers);
       }
 
+      if (url.pathname === "/api/manager/groups/rename" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleRenameGroup(request, session, env, cors.headers);
+      }
+
       if (url.pathname === "/api/manager/roms" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleListRoms(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/sharing" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleBuildingSharing(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/share" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleShareBuilding(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/unshare" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleUnshareBuilding(request, session, env, cors.headers);
       }
@@ -500,28 +507,28 @@ export default {
 
       if (url.pathname === "/api/manager/superintendents" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleManagerSuperintendents(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/pending-requests" && request.method === "GET") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handlePendingRequests(session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/pending-requests/approve" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handlePendingRequestDecision(request, session, env, cors.headers, true);
       }
 
       if (url.pathname === "/api/manager/pending-requests/deny" && request.method === "POST") {
         if (session.role !== "regional_manager" && session.role !== "admin") {
-          return json({ error: "Regional Operations Manager or Administrator access required" }, 403, cors.headers);
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handlePendingRequestDecision(request, session, env, cors.headers, false);
       }

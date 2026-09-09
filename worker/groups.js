@@ -82,27 +82,61 @@ export async function handleAssignTagGroup(request, session, env, corsHeaders) {
 
 // Bulk location assignment: everything in "Elevator Machine Room" (a
 // group) is physically in one spot ("MPH") -- set every tag in that group
-// at once instead of one dropdown per reading.
+// at once instead of one dropdown per reading. Accepts either one
+// groupId or several at once (groupIds), for tagging a whole cluster of
+// machines -- e.g. Boilers + Domestic Hot Water -- to the same location
+// in one action instead of doing each group one at a time.
 export async function handleAssignGroupLocation(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
-  const groupId = Number.parseInt(body.groupId, 10);
+  const groupIds = Array.isArray(body.groupIds)
+    ? body.groupIds.map((id) => Number.parseInt(id, 10)).filter(Boolean)
+    : [Number.parseInt(body.groupId, 10)].filter(Boolean);
   const locationId = body.locationId == null || body.locationId === "" ? null : Number.parseInt(body.locationId, 10);
+
+  if (!groupIds.length) return jsonError("Select at least one machine.", 400, corsHeaders);
+
+  const groups = await env.DB.prepare(
+    `SELECT id, building_id FROM equipment_groups WHERE id IN (${groupIds.map(() => "?").join(",")})`,
+  )
+    .bind(...groupIds)
+    .all();
+  if (groups.results.length !== groupIds.length) return jsonError("Group not found.", 404, corsHeaders);
+  const buildingId = groups.results[0].building_id;
+  if (groups.results.some((g) => g.building_id !== buildingId)) {
+    return jsonError("All selected machines must belong to the same building.", 400, corsHeaders);
+  }
+  if (!(await ownsBuilding(env, session, buildingId))) return jsonError("Group not found.", 404, corsHeaders);
+
+  if (locationId != null) {
+    const location = await env.DB.prepare("SELECT id FROM building_locations WHERE id = ? AND building_id = ?")
+      .bind(locationId, buildingId)
+      .first();
+    if (!location) return jsonError("Location not found.", 404, corsHeaders);
+  }
+
+  const result = await env.DB.prepare(
+    `UPDATE inspection_tags SET location_id = ? WHERE equipment_group_id IN (${groupIds.map(() => "?").join(",")})`,
+  )
+    .bind(locationId, ...groupIds)
+    .run();
+  return jsonOk({ ok: true, count: result.meta.changes }, corsHeaders);
+}
+
+// The AI-generated (or hand-typed) name for a machine's group is sometimes
+// wrong or just not how this building's crew refers to it -- let the
+// manager fix it in place rather than delete-and-recreate the group.
+export async function handleRenameGroup(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const groupId = Number.parseInt(body.groupId, 10);
+  const name = String(body.name || "").trim();
+  if (!name) return jsonError("A name is required.", 400, corsHeaders);
 
   const group = await env.DB.prepare("SELECT id, building_id FROM equipment_groups WHERE id = ?").bind(groupId).first();
   if (!group) return jsonError("Group not found.", 404, corsHeaders);
   if (!(await ownsBuilding(env, session, group.building_id))) return jsonError("Group not found.", 404, corsHeaders);
 
-  if (locationId != null) {
-    const location = await env.DB.prepare("SELECT id FROM building_locations WHERE id = ? AND building_id = ?")
-      .bind(locationId, group.building_id)
-      .first();
-    if (!location) return jsonError("Location not found.", 404, corsHeaders);
-  }
-
-  const result = await env.DB.prepare("UPDATE inspection_tags SET location_id = ? WHERE equipment_group_id = ?")
-    .bind(locationId, groupId)
-    .run();
-  return jsonOk({ ok: true, count: result.meta.changes }, corsHeaders);
+  await env.DB.prepare("UPDATE equipment_groups SET name = ? WHERE id = ?").bind(name, groupId).run();
+  return jsonOk({ ok: true, name }, corsHeaders);
 }
 
 function jsonOk(data, headers) {

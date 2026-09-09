@@ -15,7 +15,7 @@ const SELF_SERVE_ROLES = new Set(["superintendent", "property_manager", "regiona
 const JOB_TITLES = {
   superintendent: "Superintendent",
   property_manager: "Property Manager",
-  regional_manager: "Regional Operations Manager",
+  regional_manager: "Area Manager",
   operations_manager: "Operations Manager",
 };
 

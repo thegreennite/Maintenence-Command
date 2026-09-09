@@ -49,11 +49,17 @@ export async function handleBuildingCreate(request, session, env, corsHeaders) {
 
   const inspectionDays = DAY_NAMES.filter((day) => days.includes(day)).join(",");
 
+  // Region used to be silently inherited from whoever registered the
+  // building (their own account-level "region/team name") -- that's a
+  // different concept and produced nonsense like "ON" or "Central
+  // Portfolio" showing up on buildings nobody actually labeled. Region
+  // is now a per-building label an Area Manager/Admin sets explicitly
+  // (see handleUpdateBuilding), starting empty.
   const inserted = await env.DB.prepare(
     `INSERT INTO buildings (name, address, region, inspection_days, created_by, latitude, longitude, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'registering')`,
+     VALUES (?, ?, NULL, ?, ?, ?, ?, 'registering')`,
   )
-    .bind(name, address || null, session.region, inspectionDays, session.id, latitude, longitude)
+    .bind(name, address || null, inspectionDays, session.id, latitude, longitude)
     .run();
 
   const building = await env.DB.prepare(
@@ -79,10 +85,17 @@ export async function handleUpdateBuilding(request, session, env, corsHeaders) {
     : [];
   const latitude = Number.isFinite(body.latitude) ? body.latitude : null;
   const longitude = Number.isFinite(body.longitude) ? body.longitude : null;
+  // Region is a free-text label an Area Manager/Admin sets per building
+  // (e.g. "North York") -- not touched at all if the field is omitted,
+  // so a plain rename/re-pin doesn't accidentally wipe it.
+  const region = body.region !== undefined ? String(body.region || "").trim() || null : undefined;
 
   if (!name) return jsonError("A building name is required.", 400, corsHeaders);
   if (!days.length) return jsonError("Select at least one inspection day.", 400, corsHeaders);
 
+  if (region !== undefined) {
+    await env.DB.prepare("UPDATE buildings SET region = ? WHERE id = ?").bind(region, buildingId).run();
+  }
   await env.DB.prepare(
     "UPDATE buildings SET name = ?, address = ?, inspection_days = ?, latitude = ?, longitude = ? WHERE id = ?",
   )

@@ -8,7 +8,7 @@ import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 
 export const roleLabels = {
   admin: "Administrator",
-  regional_manager: "Regional Operations Manager",
+  regional_manager: "Area Manager",
   superintendent: "Superintendent",
   property_manager: "Property Manager",
 };

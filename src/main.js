@@ -56,6 +56,9 @@ const state = {
   buildingWorldRoms: [],
   buildingWorldLocations: [],
   buildingWorldManagingLocations: false,
+  buildingWorldRenamingGroupId: null,
+  buildingWorldSelectedGroupIds: new Set(),
+  buildingWorldRenamingBuilding: false,
   buildingWorldHistory: null,
   commandMode: null,
   // Admin-only: pending building-deletion requests, buildings already
@@ -307,6 +310,9 @@ const api = {
   assignGroupLocation(payload) {
     return this.request("/manager/groups/assign-location", { method: "POST", body: JSON.stringify(payload) });
   },
+  renameGroup(payload) {
+    return this.request("/manager/groups/rename", { method: "POST", body: JSON.stringify(payload) });
+  },
   assignableSuperintendents(buildingId) {
     return this.request(`/manager/superintendents/assignable?buildingId=${buildingId}`);
   },
@@ -468,7 +474,7 @@ function renderLogin(message = "") {
 const ROLE_LABELS_FOR_REGISTRATION = {
   superintendent: "Superintendent",
   property_manager: "Property Manager",
-  regional_manager: "Regional Operations Manager",
+  regional_manager: "Area Manager",
   operations_manager: "Operations Manager",
 };
 
@@ -523,7 +529,7 @@ function renderRegisterRoleStep() {
           <option value="" disabled selected>Select your role</option>
           <option value="superintendent">Superintendent</option>
           <option value="property_manager">Property Manager</option>
-          <option value="regional_manager">Regional Operations Manager</option>
+          <option value="regional_manager">Area Manager</option>
           <option value="operations_manager">Operations Manager</option>
         </select>
       </label>
@@ -564,7 +570,7 @@ function renderRegisterProfileStep(reg) {
   return `
     <p class="form-intro">${
       isManager
-        ? "Registering as a Regional Operations Manager. Once you submit, an administrator will need to approve you before you can sign in."
+        ? `Registering as an ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}. Once you submit, an administrator will need to approve you before you can sign in.`
         : `Registering for <strong>${escapeHtml(reg.building.name)}</strong>. Once you submit, your operations manager will need to approve you before you can sign in.`
     }</p>
     <form id="registration-profile-form" class="login-form">
@@ -573,7 +579,7 @@ function renderRegisterProfileStep(reg) {
       <label><span>Phone <small>(optional)</small></span><input name="phone" type="tel" autocomplete="tel" /></label>
       ${
         isManager
-          ? `<label><span>Region name</span><input name="regionName" required autocomplete="off" placeholder="e.g. Central Portfolio" /></label>`
+          ? `<label><span>Region name</span><input name="regionName" required autocomplete="off" placeholder="e.g. North York" /></label>`
           : ""
       }
       ${renderPasswordField({ label: "Create a password", name: "password", autocomplete: "new-password", minlength: 8, fieldId: "registration-password" })}
@@ -915,7 +921,7 @@ function renderManagerDashboard(data) {
     <div class="operations-grid">
       ${renderExceptionQueue()}
       <section class="card coverage-card" aria-labelledby="coverage-title">
-        <div class="card__header"><div><p class="section-kicker">Today’s Coverage</p><h2 id="coverage-title">People on point</h2></div><span class="quiet-label">Central portfolio</span></div>
+        <div class="card__header"><div><p class="section-kicker">Today’s Coverage</p><h2 id="coverage-title">People on point</h2></div></div>
         <div class="coverage-list">
           ${data.coverage.map(renderCoverage).join("")}
         </div>
@@ -990,7 +996,7 @@ function renderBuildingsPanel() {
   return `
     <section class="card buildings-card" aria-labelledby="buildings-title">
       <div class="card__header">
-        <div><p class="section-kicker">Central Portfolio</p><h2 id="buildings-title">Buildings</h2></div>
+        <div><p class="section-kicker">Portfolio</p><h2 id="buildings-title">Buildings</h2></div>
         ${wizard.step === "closed" ? `<button type="button" class="button button--outline button--small" id="register-building-toggle">+ Register a building</button>` : ""}
       </div>
       <div class="buildings-list">
@@ -1070,7 +1076,7 @@ function renderBuildingRowPreview(building) {
   return `
     <div class="building-row-preview">
       <div class="building-row-preview__grid">
-        <div><span class="quiet-label">Region</span><strong>${escapeHtml(building.region || "—")}</strong></div>
+        <div><span class="quiet-label">Region</span><strong>${building.region ? escapeHtml(building.region) : "Not set — e.g. North York"}</strong></div>
         <div><span class="quiet-label">Inspection days</span><strong>${days.length ? days.map((d) => escapeHtml(d)).join(", ") : "—"}</strong></div>
         <div><span class="quiet-label">Readings</span><strong>${building.tag_count} tag${building.tag_count === 1 ? "" : "s"}</strong></div>
         <div><span class="quiet-label">Coverage</span><strong>${building.superintendent_count} superintendent${building.superintendent_count === 1 ? "" : "s"}</strong></div>
@@ -1926,6 +1932,70 @@ async function handleAssignGroupLocationChange(select) {
   }
 }
 
+function handleChecklistGroupSelectToggle(checkbox) {
+  const groupId = Number(checkbox.dataset.groupId);
+  if (checkbox.checked) state.buildingWorldSelectedGroupIds.add(groupId);
+  else state.buildingWorldSelectedGroupIds.delete(groupId);
+  renderApp();
+}
+
+async function handleChecklistBulkApply() {
+  const select = document.querySelector("#checklist-bulk-location");
+  const button = document.querySelector("#checklist-bulk-apply");
+  const groupIds = Array.from(state.buildingWorldSelectedGroupIds);
+  if (!groupIds.length || !select.value) return;
+  const locationId = Number(select.value);
+  button.disabled = true;
+  try {
+    await api.assignGroupLocation({ groupIds, locationId });
+    for (const tag of state.buildingWorld.tags) {
+      if (groupIds.includes(tag.equipment_group_id)) tag.location_id = locationId;
+    }
+    state.buildingWorldSelectedGroupIds.clear();
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    button.title = error.message;
+  }
+}
+
+function handleChecklistBulkClear() {
+  state.buildingWorldSelectedGroupIds.clear();
+  renderApp();
+}
+
+function handleRenameGroupStart(button) {
+  state.buildingWorldRenamingGroupId = Number(button.dataset.groupId);
+  renderApp();
+  document.querySelector(".rename-group-input")?.focus();
+}
+
+function handleRenameGroupCancel() {
+  state.buildingWorldRenamingGroupId = null;
+  renderApp();
+}
+
+async function handleRenameGroupSave(button) {
+  const groupId = Number(button.dataset.groupId);
+  const input = button.closest(".rename-inline").querySelector(".rename-group-input");
+  const name = input.value.trim();
+  if (!name) return;
+  button.disabled = true;
+  try {
+    await api.renameGroup({ groupId, name });
+    const group = (state.buildingWorld.groups || []).find((g) => g.id === groupId);
+    if (group) group.name = name;
+    for (const tag of state.buildingWorld.tags) {
+      if (tag.equipment_group_id === groupId) tag.equipment_group_name = name;
+    }
+    state.buildingWorldRenamingGroupId = null;
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    input.title = error.message;
+  }
+}
+
 // One PDF per submitted day, built client-side from the same readings a
 // manager sees on screen -- no server-side rendering needed, and it works
 // from any browser the moment it's clicked.
@@ -2028,7 +2098,18 @@ function renderBuildingWorld() {
       <div class="building-world__header">
         <button type="button" class="link-button" id="close-building-world">← All buildings</button>
         <div class="building-world__title">
-          <h1>${escapeHtml(world.building.name)} ${world.building.status === "registering" ? '<span class="status-chip status-chip--registering">Registering</span>' : ""}</h1>
+          ${
+            state.buildingWorldRenamingBuilding
+              ? `<span class="rename-inline rename-inline--building">
+                  <input type="text" id="rename-building-input" value="${escapeHtml(world.building.name)}" maxlength="120" />
+                  <button type="button" class="icon-button" id="rename-building-save" title="Save" aria-label="Save building name">${icon("check")}</button>
+                  <button type="button" class="icon-button" id="rename-building-cancel" title="Cancel" aria-label="Cancel">${icon("close")}</button>
+                </span>`
+              : `<span class="building-world__title-row">
+                  <h1>${escapeHtml(world.building.name)} ${world.building.status === "registering" ? '<span class="status-chip status-chip--registering">Registering</span>' : ""}</h1>
+                  <button type="button" class="icon-button" id="rename-building-start" title="Rename building" aria-label="Rename building">${icon("edit")}</button>
+                </span>`
+          }
           <p class="quiet-label">${escapeHtml(world.building.address || "No address on file")}</p>
         </div>
         <button type="button" class="button button--outline button--small" id="toggle-building-edit">${icon("edit")} ${state.buildingWorldEditing ? "Cancel edit" : "Edit building"}</button>
@@ -2142,6 +2223,7 @@ function renderBuildingWorld() {
               <button type="submit" class="button button--outline button--small">Add</button>
             </form>
           </div>
+          ${renderChecklistBulkBar(world)}
           <div class="checklist-sections">
             ${checklistSections.map((section) => renderChecklistSection(section, world)).join("")}
           </div>
@@ -2164,7 +2246,7 @@ function renderBuildingWorldSharing(world) {
   const grantable = roms.filter((r) => !sharedIds.has(r.id));
   return `
     <section class="card">
-      <div class="card__header"><div><p class="section-kicker">Shared access</p><h2>Regional Managers with full access here</h2></div></div>
+      <div class="card__header"><div><p class="section-kicker">Shared access</p><h2>Area Managers with full access here</h2></div></div>
       <div class="buildings-list">
         ${
           shares.length
@@ -2180,9 +2262,9 @@ function renderBuildingWorldSharing(world) {
         }
       </div>
       <form id="share-building-form" class="wizard-panel" style="border-top: 1px solid var(--line);">
-        <label class="inspection-field"><span>Give a Regional Manager full access to this building</span>
+        <label class="inspection-field"><span>Give an Area Manager full access to this building</span>
           <select name="userId" required>
-            <option value="" disabled ${!grantable.length ? "selected" : ""}>${grantable.length ? "Choose a Regional Manager" : "Nobody left to add"}</option>
+            <option value="" disabled ${!grantable.length ? "selected" : ""}>${grantable.length ? "Choose an Area Manager" : "Nobody left to add"}</option>
             ${grantable.map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)}${r.region ? ` — ${escapeHtml(r.region)}` : ""}</option>`).join("")}
           </select>
         </label>
@@ -2195,6 +2277,29 @@ function renderBuildingWorldSharing(world) {
 // Machine Room") with a bulk "set every reading in here to one location"
 // control, or -- for anything nobody's grouped yet -- a plain system-name
 // bucket with no bulk control (there's no group to bulk-assign against).
+// Appears once a super or manager checks off two or more machines'
+// checkboxes -- e.g. Boilers + Domestic Hot Water, both actually sitting
+// in MPH -- so they can be tagged to one location together instead of
+// working through the per-group select one machine at a time.
+function renderChecklistBulkBar(world) {
+  const selected = Array.from(state.buildingWorldSelectedGroupIds);
+  if (!selected.length) return "";
+  const names = selected
+    .map((id) => (world.groups || []).find((g) => g.id === id)?.name)
+    .filter(Boolean)
+    .join(", ");
+  return `
+    <div class="checklist-bulk-bar">
+      <span>${selected.length} machine${selected.length === 1 ? "" : "s"} selected${names ? `: ${escapeHtml(names)}` : ""}</span>
+      <select id="checklist-bulk-location">
+        <option value="" disabled selected>Set location for all…</option>
+        ${(world.locations || []).map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join("")}
+      </select>
+      <button type="button" class="button button--primary button--small" id="checklist-bulk-apply">Apply</button>
+      <button type="button" class="button button--outline button--small" id="checklist-bulk-clear">Clear</button>
+    </div>`;
+}
+
 function renderChecklistSection(section, world) {
   const recentNote = section.groupId
     ? (world.groupNotes || []).find((n) => n.equipment_group_id === section.groupId)
@@ -2202,10 +2307,24 @@ function renderChecklistSection(section, world) {
   const todayPhoto = section.groupId
     ? (world.todayGroupPhotos || []).find((p) => p.equipment_group_id === section.groupId)
     : null;
+  const isRenaming = section.groupId && state.buildingWorldRenamingGroupId === section.groupId;
+  const isSelected = section.groupId && state.buildingWorldSelectedGroupIds.has(section.groupId);
   return `
     <div class="checklist-section">
       <div class="checklist-section__header">
-        <h4>${escapeHtml(section.name)}${section.groupId ? "" : ' <span class="quiet-label">(ungrouped)</span>'}<span class="quiet-label"> · ${section.tags.length}</span></h4>
+        <div class="checklist-section__title">
+          ${section.groupId ? `<input type="checkbox" class="checklist-group-select" data-group-id="${section.groupId}" title="Select ${escapeHtml(section.name)} for a bulk action" ${isSelected ? "checked" : ""} />` : ""}
+          ${
+            isRenaming
+              ? `<span class="rename-inline">
+                  <input type="text" class="rename-group-input" value="${escapeHtml(section.name)}" maxlength="60" />
+                  <button type="button" class="icon-button rename-group-save" data-group-id="${section.groupId}" title="Save" aria-label="Save name">${icon("check")}</button>
+                  <button type="button" class="icon-button rename-group-cancel" title="Cancel" aria-label="Cancel">${icon("close")}</button>
+                </span>`
+              : `<h4>${escapeHtml(section.name)}${section.groupId ? "" : ' <span class="quiet-label">(ungrouped)</span>'}<span class="quiet-label"> · ${section.tags.length}</span></h4>
+                 ${section.groupId ? `<button type="button" class="icon-button rename-group-start" data-group-id="${section.groupId}" title="Rename ${escapeHtml(section.name)}" aria-label="Rename ${escapeHtml(section.name)}">${icon("edit")}</button>` : ""}`
+          }
+        </div>
         ${
           section.groupId
             ? `<span class="machine-photo-badge ${todayPhoto ? "machine-photo-badge--done" : "machine-photo-badge--missing"}" title="${todayPhoto ? `Photographed ${escapeHtml(formatTimestamp(todayPhoto.captured_at))}` : "No photo yet today"}">${todayPhoto ? icon("check") : icon("camera")} ${todayPhoto ? "Photo taken today" : "No photo today"}</span>
@@ -2318,6 +2437,7 @@ function renderBuildingWorldEditForm(building) {
       <h3>Edit building details</h3>
       <label class="inspection-field"><span>Building name</span><input name="name" value="${escapeHtml(building.name)}" required /></label>
       <label class="inspection-field"><span>Address</span><input name="address" id="building-address-input" value="${escapeHtml(building.address || "")}" autocomplete="off" /></label>
+      <label class="inspection-field"><span>Region <small>(your own label — a neighborhood, portfolio name, whatever makes sense to you)</small></span><input name="region" value="${escapeHtml(building.region || "")}" placeholder="e.g. North York" autocomplete="off" /></label>
       <div class="map-picker">
         <div class="map-search-results" id="map-search-results"></div>
         <div class="map-picker__canvas" id="building-map" ${building.latitude ? "" : "hidden"}></div>
@@ -2443,7 +2563,7 @@ function renderInspectionView(data) {
         </label>
         ${
           locked
-            ? `<p class="inspection-locked-note">${icon("check")} Submitted ${formatTimestamp(data.submittedAt)} — this inspection is locked. Contact your regional manager if it needs to be reopened.</p>`
+            ? `<p class="inspection-locked-note">${icon("check")} Submitted ${formatTimestamp(data.submittedAt)} — this inspection is locked. Contact your area manager if it needs to be reopened.</p>`
             : `<div class="inspection-actions">
                 <button type="button" class="button button--outline" id="save-draft-button">Save draft</button>
                 <button type="submit" class="button button--primary" id="submit-inspection-button">Submit inspection</button>
@@ -4279,6 +4399,18 @@ function bindDashboardEvents() {
     state.buildingWorldEditing = !state.buildingWorldEditing;
     renderApp();
   });
+  document.querySelector("#rename-building-start")?.addEventListener("click", handleRenameBuildingStart);
+  document.querySelector("#rename-building-cancel")?.addEventListener("click", handleRenameBuildingCancel);
+  document.querySelector("#rename-building-save")?.addEventListener("click", handleRenameBuildingSave);
+  document.querySelector("#rename-building-input")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handleRenameBuildingSave();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      handleRenameBuildingCancel();
+    }
+  });
   document.querySelector("#cancel-building-world-edit")?.addEventListener("click", () => {
     buildingMap = null;
     buildingMarker = null;
@@ -4313,6 +4445,29 @@ function bindDashboardEvents() {
   document.querySelectorAll(".assign-group-location").forEach((select) => {
     select.addEventListener("change", () => handleAssignGroupLocationChange(select));
   });
+  document.querySelectorAll(".checklist-group-select").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => handleChecklistGroupSelectToggle(checkbox));
+  });
+  document.querySelector("#checklist-bulk-apply")?.addEventListener("click", handleChecklistBulkApply);
+  document.querySelector("#checklist-bulk-clear")?.addEventListener("click", handleChecklistBulkClear);
+  document.querySelectorAll(".rename-group-start").forEach((button) => {
+    button.addEventListener("click", () => handleRenameGroupStart(button));
+  });
+  document.querySelectorAll(".rename-group-cancel").forEach((button) => {
+    button.addEventListener("click", handleRenameGroupCancel);
+  });
+  document.querySelectorAll(".rename-group-save").forEach((button) => {
+    button.addEventListener("click", () => handleRenameGroupSave(button));
+  });
+  document.querySelector(".rename-group-input")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      document.querySelector(".rename-group-save")?.click();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      handleRenameGroupCancel();
+    }
+  });
   document.querySelectorAll(".remove-superintendent").forEach((button) => {
     button.addEventListener("click", () => handleRemoveSuperintendentClick(button));
   });
@@ -4333,6 +4488,44 @@ function bindDashboardEvents() {
   }
 }
 
+function handleRenameBuildingStart() {
+  state.buildingWorldRenamingBuilding = true;
+  renderApp();
+  document.querySelector("#rename-building-input")?.focus();
+}
+
+function handleRenameBuildingCancel() {
+  state.buildingWorldRenamingBuilding = false;
+  renderApp();
+}
+
+async function handleRenameBuildingSave() {
+  const input = document.querySelector("#rename-building-input");
+  const button = document.querySelector("#rename-building-save");
+  const name = input.value.trim();
+  if (!name) return;
+  button.disabled = true;
+  const building = state.buildingWorld.building;
+  try {
+    await api.updateBuilding({
+      buildingId: building.id,
+      name,
+      address: building.address,
+      inspectionDays: (building.inspection_days || "").split(",").filter(Boolean),
+      latitude: building.latitude,
+      longitude: building.longitude,
+    });
+    building.name = name;
+    state.buildingWorld.building = building;
+    state.managerBuildings = state.managerBuildings.map((b) => (b.id === building.id ? { ...b, name } : b));
+    state.buildingWorldRenamingBuilding = false;
+    renderApp();
+  } catch (error) {
+    button.disabled = false;
+    input.title = error.message;
+  }
+}
+
 async function handleBuildingWorldEditSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -4348,12 +4541,13 @@ async function handleBuildingWorldEditSubmit(event) {
       buildingId: state.buildingWorld.buildingId,
       name: data.get("name"),
       address: data.get("address"),
+      region: data.get("region"),
       inspectionDays: days,
       latitude,
       longitude,
     };
     await api.updateBuilding(payload);
-    const patch = { name: payload.name, address: payload.address, inspection_days: days.join(","), latitude, longitude };
+    const patch = { name: payload.name, address: payload.address, region: payload.region || null, inspection_days: days.join(","), latitude, longitude };
     state.buildingWorld.building = { ...state.buildingWorld.building, ...patch };
     state.managerBuildings = state.managerBuildings.map((b) => (b.id === payload.buildingId ? { ...b, ...patch } : b));
     state.buildingWorldEditing = false;
