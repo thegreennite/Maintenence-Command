@@ -23,6 +23,11 @@
 }
 
 * { box-sizing: border-box; }
+/* Several component classes set an explicit `display`, which beats the UA
+   stylesheet's `[hidden] { display: none }` -- so `el.hidden = true` on,
+   say, an .inspection-field or .form-error silently did nothing. Make the
+   attribute win. */
+[hidden] { display: none !important; }
 html { min-width: 320px; background: var(--canvas); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; min-width: 320px; min-height: 100vh; overscroll-behavior-y: contain; }
 button, input, select, textarea { font: inherit; }
@@ -398,6 +403,23 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 
 .wizard-panel { padding: 20px 22px 22px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
 .wizard-panel h3 { margin: 0; font: 600 17px/1.3 "Avenir Next", Avenir, system-ui, sans-serif; }
+
+/* Admin: create an account outright */
+.add-account-pw { display: flex; gap: 8px; align-items: center; }
+.add-account-pw input { flex: 1; min-width: 0; }
+.add-account-pw .button { flex: 0 0 auto; width: auto; }
+.add-account-success {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  margin: 14px 22px 0; padding: 12px 14px; border-radius: 8px;
+  background: var(--success-soft); border: 1px solid var(--success);
+  font-size: 13px; color: var(--forest-dark);
+}
+.add-account-success .icon { width: 15px; color: var(--success); }
+.add-account-success__creds { flex: 1 1 100%; color: var(--muted); }
+.add-account-success__creds code {
+  background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+  padding: 2px 6px; font-size: 12.5px; color: var(--ink);
+}
 .day-checkboxes { display: flex; flex-wrap: wrap; gap: 10px; }
 .day-checkbox { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .day-checkbox input { margin: 0; }

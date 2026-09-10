@@ -66,6 +66,9 @@ const state = {
   adminDeleteRequests: [],
   adminDeletedBuildings: [],
   adminRemovedAccounts: [],
+  adminAddingAccount: false,
+  adminNewAccountRole: "superintendent",
+  adminNewAccountCreated: null,
   // Which building rows on the central portfolio list are expanded inline
   // -- an arrow toggle instead of always fully opening the building world
   // page just to check its region/address/coverage at a glance.
@@ -198,6 +201,9 @@ const api = {
   },
   adminRestoreBuilding(payload) {
     return this.request("/admin/buildings/restore", { method: "POST", body: JSON.stringify(payload) });
+  },
+  adminCreateAccount(payload) {
+    return this.request("/admin/accounts/create", { method: "POST", body: JSON.stringify(payload) });
   },
   adminRemoveAccount(payload) {
     return this.request("/admin/accounts/remove", { method: "POST", body: JSON.stringify(payload) });
@@ -397,6 +403,7 @@ function icon(name) {
     eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/>',
     "eye-off": '<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61C3.35 8.36 1 12 1 12s4 8 11 8a9.26 9.26 0 0 0 5.39-1.61M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>',
     file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
   };
   return `<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] || paths.command}</svg>`;
 }
@@ -1636,11 +1643,73 @@ function renderAdminDashboard(data) {
 
 const CLASSIFICATION_LABELS = { standard: "Standard", beta_tester: "Beta Tester" };
 
+const ADMIN_CREATABLE_ROLES = {
+  superintendent: "Superintendent",
+  property_manager: "Property Manager",
+  regional_manager: "Area Manager",
+  operations_manager: "Operations Manager",
+  admin: "Administrator",
+};
+
+function renderAdminAddAccountForm() {
+  const role = state.adminNewAccountRole;
+  const isField = role === "superintendent" || role === "property_manager";
+  const isManagerTier = role === "regional_manager" || role === "operations_manager";
+  const buildings = state.managerBuildings || [];
+  return `
+    <form id="add-account-form" class="wizard-panel" style="border-top: 1px solid var(--line);">
+      <h3>Add an account</h3>
+      <label class="inspection-field"><span>Full name</span><input name="fullName" required autocomplete="off" /></label>
+      <label class="inspection-field"><span>Email <small>(this is their username)</small></span><input name="email" type="email" required autocomplete="off" /></label>
+      <label class="inspection-field"><span>Phone <small>(optional)</small></span><input name="phone" type="tel" autocomplete="off" /></label>
+      <label class="inspection-field"><span>Role</span>
+        <select name="role" id="add-account-role">
+          ${Object.entries(ADMIN_CREATABLE_ROLES)
+            .map(([value, label]) => `<option value="${value}" ${role === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
+            .join("")}
+        </select>
+      </label>
+      <label class="inspection-field" id="add-account-building-field" ${isField ? "" : "hidden"}><span>Building</span>
+        <select name="buildingId">
+          <option value="">Choose a building…</option>
+          ${buildings.map((b) => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join("")}
+        </select>
+      </label>
+      <label class="inspection-field" id="add-account-region-field" ${isManagerTier ? "" : "hidden"}><span>Region <small>(optional)</small></span><input name="regionName" placeholder="e.g. North York" autocomplete="off" /></label>
+      <label class="inspection-field"><span>Temporary password</span>
+        <span class="add-account-pw">
+          <input name="password" id="add-account-password" type="text" minlength="8" required autocomplete="new-password" placeholder="At least 8 characters" />
+          <button type="button" class="button button--outline button--small" id="add-account-generate">Generate</button>
+        </span>
+      </label>
+      <p class="quiet-label">Give them the email and password yourself — this is the only time the password is shown. The account is active right away, no approval needed.</p>
+      <div class="inspection-actions">
+        <button type="button" class="button button--outline" id="add-account-cancel">Cancel</button>
+        <button type="submit" class="button button--primary">Create account</button>
+      </div>
+      <p class="form-error" id="add-account-error" hidden role="alert"></p>
+    </form>`;
+}
+
 function renderAdminAccountsManagePanel() {
   const removed = state.adminRemovedAccounts || [];
+  const created = state.adminNewAccountCreated;
   return `
     <section class="card">
-      <div class="card__header"><div><p class="section-kicker">Accounts</p><h2>Manage profiles</h2></div></div>
+      <div class="card__header">
+        <div><p class="section-kicker">Accounts</p><h2>Manage profiles</h2></div>
+        ${state.adminAddingAccount ? "" : `<button type="button" class="button button--primary button--small" id="open-add-account">${icon("plus")} Add account</button>`}
+      </div>
+      ${
+        created
+          ? `<div class="add-account-success">
+              ${icon("check")} <strong>${escapeHtml(created.fullName)}</strong> added as ${escapeHtml(created.roleLabel)}.
+              <span class="add-account-success__creds">Username <code>${escapeHtml(created.username)}</code> · Password <code>${escapeHtml(created.password)}</code></span>
+              <button type="button" class="button button--outline button--small" id="dismiss-add-account-success">Got it</button>
+            </div>`
+          : ""
+      }
+      ${state.adminAddingAccount ? renderAdminAddAccountForm() : ""}
       <div class="buildings-list">
         ${state.accounts
           .map(
@@ -4365,6 +4434,31 @@ function bindDashboardEvents() {
   document.querySelectorAll(".account-classification").forEach((select) => {
     select.addEventListener("change", () => handleSetClassification(select));
   });
+  document.querySelector("#open-add-account")?.addEventListener("click", () => {
+    state.adminAddingAccount = true;
+    state.adminNewAccountCreated = null;
+    renderApp();
+  });
+  document.querySelector("#add-account-cancel")?.addEventListener("click", () => {
+    state.adminAddingAccount = false;
+    renderApp();
+  });
+  document.querySelector("#dismiss-add-account-success")?.addEventListener("click", () => {
+    state.adminNewAccountCreated = null;
+    renderApp();
+  });
+  document.querySelector("#add-account-role")?.addEventListener("change", (event) => {
+    state.adminNewAccountRole = event.target.value;
+    const isField = ["superintendent", "property_manager"].includes(event.target.value);
+    const isManagerTier = ["regional_manager", "operations_manager"].includes(event.target.value);
+    document.querySelector("#add-account-building-field").hidden = !isField;
+    document.querySelector("#add-account-region-field").hidden = !isManagerTier;
+  });
+  document.querySelector("#add-account-generate")?.addEventListener("click", () => {
+    const field = document.querySelector("#add-account-password");
+    field.value = generatePassword();
+  });
+  document.querySelector("#add-account-form")?.addEventListener("submit", handleAdminAddAccountSubmit);
   document.querySelectorAll(".continue-setup-button").forEach((button) => {
     button.addEventListener("click", () => {
       buildingMap = null;
@@ -4746,6 +4840,49 @@ async function handleRestoreBuilding(button) {
   } catch (error) {
     button.disabled = false;
     button.title = error.message;
+  }
+}
+
+function generatePassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(14));
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+}
+
+async function handleAdminAddAccountSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = document.querySelector("#add-account-error");
+  const button = form.querySelector('button[type="submit"]');
+  const data = new FormData(form);
+  const role = data.get("role");
+  const payload = {
+    fullName: (data.get("fullName") || "").trim(),
+    email: (data.get("email") || "").trim(),
+    phone: (data.get("phone") || "").trim(),
+    role,
+    password: data.get("password") || "",
+    buildingId: data.get("buildingId") || null,
+    regionName: (data.get("regionName") || "").trim(),
+  };
+  error.hidden = true;
+  button.disabled = true;
+  try {
+    const res = await api.adminCreateAccount(payload);
+    const refreshed = await api.accounts().catch(() => null);
+    if (refreshed) state.accounts = refreshed.accounts;
+    state.adminAddingAccount = false;
+    state.adminNewAccountCreated = {
+      fullName: payload.fullName,
+      username: res.username,
+      password: payload.password,
+      roleLabel: ADMIN_CREATABLE_ROLES[role],
+    };
+    renderApp();
+  } catch (requestError) {
+    button.disabled = false;
+    error.textContent = requestError.message;
+    error.hidden = false;
   }
 }
 

@@ -44,6 +44,7 @@ import {
   handleRestoreAccount,
   handleRemovedAccountsList,
   handleSetClassification,
+  handleCreateAccount,
 } from "./admin-accounts.js";
 import { handleGeocodeSearch } from "./geocode.js";
 import {
@@ -165,6 +166,9 @@ export default {
         return handleAdminReturn(session, env, cors.headers);
       }
 
+      if (url.pathname === "/api/admin/accounts/create" && request.method === "POST") {
+        return handleCreateAccount(request, session, env, cors.headers);
+      }
       if (url.pathname === "/api/admin/accounts/remove" && request.method === "POST") {
         return handleRemoveAccount(request, session, env, cors.headers);
       }

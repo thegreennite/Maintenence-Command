@@ -3,11 +3,30 @@
 // history still shows their name, same non-destructive philosophy as
 // building deletion) and classify one (a free-form-ish label, used right
 // now to gate the AI photo-reading feature to just the beta tester --
-// see CLASSIFICATIONS below and its use in worker/vision.js).
+// see CLASSIFICATIONS below and its use in worker/vision.js). Also:
+// create an account outright, skipping the self-register + approval
+// dance -- an admin adding someone IS the approval.
+
+import { hashPassword } from "./security.js";
 
 export const CLASSIFICATIONS = {
   standard: "Standard",
   beta_tester: "Beta Tester",
+};
+
+// role value the admin picks -> {db role, building_access, job title}.
+// ROM and OM share one db role ("regional_manager"), split by
+// building_access (see worker/access.js); everyone else maps straight
+// through.
+// building_access is NOT NULL and only actually distinguishes ROM ("own")
+// from OM ("all") -- for every other role it's ignored, so default it to
+// "own" rather than leaving it null.
+const CREATABLE_ROLES = {
+  superintendent: { role: "superintendent", access: "own", title: "Superintendent" },
+  property_manager: { role: "property_manager", access: "own", title: "Property Manager" },
+  regional_manager: { role: "regional_manager", access: "own", title: "Area Manager" },
+  operations_manager: { role: "regional_manager", access: "all", title: "Operations Manager" },
+  admin: { role: "admin", access: "own", title: "Administrator" },
 };
 
 function requireAdmin(session, corsHeaders) {
@@ -15,6 +34,60 @@ function requireAdmin(session, corsHeaders) {
     return jsonError("Administrator access required.", 403, corsHeaders);
   }
   return null;
+}
+
+export async function handleCreateAccount(request, session, env, corsHeaders) {
+  const deny = requireAdmin(session, corsHeaders);
+  if (deny) return deny;
+
+  const body = await request.json().catch(() => ({}));
+  const spec = CREATABLE_ROLES[String(body.role || "")];
+  const fullName = String(body.fullName || "").trim();
+  const email = String(body.email || "").trim().toLowerCase();
+  const phone = String(body.phone || "").trim();
+  const password = String(body.password || "");
+  const regionName = String(body.regionName || "").trim();
+  const buildingId = body.buildingId ? Number.parseInt(body.buildingId, 10) : null;
+
+  if (!spec) return jsonError("Choose a role.", 400, corsHeaders);
+  if (!fullName || !email) return jsonError("Name and email are required.", 400, corsHeaders);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return jsonError("That email doesn't look right.", 400, corsHeaders);
+  if (password.length < 8) return jsonError("Set a password of at least 8 characters.", 400, corsHeaders);
+
+  const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ? OR username = ?").bind(email, email).first();
+  if (existing) return jsonError("An account already exists for that email.", 409, corsHeaders);
+
+  const isFieldTier = spec.role === "superintendent" || spec.role === "property_manager";
+  let building = null;
+  if (isFieldTier) {
+    if (!buildingId) return jsonError("Pick which building this person works at.", 400, corsHeaders);
+    building = await env.DB.prepare("SELECT id, region FROM buildings WHERE id = ? AND deleted_at IS NULL")
+      .bind(buildingId)
+      .first();
+    if (!building) return jsonError("Building not found.", 404, corsHeaders);
+  }
+
+  const { salt, hash } = await hashPassword(password);
+  await env.DB.prepare(
+    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, building_id, email, phone, status, is_active, contact_consent, contact_consent_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, 1, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      email,
+      hash,
+      salt,
+      fullName,
+      spec.title,
+      spec.role,
+      spec.access,
+      isFieldTier ? building.region : regionName || null,
+      isFieldTier ? building.id : null,
+      email,
+      phone || null,
+    )
+    .run();
+
+  return jsonOk({ ok: true, username: email }, corsHeaders);
 }
 
 export async function handleRemoveAccount(request, session, env, corsHeaders) {
