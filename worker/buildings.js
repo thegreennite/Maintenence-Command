@@ -285,7 +285,7 @@ For each reading, determine:
 - tag_no: the specific equipment label if there is one (e.g. "Boiler: H1A"), or null if the reading applies to the building generally (e.g. "Outside temperature")
 - reading_type: what's being read (e.g. "Inlet temperature", "on/off", "Pressure")
 - unit: the unit shown (e.g. "°", "PSI", "%"), or null if none
-- value_type: any reading about a sprinkler (a sprinkler valve, sprinkler system, sprinkler head/zone, etc.) is ALWAYS "open_closed" — never "on_off", never "hoa" — no exceptions. Otherwise: "on_off" if this reading is literally an on/off state; "open_closed" if it's a valve or damper reading that's specifically Open or Closed rather than on/off; "hoa" if it's a Hand-Off-Auto selector switch (common on pumps, fans, blowers, motors — the equipment can be found in Hand/manual-forced-on, Off, or Auto/automatic-control); otherwise "numeric"
+- value_type: a sprinkler VALVE'S POSITION reading is ALWAYS "open_closed" — never "on_off", never "hoa" — no exceptions. This applies only to the position/status reading itself; a "Sprinkler System" section commonly also has plain numeric readings sitting right next to that valve (water pressure, air pressure, etc.) — those stay "numeric" like any other gauge, don't force them to "open_closed" just because they're under the same sprinkler section. Otherwise: "on_off" if this reading is literally an on/off state; "open_closed" if it's a valve or damper reading that's specifically Open or Closed rather than on/off; "hoa" if it's a Hand-Off-Auto selector switch (common on pumps, fans, blowers, motors — the equipment can be found in Hand/manual-forced-on, Off, or Auto/automatic-control); otherwise "numeric"
 
 Return a JSON array of objects with exactly those five fields. If you can't read the sheet(s) clearly enough to extract anything reliably, return an empty array rather than guessing.`;
 
@@ -383,11 +383,15 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
       const systemName = String(tag.system_name || "").trim();
       const tagNo = tag.tag_no ? String(tag.tag_no).trim() : null;
       const readingType = String(tag.reading_type || "").trim();
-      // Hard rule, not a suggestion: any reading that's a sprinkler --
-      // named that way in any of the three label fields -- is always
-      // Open/Closed, no matter what the AI extraction guessed or what a
-      // manager picked by hand. Overrides whatever value_type came in.
-      const isSprinkler = /sprinkler/i.test(`${systemName} ${tagNo || ""} ${readingType}`);
+      // Hard rule, not a suggestion: a reading that's actually about a
+      // sprinkler VALVE's position is always Open/Closed, no matter what
+      // the AI extraction guessed or what a manager picked by hand.
+      // Deliberately checks only tag_no/reading_type, NOT system_name --
+      // real data confirmed why: a "Sprinkler System" section legitimately
+      // also holds plain numeric readings under the same valve (water/air
+      // pressure gauges alongside it), and matching on the section name
+      // would have wrongly forced those to Open/Closed too.
+      const isSprinkler = /sprinkler/i.test(`${tagNo || ""} ${readingType}`);
       return {
         systemName,
         tagNo,

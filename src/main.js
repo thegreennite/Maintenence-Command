@@ -4404,16 +4404,19 @@ function bindDashboardEvents() {
     });
   });
   document.querySelector("#tags-review-form")?.addEventListener("submit", handleActivateChecklist);
-  // Sprinklers are always Open/Closed, no exceptions -- the server
-  // enforces this regardless of what's picked (see handleSaveTags), but
-  // auto-selecting it here means what a manager sees on screen already
-  // matches what's actually going to save, instead of quietly changing
-  // out from under them.
+  // A sprinkler VALVE's position is always Open/Closed, no exceptions --
+  // the server enforces this regardless of what's picked (see
+  // handleSaveTags), but auto-selecting it here means what a manager
+  // sees on screen already matches what's actually going to save.
+  // Deliberately only looks at tag_no/reading_type, not system_name -- a
+  // "Sprinkler System" section legitimately also holds plain numeric
+  // readings under the same valve (water/air pressure gauges), and
+  // matching on the section name would wrongly force those too.
   document.querySelector("#tags-review-form")?.addEventListener("input", (event) => {
     const field = event.target.dataset?.field;
-    if (field !== "system_name" && field !== "tag_no" && field !== "reading_type") return;
+    if (field !== "tag_no" && field !== "reading_type") return;
     const row = event.target.closest(".tags-review-row");
-    const text = ["system_name", "tag_no", "reading_type"]
+    const text = ["tag_no", "reading_type"]
       .map((f) => row.querySelector(`[data-field="${f}"]`)?.value || "")
       .join(" ");
     if (/sprinkler/i.test(text)) {
