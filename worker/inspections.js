@@ -35,7 +35,10 @@ async function loadHistory(env, buildingId, today) {
 
   const byTag = {};
   for (const row of result.results) {
-    if (row.sample_count < 3) continue; // too little history to call anything "unusual" yet
+    // A full work-week of real submitted readings before trend-flagging
+    // kicks in at all for a tag -- fewer than that isn't enough to know
+    // what "normal" even looks like for that specific gauge yet.
+    if (row.sample_count < 5) continue;
     const variance = Math.max(row.avg_sq - row.avg_value * row.avg_value, 0);
     byTag[row.tag_id] = {
       count: row.sample_count,

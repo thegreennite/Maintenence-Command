@@ -3321,6 +3321,28 @@ function findFlaggedReadings(readings) {
 // different UI.
 // ---------------------------------------------------------------------
 
+// A pure statistical threshold (2 std-devs, or 15% of the average) let
+// real problems slide by whenever a gauge's own history happened to be
+// very steady: a boiler that's sat flat at 50° all week has ~0 stdev, so
+// the 15%-of-average rule alone allowed a 7.5° swing before flagging --
+// a real 3° drift wouldn't have tripped it. Lucas's real-world read: a
+// temperature reading should flag past roughly a 3° drift, a PSI
+// reading past roughly 5 PSI, no matter how flat that gauge's history
+// has been. This caps the statistical threshold at that absolute amount
+// for temperature/PSI tags; everything else still falls back to the
+// plain statistical rule (no real-world number to ground a tighter cap
+// on for RPM/Hz/Kw/Amps/etc.). Matched loosely since the unit string
+// comes from free-form AI extraction off a paper sheet (worker/
+// buildings.js's handleGenerateTags) and isn't perfectly consistent --
+// "°", "F", "deg F" should all read as temperature the same way.
+function unitTolerance(unit) {
+  const normalized = (unit || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "°" || normalized.includes("deg") || /^°?[cf]$/.test(normalized)) return 3;
+  if (normalized === "psi") return 5;
+  return null;
+}
+
 // Same trend check the backend used to decide whether history data was
 // even worth attaching (see worker/inspections.js loadHistory) -- this is
 // the client-side half: does THIS value look like an outlier against it.
@@ -3329,8 +3351,14 @@ function historyFlagFor(tag, rawValue) {
   if (!h || CLOSED_CHOICE_TYPES[tag.value_type] || rawValue == null || rawValue === "") return null;
   const num = Number.parseFloat(rawValue);
   if (Number.isNaN(num)) return null;
-  const threshold = Math.max(h.stdev * 2, Math.abs(h.avg) * 0.15, 1);
-  return Math.abs(num - h.avg) > threshold;
+  const statisticalThreshold = Math.max(h.stdev * 2, Math.abs(h.avg) * 0.15, 1);
+  const cap = unitTolerance(tag.unit);
+  const threshold = cap != null ? Math.min(cap, statisticalThreshold) : statisticalThreshold;
+  // >= , not > -- "50 vs 53" (exactly a 3° gap) is Lucas's own example of
+  // something that should flag, and readings in this domain are usually
+  // whole numbers, so a strict > would silently let the boundary case
+  // through.
+  return Math.abs(num - h.avg) >= threshold;
 }
 
 function startCommandMode() {
