@@ -4404,6 +4404,22 @@ function bindDashboardEvents() {
     });
   });
   document.querySelector("#tags-review-form")?.addEventListener("submit", handleActivateChecklist);
+  // Sprinklers are always Open/Closed, no exceptions -- the server
+  // enforces this regardless of what's picked (see handleSaveTags), but
+  // auto-selecting it here means what a manager sees on screen already
+  // matches what's actually going to save, instead of quietly changing
+  // out from under them.
+  document.querySelector("#tags-review-form")?.addEventListener("input", (event) => {
+    const field = event.target.dataset?.field;
+    if (field !== "system_name" && field !== "tag_no" && field !== "reading_type") return;
+    const row = event.target.closest(".tags-review-row");
+    const text = ["system_name", "tag_no", "reading_type"]
+      .map((f) => row.querySelector(`[data-field="${f}"]`)?.value || "")
+      .join(" ");
+    if (/sprinkler/i.test(text)) {
+      row.querySelector('[data-field="value_type"]').value = "open_closed";
+    }
+  });
   document.querySelector("#assign-superintendent-form")?.addEventListener("submit", handleAssignSuperintendentSubmit);
   document.querySelector("#skip-assign-superintendent")?.addEventListener("click", () => {
     resetBuildingWizard();

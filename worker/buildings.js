@@ -285,7 +285,7 @@ For each reading, determine:
 - tag_no: the specific equipment label if there is one (e.g. "Boiler: H1A"), or null if the reading applies to the building generally (e.g. "Outside temperature")
 - reading_type: what's being read (e.g. "Inlet temperature", "on/off", "Pressure")
 - unit: the unit shown (e.g. "°", "PSI", "%"), or null if none
-- value_type: "on_off" if this reading is literally an on/off state; "open_closed" if it's a valve, damper, or sprinkler-type reading that's specifically Open or Closed rather than on/off; "hoa" if it's a Hand-Off-Auto selector switch (common on pumps, fans, blowers, motors — the equipment can be found in Hand/manual-forced-on, Off, or Auto/automatic-control); otherwise "numeric"
+- value_type: any reading about a sprinkler (a sprinkler valve, sprinkler system, sprinkler head/zone, etc.) is ALWAYS "open_closed" — never "on_off", never "hoa" — no exceptions. Otherwise: "on_off" if this reading is literally an on/off state; "open_closed" if it's a valve or damper reading that's specifically Open or Closed rather than on/off; "hoa" if it's a Hand-Off-Auto selector switch (common on pumps, fans, blowers, motors — the equipment can be found in Hand/manual-forced-on, Off, or Auto/automatic-control); otherwise "numeric"
 
 Return a JSON array of objects with exactly those five fields. If you can't read the sheet(s) clearly enough to extract anything reliably, return an empty array rather than guessing.`;
 
@@ -379,14 +379,28 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
   }
 
   const validRows = tags
-    .map((tag, index) => ({
-      systemName: String(tag.system_name || "").trim(),
-      tagNo: tag.tag_no ? String(tag.tag_no).trim() : null,
-      readingType: String(tag.reading_type || "").trim(),
-      unit: tag.unit ? String(tag.unit).trim() : null,
-      valueType: ["on_off", "hoa", "open_closed"].includes(tag.value_type) ? tag.value_type : "numeric",
-      sortOrder: index + 1,
-    }))
+    .map((tag, index) => {
+      const systemName = String(tag.system_name || "").trim();
+      const tagNo = tag.tag_no ? String(tag.tag_no).trim() : null;
+      const readingType = String(tag.reading_type || "").trim();
+      // Hard rule, not a suggestion: any reading that's a sprinkler --
+      // named that way in any of the three label fields -- is always
+      // Open/Closed, no matter what the AI extraction guessed or what a
+      // manager picked by hand. Overrides whatever value_type came in.
+      const isSprinkler = /sprinkler/i.test(`${systemName} ${tagNo || ""} ${readingType}`);
+      return {
+        systemName,
+        tagNo,
+        readingType,
+        unit: tag.unit ? String(tag.unit).trim() : null,
+        valueType: isSprinkler
+          ? "open_closed"
+          : ["on_off", "hoa", "open_closed"].includes(tag.value_type)
+            ? tag.value_type
+            : "numeric",
+        sortOrder: index + 1,
+      };
+    })
     .filter((row) => row.systemName && row.readingType);
 
   if (!validRows.length) return jsonError("At least one valid reading is required.", 400, corsHeaders);
