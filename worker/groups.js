@@ -80,6 +80,40 @@ export async function handleAssignTagGroup(request, session, env, corsHeaders) {
   return jsonOk({ ok: true }, corsHeaders);
 }
 
+// Editing a reading after the checklist's already live -- a manager fixing
+// a mistyped label or an AI misread, not part of the once-only initial
+// checklist build (handleSaveTags).
+export async function handleUpdateTag(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const tagId = Number.parseInt(body.tagId, 10);
+  const systemName = String(body.systemName || "").trim();
+  const tagNo = body.tagNo != null ? String(body.tagNo).trim() || null : null;
+  const readingType = String(body.readingType || "").trim();
+  const unit = body.unit != null ? String(body.unit).trim() || null : null;
+  const requestedValueType = ["numeric", "on_off", "hoa", "open_closed"].includes(body.valueType) ? body.valueType : "numeric";
+
+  if (!systemName || !readingType) return jsonError("A system and a reading are both required.", 400, corsHeaders);
+
+  const tag = await env.DB.prepare("SELECT id, building_id FROM inspection_tags WHERE id = ?").bind(tagId).first();
+  if (!tag) return jsonError("Reading not found.", 404, corsHeaders);
+  if (!(await ownsBuilding(env, session, tag.building_id))) return jsonError("Reading not found.", 404, corsHeaders);
+
+  // Same hard rule as the initial checklist build (worker/buildings.js) --
+  // a sprinkler valve's position is always Open/Closed, no matter what
+  // gets typed here. Only the reading's own label decides it, not the
+  // section it's filed under (see that file for why).
+  const isSprinkler = /sprinkler/i.test(`${tagNo || ""} ${readingType}`);
+  const valueType = isSprinkler ? "open_closed" : requestedValueType;
+
+  await env.DB.prepare(
+    "UPDATE inspection_tags SET system_name = ?, tag_no = ?, reading_type = ?, unit = ?, answer_kind = ? WHERE id = ?",
+  )
+    .bind(systemName, tagNo, readingType, unit, valueType, tagId)
+    .run();
+
+  return jsonOk({ ok: true, valueType }, corsHeaders);
+}
+
 // Bulk location assignment: everything in "Elevator Machine Room" (a
 // group) is physically in one spot ("MPH") -- set every tag in that group
 // at once instead of one dropdown per reading. Accepts either one

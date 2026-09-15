@@ -577,6 +577,74 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .checklist-section__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .checklist-section__list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
 
+/* ---------- Machine organizer -- drag a reading onto a gray "machine"
+   zone to group it. Same data as the checklist card's grouping, just a
+   physical, spatial way to build it. ---------- */
+.add-machine-form { display: flex; gap: 6px; align-items: center; }
+.add-machine-form input { height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 12.5px; width: 170px; }
+.add-machine-form .button { flex: 0 0 auto; width: auto; }
+.machine-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; padding: 4px 22px 22px; }
+.machine-zone {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2, #eef1ef);
+  padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.machine-zone--ungrouped { background: var(--canvas); border-style: dashed; }
+.machine-zone__header { display: flex; align-items: center; gap: 4px; }
+.machine-zone__header h4 { margin: 0; flex: 1; font-size: 13px; font-weight: 700; color: var(--ink); }
+.machine-zone__header .icon-button { width: 24px; height: 24px; flex: 0 0 auto; background: transparent; border-color: transparent; }
+.machine-zone__header .icon-button .icon { width: 12px; }
+.machine-zone__header .icon-button:hover { background: var(--paper); border-color: var(--line); }
+.machine-zone__badge {
+  display: inline-flex; align-items: center; gap: 5px; width: fit-content;
+  padding: 3px 8px; border-radius: 999px; font: 600 10.5px/1 "Avenir Next", Avenir, system-ui, sans-serif;
+  background: var(--success-soft); color: var(--success);
+}
+.machine-zone__badge .icon { width: 10px; }
+.machine-zone__body {
+  min-height: 54px; display: flex; flex-direction: column; gap: 6px;
+  padding: 6px; border-radius: 8px; transition: background .12s, box-shadow .12s;
+}
+.machine-zone__body--hover { background: var(--sage-soft, #dcead9); box-shadow: inset 0 0 0 2px var(--success); }
+.machine-zone__empty { margin: 0; padding: 10px 6px; font-size: 12px; color: var(--muted); text-align: center; }
+@keyframes machine-drop-pulse {
+  0% { box-shadow: inset 0 0 0 2px var(--success); }
+  60% { box-shadow: inset 0 0 0 3px var(--success); }
+  100% { box-shadow: inset 0 0 0 0 transparent; }
+}
+.machine-zone__body--dropped { animation: machine-drop-pulse .4s ease; }
+
+.reading-chip {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--paper);
+  font-size: 12.5px; transition: opacity .12s, transform .12s;
+}
+.reading-chip--dragging { opacity: .35; }
+.reading-chip__grip {
+  flex: 0 0 auto; width: 20px; height: 28px; display: grid; place-items: center;
+  color: var(--muted); font-size: 14px; letter-spacing: -2px; cursor: grab;
+  touch-action: none; border-radius: 4px;
+}
+.reading-chip__grip:hover { background: var(--surface-2, #eef1ef); color: var(--ink); }
+.reading-chip__label {
+  flex: 1; min-width: 0; text-align: left; background: none; border: none; padding: 2px 0;
+  font: inherit; color: var(--ink); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.reading-chip__label:hover { text-decoration: underline; }
+.reading-chip--ghost {
+  position: fixed; top: 0; left: 0; z-index: 200; pointer-events: none;
+  transform: translate(-14px, -50%); box-shadow: var(--shadow); opacity: .95;
+}
+.reading-chip--editing {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--paper);
+  border: 1px solid var(--forest); border-radius: 8px;
+}
+.reading-chip--editing input, .reading-chip--editing select {
+  height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; font-size: 12.5px;
+}
+.reading-chip__edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.reading-chip__edit-actions .icon-button { width: 30px; height: 30px; }
+.reading-chip__edit-actions .icon-button .icon { width: 13px; }
+
 /* Bulk-assign: one select in a group's header sets location_id on every
    tag in that group at once, instead of walking each reading's own select
    one at a time. */
@@ -699,6 +767,11 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .history-day { flex-direction: column; align-items: stretch; gap: 8px; padding-left: 22px; }
   .card__header { flex-wrap: wrap; gap: 10px; min-height: 0; }
   .inspection-card__header-actions { width: 100%; justify-content: space-between; }
+  .machine-board { grid-template-columns: 1fr; padding: 4px 16px 20px; }
+  .machine-zone__header .icon-button { width: 38px; height: 38px; }
+  .reading-chip__grip { width: 34px; height: 36px; font-size: 20px; }
+  .add-machine-form { width: 100%; }
+  .add-machine-form input { flex: 1; min-width: 0; }
 }
 
 @supports (padding: max(0px)) {

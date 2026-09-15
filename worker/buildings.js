@@ -418,6 +418,37 @@ export async function handleSaveTags(request, session, env, corsHeaders) {
     ),
   );
 
+  // Auto-create one machine (equipment group) per distinct tag_no --
+  // every reading sharing a tag_no is the same physical piece of
+  // equipment (e.g. every "Boiler: H1A" reading), so this is exactly the
+  // grouping a manager would set up by hand anyway. Readings with no
+  // tag_no (building-general ones like "Outside temperature") are left
+  // ungrouped on purpose -- there's no single machine to require a
+  // photo of. A manager can still rename, merge, split, or drag readings
+  // between machines afterward (see worker/groups.js).
+  const distinctTagNos = [...new Set(validRows.map((r) => r.tagNo).filter(Boolean))];
+  if (distinctTagNos.length) {
+    await env.DB.batch(
+      distinctTagNos.map((name, index) =>
+        env.DB.prepare("INSERT INTO equipment_groups (building_id, name, sort_order) VALUES (?, ?, ?)").bind(
+          buildingId,
+          name,
+          index,
+        ),
+      ),
+    );
+    await env.DB.prepare(
+      `UPDATE inspection_tags
+       SET equipment_group_id = (
+         SELECT eg.id FROM equipment_groups eg
+         WHERE eg.building_id = inspection_tags.building_id AND eg.name = inspection_tags.tag_no
+       )
+       WHERE building_id = ? AND tag_no IS NOT NULL`,
+    )
+      .bind(buildingId)
+      .run();
+  }
+
   return jsonOk({ ok: true, count: validRows.length }, corsHeaders);
 }
 
