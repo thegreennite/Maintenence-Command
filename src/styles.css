@@ -602,37 +602,61 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .machine-zone__badge .icon { width: 10px; }
 .machine-zone__body {
   min-height: 54px; display: flex; flex-direction: column; gap: 6px;
-  padding: 6px; border-radius: 8px; transition: background .12s, box-shadow .12s;
+  padding: 6px; border-radius: 8px;
+  transition: background .15s ease, box-shadow .15s ease;
 }
-.machine-zone__body--hover { background: var(--sage-soft, #dcead9); box-shadow: inset 0 0 0 2px var(--success); }
+/* The "cookie-cutter" outline a zone gets the moment a dragged reading
+   crosses into it -- a dashed perimeter plus a slight lift, so which
+   zone is about to receive it is never ambiguous. */
+.machine-zone__body--hover {
+  background: var(--sage-soft, #dcead9);
+  box-shadow: inset 0 0 0 2px var(--success);
+  outline: 2px dashed var(--success);
+  outline-offset: 3px;
+}
 .machine-zone__empty { margin: 0; padding: 10px 6px; font-size: 12px; color: var(--muted); text-align: center; }
-@keyframes machine-drop-pulse {
-  0% { box-shadow: inset 0 0 0 2px var(--success); }
-  60% { box-shadow: inset 0 0 0 3px var(--success); }
-  100% { box-shadow: inset 0 0 0 0 transparent; }
+/* A quick settle/snap on the zone it lands in -- overshoots slightly and
+   eases back, meant to read as "received and locked in" rather than a
+   flat color flash. */
+@keyframes machine-drop-settle {
+  0% { transform: scale(1.035); box-shadow: inset 0 0 0 2px var(--success); background: var(--sage-soft, #dcead9); }
+  55% { transform: scale(.99); }
+  100% { transform: scale(1); box-shadow: inset 0 0 0 0 transparent; background: transparent; }
 }
-.machine-zone__body--dropped { animation: machine-drop-pulse .4s ease; }
+.machine-zone__body--dropped { animation: machine-drop-settle .5s cubic-bezier(.34,1.56,.64,1); }
 
 .reading-chip {
   display: flex; align-items: center; gap: 6px; padding: 6px 8px;
   border: 1px solid var(--line); border-radius: 7px; background: var(--paper);
-  font-size: 12.5px; transition: opacity .12s, transform .12s;
+  font-size: 12.5px; cursor: grab; touch-action: none; user-select: none;
+  transition: opacity .12s ease, box-shadow .12s ease, border-color .12s ease;
 }
+.reading-chip:hover { border-color: var(--forest-300, #8fbfa2); }
+.reading-chip:active { cursor: grabbing; }
 .reading-chip--dragging { opacity: .35; }
 .reading-chip__grip {
-  flex: 0 0 auto; width: 20px; height: 28px; display: grid; place-items: center;
-  color: var(--muted); font-size: 14px; letter-spacing: -2px; cursor: grab;
-  touch-action: none; border-radius: 4px;
+  flex: 0 0 auto; width: 16px; display: grid; place-items: center;
+  color: var(--muted); font-size: 14px; letter-spacing: -2px; pointer-events: none;
 }
-.reading-chip__grip:hover { background: var(--surface-2, #eef1ef); color: var(--ink); }
 .reading-chip__label {
-  flex: 1; min-width: 0; text-align: left; background: none; border: none; padding: 2px 0;
-  font: inherit; color: var(--ink); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1; min-width: 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.reading-chip__label:hover { text-decoration: underline; }
+/* The dragged chip's stand-in that actually follows the pointer -- moved
+   with a direct 1:1 positionDragGhost() call on every pointermove (no
+   CSS transition on left/top, or it would visibly lag behind the
+   pointer instead of tracking it). Only its appearance -- the pop on
+   pickup -- is animated. */
 .reading-chip--ghost {
   position: fixed; top: 0; left: 0; z-index: 200; pointer-events: none;
-  transform: translate(-14px, -50%); box-shadow: var(--shadow); opacity: .95;
+  transform: translate(-16px, -50%) scale(1.06); box-shadow: var(--shadow); opacity: .97;
+  cursor: grabbing; animation: chip-pickup .12s ease-out;
+}
+@keyframes chip-pickup {
+  from { transform: translate(-16px, -50%) scale(.94); opacity: .6; }
+  to { transform: translate(-16px, -50%) scale(1.06); opacity: .97; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .machine-zone__body--dropped, .reading-chip--ghost { animation: none; }
 }
 .reading-chip--editing {
   display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--paper);
@@ -769,7 +793,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .inspection-card__header-actions { width: 100%; justify-content: space-between; }
   .machine-board { grid-template-columns: 1fr; padding: 4px 16px 20px; }
   .machine-zone__header .icon-button { width: 38px; height: 38px; }
-  .reading-chip__grip { width: 34px; height: 36px; font-size: 20px; }
+  .reading-chip { padding: 12px 10px; } /* the whole chip is the drag/tap target on a touch screen */
+  .reading-chip__grip { font-size: 18px; }
   .add-machine-form { width: 100%; }
   .add-machine-form input { flex: 1; min-width: 0; }
 }

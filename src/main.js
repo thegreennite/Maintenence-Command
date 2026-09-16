@@ -2069,12 +2069,6 @@ async function handleRenameGroupSave(button) {
   }
 }
 
-function handleEditReadingChipStart(button) {
-  state.buildingWorldEditingTagId = Number(button.dataset.tagId);
-  renderApp();
-  document.querySelector('#edit-tag-form input[name="system_name"]')?.focus();
-}
-
 function handleEditReadingChipCancel() {
   state.buildingWorldEditingTagId = null;
   renderApp();
@@ -2115,42 +2109,50 @@ async function handleEditReadingChipSave(event) {
 }
 
 // ---------------------------------------------------------------------
-// Reading-chip drag -- Pointer Events rather than native HTML5 drag-and-
-// drop, deliberately, so this works the same on a phone's touch screen
-// as it does with a mouse. One module-level var (not on `state`) since
-// it's pure interaction bookkeeping mid-gesture, torn down every time a
-// drag ends -- nothing here needs to survive a re-render.
+// Reading-chip drag + tap-to-edit, unified. Press anywhere on a chip and
+// hold-drag it onto another machine to regroup it; a plain tap opens
+// the editor -- decided by how far the pointer actually moved, not by
+// which part of the chip was touched (an earlier version required
+// grabbing one small grip corner specifically, which isn't how anyone
+// actually tries to drag something -- they grab the label). Built on
+// Pointer Events, not native HTML5 drag-and-drop, since native DnD
+// doesn't work on a touch screen and this app is used mobile-first.
+// `chipPointer` is one module-level var (not on `state`) since it's
+// pure interaction bookkeeping mid-gesture, torn down on every release
+// -- nothing here needs to survive a re-render.
 // ---------------------------------------------------------------------
-let chipDrag = null;
+const CHIP_DRAG_THRESHOLD_PX = 6;
+let chipPointer = null;
 
-function handleReadingChipDragStart(event) {
-  event.preventDefault();
-  const grip = event.currentTarget;
-  const chip = grip.closest(".reading-chip");
-  const originZone = chip.closest("[data-dropzone]");
-  if (!chip || !originZone) return;
+function handleReadingChipPointerDown(event) {
+  if (event.pointerType === "mouse" && event.button !== 0) return; // left-click only
+  const chip = event.currentTarget;
+  const zone = chip.closest("[data-dropzone]");
+  if (!zone) return;
 
-  const rect = chip.getBoundingClientRect();
-  const ghost = chip.cloneNode(true);
-  ghost.classList.add("reading-chip--ghost");
-  ghost.style.width = `${rect.width}px`;
-  document.body.appendChild(ghost);
-  positionDragGhost(ghost, event.clientX, event.clientY);
-  chip.classList.add("reading-chip--dragging");
-
-  chipDrag = {
+  chipPointer = {
     tagId: Number(chip.dataset.tagId),
-    ghost,
-    originChip: chip,
-    originGroupId: originZone.dataset.dropzone,
-    hoverZone: null,
+    chip,
+    originGroupId: zone.dataset.dropzone,
+    startX: event.clientX,
+    startY: event.clientY,
     pointerId: event.pointerId,
+    dragging: false,
+    ghost: null,
+    hoverZone: null,
   };
 
-  grip.setPointerCapture(event.pointerId);
-  grip.addEventListener("pointermove", handleReadingChipDragMove);
-  grip.addEventListener("pointerup", handleReadingChipDragEnd);
-  grip.addEventListener("pointercancel", handleReadingChipDragEnd);
+  try {
+    chip.setPointerCapture(event.pointerId);
+  } catch {
+    // Pointer capture is a nice-to-have (keeps the drag tracking even if
+    // the finger/cursor slips off the chip mid-gesture) -- if the
+    // browser refuses it for any reason, the listeners below still work
+    // off plain event bubbling, just without that guarantee.
+  }
+  chip.addEventListener("pointermove", handleReadingChipPointerMove);
+  chip.addEventListener("pointerup", handleReadingChipPointerUp);
+  chip.addEventListener("pointercancel", handleReadingChipPointerCancel);
 }
 
 function positionDragGhost(ghost, x, y) {
@@ -2158,47 +2160,81 @@ function positionDragGhost(ghost, x, y) {
   ghost.style.top = `${y}px`;
 }
 
-function handleReadingChipDragMove(event) {
-  if (!chipDrag) return;
-  positionDragGhost(chipDrag.ghost, event.clientX, event.clientY);
+function handleReadingChipPointerMove(event) {
+  if (!chipPointer) return;
+  const dx = event.clientX - chipPointer.startX;
+  const dy = event.clientY - chipPointer.startY;
+
+  if (!chipPointer.dragging) {
+    if (Math.hypot(dx, dy) < CHIP_DRAG_THRESHOLD_PX) return;
+    // Just crossed the threshold -- this is a real drag, not a tap.
+    // Spin up the ghost now (not on pointerdown), so a plain click never
+    // shows one for an instant.
+    chipPointer.dragging = true;
+    const rect = chipPointer.chip.getBoundingClientRect();
+    const ghost = chipPointer.chip.cloneNode(true);
+    ghost.classList.add("reading-chip--ghost");
+    ghost.style.width = `${rect.width}px`;
+    document.body.appendChild(ghost);
+    chipPointer.ghost = ghost;
+    chipPointer.chip.classList.add("reading-chip--dragging");
+  }
+
+  event.preventDefault();
+  positionDragGhost(chipPointer.ghost, event.clientX, event.clientY);
   // Ghost has pointer-events:none (see CSS) specifically so this sees the
   // real drop zone underneath it rather than the ghost itself.
   const el = document.elementFromPoint(event.clientX, event.clientY);
   const zone = el?.closest("[data-dropzone]");
-  if (chipDrag.hoverZone && chipDrag.hoverZone !== zone) {
-    chipDrag.hoverZone.classList.remove("machine-zone__body--hover");
+  if (chipPointer.hoverZone && chipPointer.hoverZone !== zone) {
+    chipPointer.hoverZone.classList.remove("machine-zone__body--hover");
   }
   if (zone) zone.classList.add("machine-zone__body--hover");
-  chipDrag.hoverZone = zone || null;
+  chipPointer.hoverZone = zone || null;
 }
 
-async function handleReadingChipDragEnd(event) {
-  if (!chipDrag) return;
-  const { tagId, ghost, originChip, originGroupId, hoverZone, pointerId } = chipDrag;
-  const grip = event.currentTarget;
-  grip.removeEventListener("pointermove", handleReadingChipDragMove);
-  grip.removeEventListener("pointerup", handleReadingChipDragEnd);
-  grip.removeEventListener("pointercancel", handleReadingChipDragEnd);
+function releaseChipPointer(p) {
+  p.chip.removeEventListener("pointermove", handleReadingChipPointerMove);
+  p.chip.removeEventListener("pointerup", handleReadingChipPointerUp);
+  p.chip.removeEventListener("pointercancel", handleReadingChipPointerCancel);
   try {
-    grip.releasePointerCapture(pointerId);
+    p.chip.releasePointerCapture(p.pointerId);
   } catch {
     // already released (e.g. pointercancel) -- fine to ignore
   }
-  ghost.remove();
-  originChip.classList.remove("reading-chip--dragging");
-  hoverZone?.classList.remove("machine-zone__body--hover");
-  chipDrag = null;
+  p.ghost?.remove();
+  p.chip.classList.remove("reading-chip--dragging");
+  p.hoverZone?.classList.remove("machine-zone__body--hover");
+  chipPointer = null;
+}
 
-  if (!hoverZone) return; // released outside any zone -- treat as cancelled
-  const targetGroupId = hoverZone.dataset.dropzone;
-  if (targetGroupId === originGroupId) return; // dropped back where it started
+function handleReadingChipPointerCancel() {
+  if (chipPointer) releaseChipPointer(chipPointer);
+}
 
-  const tag = state.buildingWorld.tags.find((t) => t.id === tagId);
+async function handleReadingChipPointerUp() {
+  if (!chipPointer) return;
+  const p = chipPointer;
+  releaseChipPointer(p);
+
+  if (!p.dragging) {
+    // Never crossed the drag threshold -- a plain tap, open the editor.
+    state.buildingWorldEditingTagId = p.tagId;
+    renderApp();
+    document.querySelector('#edit-tag-form input[name="system_name"]')?.focus();
+    return;
+  }
+
+  if (!p.hoverZone) return; // released outside any zone -- treat as cancelled
+  const targetGroupId = p.hoverZone.dataset.dropzone;
+  if (targetGroupId === p.originGroupId) return; // dropped back where it started
+
+  const tag = state.buildingWorld.tags.find((t) => t.id === p.tagId);
   const previousGroupId = tag?.equipment_group_id ?? null;
   if (tag) tag.equipment_group_id = targetGroupId ? Number(targetGroupId) : null;
   renderApp();
-  // A little confirming pulse on the zone it landed in -- purely visual,
-  // the assignment itself already happened above.
+  // A confirming pulse on the zone it landed in -- purely visual, the
+  // assignment itself already happened above.
   requestAnimationFrame(() => {
     const landedZone = document.querySelector(`[data-dropzone="${targetGroupId}"]`);
     if (!landedZone) return;
@@ -2207,7 +2243,7 @@ async function handleReadingChipDragEnd(event) {
   });
 
   try {
-    await api.assignTagGroup({ tagId, groupId: targetGroupId || null });
+    await api.assignTagGroup({ tagId: p.tagId, groupId: targetGroupId || null });
   } catch (error) {
     if (tag) tag.equipment_group_id = previousGroupId;
     renderApp();
@@ -2588,7 +2624,7 @@ function renderMachineOrganizer(world) {
           <button type="submit" class="button button--outline button--small">Add</button>
         </form>
       </div>
-      <p class="parameters-intro">Drag a reading (by its grip) onto a machine to group it — any machine with readings needs a timestamped photo before the day can be submitted. Tap a reading to edit it.</p>
+      <p class="parameters-intro">Press and drag a reading onto a machine to group it — any machine with readings needs a timestamped photo before the day can be submitted. A quick tap edits it instead.</p>
       <div class="machine-board">
         <div class="machine-zone machine-zone--ungrouped">
           <div class="machine-zone__header">
@@ -2640,10 +2676,13 @@ function renderMachineZone(group, tags) {
 function renderReadingChip(tag) {
   if (state.buildingWorldEditingTagId === tag.id) return renderReadingChipEditForm(tag);
   const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ") || tag.system_name;
+  // The whole chip is the drag surface now, not just a small grip corner
+  // -- press anywhere and hold-drag to move it, a plain tap opens the
+  // editor. See handleReadingChipPointerDown's movement-threshold logic.
   return `
-    <div class="reading-chip" data-tag-id="${tag.id}">
-      <span class="reading-chip__grip" title="Drag to move" aria-hidden="true">⠿</span>
-      <button type="button" class="reading-chip__label edit-reading-chip" data-tag-id="${tag.id}" title="Edit this reading">${escapeHtml(label)}</button>
+    <div class="reading-chip" data-tag-id="${tag.id}" tabindex="0" role="button" aria-label="${escapeHtml(label)} — drag to move, tap to edit">
+      <span class="reading-chip__grip" aria-hidden="true">⠿</span>
+      <span class="reading-chip__label">${escapeHtml(label)}</span>
     </div>`;
 }
 
@@ -4828,11 +4867,8 @@ function bindDashboardEvents() {
   });
   document.querySelector("#checklist-bulk-apply")?.addEventListener("click", handleChecklistBulkApply);
   document.querySelector("#checklist-bulk-clear")?.addEventListener("click", handleChecklistBulkClear);
-  document.querySelectorAll(".reading-chip__grip").forEach((grip) => {
-    grip.addEventListener("pointerdown", handleReadingChipDragStart);
-  });
-  document.querySelectorAll(".edit-reading-chip").forEach((button) => {
-    button.addEventListener("click", () => handleEditReadingChipStart(button));
+  document.querySelectorAll(".reading-chip:not(.reading-chip--editing)").forEach((chip) => {
+    chip.addEventListener("pointerdown", handleReadingChipPointerDown);
   });
   document.querySelector("#edit-tag-form")?.addEventListener("submit", handleEditReadingChipSave);
   document.querySelector(".cancel-edit-tag")?.addEventListener("click", handleEditReadingChipCancel);
