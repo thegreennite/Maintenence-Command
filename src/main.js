@@ -428,7 +428,7 @@ function icon(name) {
 }
 
 function setDocumentTitle(suffix) {
-  document.title = suffix ? `${suffix} · FHG Command` : "FHG Command";
+  document.title = suffix ? `${suffix} · Power Log Command` : "Power Log Command";
 }
 
 function renderLoading() {
@@ -444,11 +444,11 @@ function renderLogin(message = "") {
   setDocumentTitle("Sign in");
   app.innerHTML = `
     <main class="login-page">
-      <section class="login-story" aria-label="FHG Command overview">
+      <section class="login-story" aria-label="Power Log Command overview">
         <div class="login-story__inner">
           <div class="brand brand--light">
             <span class="brand-mark">${icon("command")}</span>
-            <span>FHG <strong>Command</strong></span>
+            <span>Power Log <strong>Command</strong></span>
           </div>
           <div class="story-copy">
             <p class="eyebrow eyebrow--light">Property operations, clearly directed</p>
@@ -466,13 +466,13 @@ function renderLogin(message = "") {
           <div class="login-panel__top">
             <div class="mobile-brand brand">
               <span class="brand-mark">${icon("command")}</span>
-              <span>FHG <strong>Command</strong></span>
+              <span>Power Log <strong>Command</strong></span>
             </div>
             <button type="button" class="link-button add-business-link" id="add-business-link">+ Add a business</button>
           </div>
           <p class="eyebrow">Secure access</p>
           <h2>Welcome back</h2>
-          <p class="form-intro">Sign in with your FHG Command account.</p>
+          <p class="form-intro">Sign in with your Power Log Command account.</p>
           <form class="login-form" id="login-form">
             <label>
               <span>Username</span>
@@ -591,7 +591,7 @@ function renderRegister() {
         <div class="login-form-wrap">
           <div class="mobile-brand brand">
             <span class="brand-mark">${icon("command")}</span>
-            <span>FHG <strong>Command</strong></span>
+            <span>Power Log <strong>Command</strong></span>
           </div>
           <p class="eyebrow">${reg.role ? `Register as ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}` : "Create an account"}</p>
           <h2>${titles[reg.step]}</h2>
@@ -684,7 +684,7 @@ function renderRegisterProfileStep(reg) {
       <label><span>Profile picture <small>(optional)</small></span><input name="profilePhoto" type="file" accept="image/*" /></label>
       <label class="consent-checkbox">
         <input type="checkbox" name="consent" required />
-        <span>I agree to receive text messages and emails from FHG Command about my account, assignments, and building operations.</span>
+        <span>I agree to receive text messages and emails from Power Log Command about my account, assignments, and building operations.</span>
       </label>
       <p class="form-error" id="registration-error" hidden role="alert"></p>
       <button class="button button--primary button--full" type="submit"><span>Submit request</span>${icon("arrow")}</button>
@@ -785,11 +785,11 @@ function renderVerifyCodeScreen(pendingToken) {
   setDocumentTitle("Verify it's you");
   app.innerHTML = `
     <main class="login-page">
-      <section class="login-story" aria-label="FHG Command overview">
+      <section class="login-story" aria-label="Power Log Command overview">
         <div class="login-story__inner">
           <div class="brand brand--light">
             <span class="brand-mark">${icon("command")}</span>
-            <span>FHG <strong>Command</strong></span>
+            <span>Power Log <strong>Command</strong></span>
           </div>
           <div class="story-copy">
             <p class="eyebrow eyebrow--light">Weekly check</p>
@@ -802,7 +802,7 @@ function renderVerifyCodeScreen(pendingToken) {
         <div class="login-form-wrap">
           <div class="mobile-brand brand">
             <span class="brand-mark">${icon("command")}</span>
-            <span>FHG <strong>Command</strong></span>
+            <span>Power Log <strong>Command</strong></span>
           </div>
           <p class="eyebrow">Verify it's you</p>
           <h2>Check your email</h2>
@@ -970,9 +970,9 @@ function renderApp() {
   app.innerHTML = `
     <div class="app-shell">
       <header class="topbar">
-        <a class="brand" href="#" aria-label="FHG Command home">
+        <a class="brand" href="#" aria-label="Power Log Command home">
           <span class="brand-mark">${icon("command")}</span>
-          <span>FHG <strong>Command</strong></span>
+          <span>Power Log <strong>Command</strong></span>
         </a>
         <div class="topbar__right">
           <span class="role-pill">${escapeHtml(user.roleLabel)}</span>
@@ -1004,7 +1004,7 @@ function renderApp() {
       <main class="dashboard">
         ${isAgencyBroadView ? renderAgencyClients() : renderDashboard(state.dashboard)}
       </main>
-      <footer class="app-footer"><span>FHG Command</span><span>Phase 5 · Secure operations workspace</span></footer>
+      <footer class="app-footer"><span>Power Log Command</span><span>Phase 5 · Secure operations workspace</span></footer>
     </div>`;
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
