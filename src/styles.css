@@ -332,6 +332,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .machine-photo__status { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12.5px; font-weight: 600; }
 .machine-photo--required .machine-photo__status { color: #8a5a10; }
 .machine-photo--done .machine-photo__status { color: var(--success); }
+.machine-photo__location-warning { flex: 1 1 100%; display: flex; align-items: center; gap: 7px; margin: 0; padding-top: 8px; border-top: 1px dashed #f0d9a8; font-size: 12px; color: #8a5a10; }
+.machine-photo__location-warning .icon { width: 14px; flex-shrink: 0; }
 .machine-photo__status .icon { width: 14px; flex: 0 0 auto; }
 .inspection-actions { display: flex; gap: 12px; justify-content: flex-end; }
 .inspection-actions .button { min-width: 150px; }
@@ -705,6 +707,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .command-mode__progress { font-size: 12px; font-weight: 700; color: var(--muted); }
 .command-mode__progress-track { height: 6px; border-radius: 99px; background: var(--surface-2, #e5eae7); overflow: hidden; }
 .command-mode__progress-track span { display: block; height: 100%; background: var(--forest); border-radius: inherit; transition: width .25s ease; }
+.command-mode__location-warning { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-radius: 8px; background: var(--warning-soft); border: 1px solid #f0d9a8; color: #8a5a10; font-size: 12.5px; }
+.command-mode__location-warning .icon { width: 15px; flex-shrink: 0; }
+.command-mode__location-warning .icon-button { width: 22px; height: 22px; color: #8a5a10; }
 .command-mode__stage { flex: 1; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 32px 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); box-shadow: var(--shadow); }
 .command-mode__stage--review { align-items: stretch; text-align: left; }
 .command-mode__location { margin: 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }

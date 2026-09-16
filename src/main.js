@@ -3271,6 +3271,11 @@ function renderMachinePhotoBlock(groupId, name, proof, locked) {
         }
       </p>
       ${
+        proof?.locationMismatch
+          ? `<p class="machine-photo__location-warning">${icon("warning")} This photo's location is about ${(proof.distanceFromBuildingM / 1000).toFixed(1)} km from this building's registered address — double check you're at the right building.</p>`
+          : ""
+      }
+      ${
         locked
           ? ""
           : `<label class="button button--outline button--small" for="${inputId}">${proof ? "Retake photo" : "Take photo"}</label>
@@ -3619,7 +3624,13 @@ async function handleMachinePhotoCapture(groupId, file) {
     const result = await api.groupPhotoUpload({ groupId, ...proof });
     state.inspection.groupPhotos = {
       ...(state.inspection.groupPhotos || {}),
-      [groupId]: { capturedAt: result.capturedAt, latitude: result.latitude, longitude: result.longitude },
+      [groupId]: {
+        capturedAt: result.capturedAt,
+        latitude: result.latitude,
+        longitude: result.longitude,
+        distanceFromBuildingM: result.distanceFromBuildingM,
+        locationMismatch: result.locationMismatch,
+      },
     };
     const error = document.querySelector("#inspection-error");
     if (error && !missingGroupPhotoNames().length) error.hidden = true;
@@ -3836,6 +3847,7 @@ function startCommandMode() {
     groupPhotos,
     pendingGroupPhoto: null,
     groupPhotoUploading: false,
+    lastLocationWarning: null,
     entryMode: "choose",
     manualDraft: "",
     tempUnit: "C",
@@ -4023,6 +4035,13 @@ async function commandModeCaptureGroupPhoto(file) {
       latitude: result.latitude,
       longitude: result.longitude,
     };
+    // Command mode auto-advances right past this screen, so a per-photo
+    // location mismatch can't just sit as an inline badge the way it
+    // does on the regular checklist card -- carried forward as a small
+    // dismissible banner instead (see renderCommandMode).
+    cm.lastLocationWarning = result.locationMismatch
+      ? { groupName: cm.pendingGroupPhoto.groupName, distanceFromBuildingM: result.distanceFromBuildingM }
+      : null;
     cm.pendingGroupPhoto = null;
     cm.groupPhotoUploading = false;
     commandModeContinueAdvance();
@@ -4291,6 +4310,15 @@ function renderCommandMode() {
       </div>
       <div class="command-mode__progress-track"><span style="width:${Math.round((cm.index / Math.max(total - 1, 1)) * 100)}%"></span></div>
 
+      ${
+        cm.lastLocationWarning
+          ? `<div class="command-mode__location-warning">
+              <span>${icon("warning")} The photo for ${escapeHtml(cm.lastLocationWarning.groupName)} was taken about ${(cm.lastLocationWarning.distanceFromBuildingM / 1000).toFixed(1)} km from this building's registered address — double check you're at the right building.</span>
+              <button type="button" class="icon-button" id="dismiss-location-warning" aria-label="Dismiss">${icon("close")}</button>
+            </div>`
+          : ""
+      }
+
       <div class="command-mode__stage">
         <p class="command-mode__location">${tag.location_name ? escapeHtml(tag.location_name) : "⚠ No location set for this item"}${tag.equipment_group_name ? ` · ${escapeHtml(tag.equipment_group_name)}` : ""}</p>
         <h1 class="command-mode__label">${escapeHtml(label)}</h1>
@@ -4501,6 +4529,10 @@ function renderCommandModeFlagReview(cm, byId) {
 
 function bindCommandModeEvents() {
   document.querySelector("#command-mode-exit")?.addEventListener("click", exitCommandMode);
+  document.querySelector("#dismiss-location-warning")?.addEventListener("click", () => {
+    state.commandMode.lastLocationWarning = null;
+    renderApp();
+  });
   document.querySelector("#command-mode-group-photo")?.addEventListener("change", (event) => {
     const file = event.currentTarget.files?.[0];
     if (file) commandModeCaptureGroupPhoto(file);

@@ -10,6 +10,21 @@ import { storePhoto } from "./photos.js";
 
 const ALLOWED_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
+// Past this distance from the building's own registered address, a
+// compliance photo's GPS position gets flagged as a heads-up -- wide
+// enough to absorb normal GPS drift and a large property/parking lot,
+// tight enough to catch "this photo wasn't actually taken here."
+const LOCATION_MISMATCH_THRESHOLD_M = 500;
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6_371_000;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export async function handleGroupPhotoUpload(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   const groupId = Number.parseInt(body.groupId, 10);
@@ -49,17 +64,29 @@ export async function handleGroupPhotoUpload(request, session, env, corsHeaders)
   });
   if (!photoKey) return jsonError("Photo storage isn't configured on this deployment.", 503, corsHeaders);
 
+  let distanceFromBuildingM = null;
+  if (latitude != null && longitude != null) {
+    const building = await env.DB.prepare("SELECT latitude, longitude FROM buildings WHERE id = ?").bind(buildingId).first();
+    if (building?.latitude != null && building?.longitude != null) {
+      distanceFromBuildingM = Math.round(haversineMeters(latitude, longitude, building.latitude, building.longitude));
+    }
+  }
+  const locationMismatch = distanceFromBuildingM != null && distanceFromBuildingM > LOCATION_MISMATCH_THRESHOLD_M;
+
   await env.DB.prepare(
-    `INSERT INTO group_photos (submission_id, equipment_group_id, photo_key, captured_at, latitude, longitude)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO group_photos (submission_id, equipment_group_id, photo_key, captured_at, latitude, longitude, distance_from_building_m)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (submission_id, equipment_group_id)
      DO UPDATE SET photo_key = excluded.photo_key, captured_at = excluded.captured_at,
-       latitude = excluded.latitude, longitude = excluded.longitude`,
+       latitude = excluded.latitude, longitude = excluded.longitude, distance_from_building_m = excluded.distance_from_building_m`,
   )
-    .bind(submissionId, groupId, photoKey, capturedAt, latitude, longitude)
+    .bind(submissionId, groupId, photoKey, capturedAt, latitude, longitude, distanceFromBuildingM)
     .run();
 
-  return jsonOk({ ok: true, groupId, photoKey, capturedAt, latitude, longitude }, corsHeaders);
+  return jsonOk(
+    { ok: true, groupId, photoKey, capturedAt, latitude, longitude, distanceFromBuildingM, locationMismatch },
+    corsHeaders,
+  );
 }
 
 function jsonOk(data, headers) {
