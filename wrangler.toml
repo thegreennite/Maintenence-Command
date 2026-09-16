@@ -28,7 +28,7 @@ binding = "PHOTOS"
 bucket_name = "fhg-command-photos"
 
 [vars]
-ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,https://fhg-command.pages.dev"
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,https://fhg-command.pages.dev,https://power-log-command.pages.dev"
 SESSION_TTL_HOURS = "12"
 # Not secret -- the account ID and this Worker's own D1 database ID, needed
 # so the admin stats endpoint can query Cloudflare's API about itself.
