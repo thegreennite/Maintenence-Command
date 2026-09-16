@@ -12,6 +12,8 @@
 // (every other company) that speaks the identical
 // prepare().bind().first()/all()/run()/batch() shape.
 
+import { createSessionToken, hashToken } from "./security.js";
+
 const CF_API = "https://api.cloudflare.com/client/v4";
 
 // The same schema migration 0018 gave Forest Hill Group's database --
@@ -100,6 +102,44 @@ export async function dbForClient(env, clientId) {
 
   const db = client.database_kind === "native" ? env.DB : new HttpD1(env, client.database_id);
   return { client, db };
+}
+
+// The agency account's real identity inside a given company's own
+// database -- role 'admin' so it sees exactly what that company's own
+// admin sees, everywhere in worker/*.js, with zero special-casing.
+// Unguessable password (nobody knows it, it's never used -- this
+// account is only ever reached via the separate agency login) and never
+// added to login_directory, so it can't be signed into directly.
+const AGENCY_LOCAL_USERNAME = "__agency__";
+
+export async function ensureAgencyUserRow(db) {
+  const existing = await db.prepare("SELECT id FROM users WHERE username = ?").bind(AGENCY_LOCAL_USERNAME).first();
+  if (existing) return existing.id;
+
+  const randomHex = (bytes) => Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+  const insert = await db
+    .prepare(
+      `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, status, is_active, client_id)
+       VALUES (?, ?, ?, 'Agency', 'Agency (Power Log Command)', 'admin', 'all', 'active', 1, 1)`,
+    )
+    .bind(AGENCY_LOCAL_USERNAME, randomHex(32), randomHex(16))
+    .run();
+  return insert.meta.last_row_id;
+}
+
+// Creates a real session row for the agency's local identity in `db` --
+// gives handleImpersonate/handleAdminReturn a genuine row to mutate, the
+// same as any other admin session. Returns the new session's id.
+export async function createAgencyCompanySession(db) {
+  const agencyUserId = await ensureAgencyUserRow(db);
+  const token = createSessionToken();
+  const tokenHash = await hashToken(token);
+  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+  const insert = await db
+    .prepare("INSERT INTO sessions (token_hash, user_id, actor_user_id, expires_at) VALUES (?, ?, ?, ?)")
+    .bind(tokenHash, agencyUserId, agencyUserId, expiresAt)
+    .run();
+  return insert.meta.last_row_id;
 }
 
 // The control-plane id of the one "native" client (Forest Hill Group) --

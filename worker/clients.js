@@ -3,7 +3,7 @@
 // self-serve "Add a business" signup that provisions a brand-new
 // company (its own dedicated D1 database) on the spot.
 
-import { dbForClient, provisionCompanyDatabase, recordLoginDirectory } from "./tenant-db.js";
+import { dbForClient, provisionCompanyDatabase, recordLoginDirectory, createAgencyCompanySession } from "./tenant-db.js";
 import { hashPassword } from "./security.js";
 import { ghlUpsertContact, ghlSendEmail } from "./ghl.js";
 
@@ -25,9 +25,11 @@ export async function handleListClients(session, env, corsHeaders) {
 }
 
 // Sets which company the agency session is "inside" -- from here on,
-// requireSession synthesizes an admin-shaped session for that company
-// and every existing handler works unchanged. clientId omitted/null
-// returns to the broad, all-companies view.
+// requireSession resolves a REAL session for the agency's own local
+// identity in that company's database (see ensureAgencyUserRow /
+// createAgencyCompanySession in tenant-db.js), so it behaves exactly
+// like that company's own admin everywhere, including impersonation.
+// clientId omitted/null returns to the broad, all-companies view.
 export async function handleSwitchClient(request, session, env, corsHeaders) {
   const deny = requireAgency(session, corsHeaders);
   if (deny) return deny;
@@ -35,13 +37,31 @@ export async function handleSwitchClient(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   const clientId = body.clientId == null ? null : Number.parseInt(body.clientId, 10);
 
+  let newCompanySessionId = null;
   if (clientId != null) {
     const resolved = await dbForClient(env, clientId);
     if (!resolved) return jsonError("Company not found.", 404, corsHeaders);
+    newCompanySessionId = await createAgencyCompanySession(resolved.db);
   }
 
-  await env.CONTROL_DB.prepare("UPDATE agency_sessions SET active_client_id = ? WHERE id = ?")
-    .bind(clientId, session.session_id)
+  // Best-effort cleanup of the session row left behind in whichever
+  // company this agency session was previously inside -- not load-
+  // bearing (it just expires on its own otherwise), so a failure here
+  // never blocks the actual switch.
+  const previous = await env.CONTROL_DB.prepare("SELECT active_client_id, company_session_id FROM agency_sessions WHERE id = ?")
+    .bind(session.session_id)
+    .first();
+  if (previous?.active_client_id && previous.company_session_id) {
+    try {
+      const oldResolved = await dbForClient(env, previous.active_client_id);
+      if (oldResolved) await oldResolved.db.prepare("DELETE FROM sessions WHERE id = ?").bind(previous.company_session_id).run();
+    } catch {
+      // Non-critical -- see comment above.
+    }
+  }
+
+  await env.CONTROL_DB.prepare("UPDATE agency_sessions SET active_client_id = ?, company_session_id = ? WHERE id = ?")
+    .bind(clientId, newCompanySessionId, session.session_id)
     .run();
 
   return jsonOk({ ok: true, activeClientId: clientId }, corsHeaders);

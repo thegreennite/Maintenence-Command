@@ -3336,15 +3336,24 @@ function startReadingAnimation(statusEl, { estimateSeconds = 8 } = {}) {
   return () => clearInterval(interval);
 }
 
-async function fileToBase64(file) {
-  const buffer = await file.arrayBuffer();
-  let binary = "";
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
+// FileReader's native readAsDataURL does this encoding in the browser's
+// own C++ code rather than materializing a full JS string one byte-chunk
+// at a time and concatenating it (the old approach here) -- on a phone,
+// repeated large-photo conversions the manual way were very likely the
+// real cause of "low memory, can't upload another photo" after just one
+// or two captures in a row. This is a drop-in replacement: same
+// signature, same base64-payload-only return value.
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result || "";
+      const comma = result.indexOf(",");
+      resolve(comma === -1 ? result : result.slice(comma + 1));
+    };
+    reader.onerror = () => reject(reader.error || new Error("Couldn't read that photo. Try again."));
+    reader.readAsDataURL(file);
+  });
 }
 
 // iPhones (and some Samsung/Android phones) save camera-roll photos as
@@ -3419,6 +3428,12 @@ async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } =
     ctx.drawImage(bitmap, 0, 0, width, height);
     bitmap.close?.();
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    // Explicitly drop the canvas's backing store rather than waiting on
+    // GC -- WebKit/Safari in particular holds onto canvas memory longer
+    // than you'd expect otherwise, and command mode can run through many
+    // photos in one sitting without a page reload in between.
+    canvas.width = 0;
+    canvas.height = 0;
     if (!blob) throw new Error("Canvas produced no image data.");
     return { base64: await fileToBase64(blob), mediaType: "image/jpeg" };
   } catch (error) {
@@ -3435,14 +3450,24 @@ async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } =
 // it. Free (a browser API, not a paid one), so unlike Gemini calls there's
 // no cost reason to hold back; it just quietly omits itself if the
 // device/browser won't grant it in time.
+//
+// The browser only ever actually prompts for location permission once
+// per site (it remembers "Allow"/"Block" after that) -- but calling
+// getCurrentPosition fresh on every single photo still shows a location
+// indicator each time and costs a moment waiting on a GPS fix. Since a
+// building doesn't move mid-inspection, the first successful fix for
+// this session is cached and reused for every later photo instead.
+let cachedGeolocation = null;
 function getGeolocation(timeoutMs = 4000) {
+  if (cachedGeolocation) return Promise.resolve(cachedGeolocation);
   if (!navigator.geolocation) return Promise.resolve(null);
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), timeoutMs);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         clearTimeout(timer);
-        resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+        cachedGeolocation = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        resolve(cachedGeolocation);
       },
       () => {
         clearTimeout(timer);
@@ -3498,6 +3523,8 @@ async function captureComplianceProof(file) {
   }
 
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+  canvas.width = 0;
+  canvas.height = 0;
   if (!blob) throw new Error("Couldn't process that photo. Try again.");
   return {
     imageBase64: await fileToBase64(blob),

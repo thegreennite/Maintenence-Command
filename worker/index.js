@@ -66,7 +66,7 @@ import {
   handlePendingRequests,
   handlePendingRequestDecision,
 } from "./registration.js";
-import { dbForClient, clientForIdentifier, recordLoginDirectory } from "./tenant-db.js";
+import { dbForClient, clientForIdentifier, recordLoginDirectory, createAgencyCompanySession } from "./tenant-db.js";
 import { handleListClients, handleSwitchClient, handleCreateBusiness } from "./clients.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
@@ -780,9 +780,21 @@ async function handleLogout(request, env, corsHeaders) {
   const headers = new Headers(corsHeaders);
   const agencyToken = readCookie(request, "plc_agency_session");
   if (agencyToken) {
-    await env.CONTROL_DB.prepare("DELETE FROM agency_sessions WHERE token_hash = ?")
-      .bind(await hashToken(agencyToken))
-      .run();
+    const agencyTokenHash = await hashToken(agencyToken);
+    // Best-effort: clean up the real per-company session this agency
+    // login left behind too, not just its own control-plane row.
+    const agencyRow = await env.CONTROL_DB.prepare("SELECT active_client_id, company_session_id FROM agency_sessions WHERE token_hash = ?")
+      .bind(agencyTokenHash)
+      .first();
+    if (agencyRow?.active_client_id && agencyRow.company_session_id) {
+      try {
+        const resolved = await dbForClient(env, agencyRow.active_client_id);
+        if (resolved) await resolved.db.prepare("DELETE FROM sessions WHERE id = ?").bind(agencyRow.company_session_id).run();
+      } catch {
+        // Non-critical -- it'll just expire on its own otherwise.
+      }
+    }
+    await env.CONTROL_DB.prepare("DELETE FROM agency_sessions WHERE token_hash = ?").bind(agencyTokenHash).run();
     headers.append("Set-Cookie", clearSessionCookie(request, "plc_agency_session"));
   }
 
@@ -833,16 +845,10 @@ async function handleImpersonate(request, session, env, corsHeaders) {
   if (!isAdmin && !isManager) {
     return json({ error: "Not permitted" }, 403, corsHeaders);
   }
-  // The agency account, viewing a company, is synthesized (id -1) rather
-  // than a real row in that company's own users table -- there's no
-  // session row to hand off to an impersonated account and back the way
-  // a real admin's session works, so this would silently no-op rather
-  // than actually switch (see the detailed note on requireAgencySession).
-  // Fail loudly here instead of letting the UI hang waiting for a
-  // dashboard that never changes.
-  if (session.isAgency) {
-    return json({ error: "The agency account can't open individual accounts yet — ask that company's own admin." }, 403, corsHeaders);
-  }
+  // The agency account, viewing a company, now has a real local session
+  // (see requireAgencySession / createAgencyCompanySession), so this
+  // works exactly like it does for that company's own real admin --
+  // no special-casing needed here.
 
   const body = await readJson(request);
   const userId = Number.parseInt(body.userId, 10);
@@ -882,13 +888,6 @@ async function handleAdminReturn(session, env, corsHeaders) {
   if (session.actor_role !== "admin" && session.actor_role !== "regional_manager") {
     return json({ error: "Not permitted" }, 403, corsHeaders);
   }
-  // See the matching guard in handleImpersonate -- an agency session was
-  // never actually impersonating anyone (that call is rejected up front),
-  // so there's nothing real to "return" from here either.
-  if (session.isAgency) {
-    return json({ error: "Not permitted" }, 403, corsHeaders);
-  }
-
   await env.DB.prepare("UPDATE sessions SET user_id = actor_user_id, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
     .bind(session.session_id)
     .run();
@@ -964,14 +963,15 @@ async function requireSession(request, env) {
 // With no company selected yet, the returned session's role ("agency")
 // doesn't satisfy any existing handler's role check, which is exactly
 // the "pick a company first" gate the broad view needs. Once a company
-// IS selected (see handleSwitchClient in worker/clients.js), this
-// synthesizes a session that looks exactly like that company's own
-// admin, so every existing handler works completely unchanged -- id -1
-// is a sentinel for "the agency account", since there's no real row for
-// it in that company's own users table.
+// IS selected (see handleSwitchClient in worker/clients.js), this looks
+// up a REAL session row -- created by handleSwitchClient via
+// createAgencyCompanySession, for a real local "Agency" user in that
+// company's own database (ensureAgencyUserRow) -- so it behaves exactly
+// like that company's own admin everywhere, impersonation included,
+// with zero special-casing anywhere else in worker/*.js.
 async function requireAgencySession(token, env) {
   const row = await env.CONTROL_DB.prepare(
-    `SELECT s.id AS session_id, s.expires_at, s.last_seen_at, s.active_client_id,
+    `SELECT s.id AS session_id, s.expires_at, s.last_seen_at, s.active_client_id, s.company_session_id,
        a.id AS agency_user_id, a.username, a.full_name, a.is_active
      FROM agency_sessions s JOIN agency_users a ON a.id = s.agency_user_id
      WHERE s.token_hash = ? AND s.expires_at > ?`,
@@ -992,7 +992,6 @@ async function requireAgencySession(token, env) {
   const base = {
     isAgency: true,
     agencyUserId: row.agency_user_id,
-    session_id: row.session_id,
     username: row.username,
     full_name: row.full_name,
   };
@@ -1000,6 +999,7 @@ async function requireAgencySession(token, env) {
   if (row.active_client_id == null) {
     return {
       ...base,
+      session_id: row.session_id,
       id: null,
       role: "agency",
       actor_id: null,
@@ -1015,31 +1015,58 @@ async function requireAgencySession(token, env) {
   if (!resolved) {
     // The company they were inside got suspended/removed since they
     // switched into it -- fall back to the broad view rather than error.
-    await env.CONTROL_DB.prepare("UPDATE agency_sessions SET active_client_id = NULL WHERE id = ?")
+    await env.CONTROL_DB.prepare("UPDATE agency_sessions SET active_client_id = NULL, company_session_id = NULL WHERE id = ?")
       .bind(row.session_id)
       .run();
     return requireAgencySession(token, env);
   }
 
+  let companySession = row.company_session_id
+    ? await resolved.db
+        .prepare(
+          `SELECT s.id AS session_id, s.last_seen_at,
+             u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification, u.client_id,
+             actor.id AS actor_id, actor.username AS actor_username, actor.full_name AS actor_full_name,
+             actor.job_title AS actor_job_title, actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access
+           FROM sessions s
+           JOIN users u ON u.id = s.user_id AND u.is_active = 1
+           JOIN users actor ON actor.id = s.actor_user_id AND actor.is_active = 1
+           WHERE s.id = ?`,
+        )
+        .bind(row.company_session_id)
+        .first()
+    : null;
+
+  if (!companySession) {
+    // Self-heal: the row expired, or this is the first request since
+    // switching in before company_session_id was ever set. Either way,
+    // create a fresh one rather than fail the request.
+    const newSessionId = await createAgencyCompanySession(resolved.db);
+    await env.CONTROL_DB.prepare("UPDATE agency_sessions SET company_session_id = ? WHERE id = ?")
+      .bind(newSessionId, row.session_id)
+      .run();
+    companySession = await resolved.db
+      .prepare(
+        `SELECT s.id AS session_id, s.last_seen_at,
+           u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification, u.client_id,
+           actor.id AS actor_id, actor.username AS actor_username, actor.full_name AS actor_full_name,
+           actor.job_title AS actor_job_title, actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access
+         FROM sessions s
+         JOIN users u ON u.id = s.user_id AND u.is_active = 1
+         JOIN users actor ON actor.id = s.actor_user_id AND actor.is_active = 1
+         WHERE s.id = ?`,
+      )
+      .bind(newSessionId)
+      .first();
+  }
+  await resolved.db.prepare("UPDATE sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(companySession.session_id)
+    .run();
+
   return {
     ...base,
-    id: -1,
-    job_title: "Agency",
-    role: "admin",
-    region: null,
-    building_id: null,
-    building_access: "all",
-    classification: "standard",
-    // Local self-id inside the target company's own database, not the
-    // control-plane id -- see the matching comment in requireSession.
-    client_id: 1,
-    actor_id: -1,
-    actor_username: row.username,
-    actor_full_name: row.full_name,
-    actor_job_title: "Agency",
-    actor_role: "admin",
-    actor_region: null,
-    actor_building_access: "all",
+    ...companySession,
+    session_id: companySession.session_id,
     companyId: row.active_client_id,
     __db: resolved.db,
   };
