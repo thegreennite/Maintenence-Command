@@ -2126,6 +2126,7 @@ let chipPointer = null;
 
 function handleReadingChipPointerDown(event) {
   if (event.pointerType === "mouse" && event.button !== 0) return; // left-click only
+  if (event.target.closest("select")) return; // let the per-tag location select open normally
   const chip = event.currentTarget;
   const zone = chip.closest("[data-dropzone]");
   if (!zone) return;
@@ -2343,7 +2344,6 @@ function renderBuildingWorld() {
 
   const openOrders = world.workOrders.filter((w) => w.status === "open");
   const resolvedOrders = world.workOrders.filter((w) => w.status === "resolved");
-  const checklistSections = groupTagsForChecklist(world.tags);
   const user = state.session.user;
   const canManageSharing = user.role === "admin" || user.buildingAccess === "all";
 
@@ -2452,7 +2452,13 @@ function renderBuildingWorld() {
         </section>
 
         <section class="card building-world__checklist">
-          <div class="card__header"><div><p class="section-kicker">Checklist</p><h2>${world.tags.length} readings</h2></div></div>
+          <div class="card__header">
+            <div><p class="section-kicker">Checklist</p><h2>${world.tags.length} readings</h2></div>
+            <form id="add-group-form" class="add-machine-form">
+              <input type="text" name="name" placeholder="+ New machine…" maxlength="60" autocomplete="off" />
+              <button type="submit" class="button button--outline button--small">Add</button>
+            </form>
+          </div>
           <div class="location-manager">
             <span class="quiet-label" style="width:100%;">Locations — where each reading physically is, so command mode can walk supers through in order</span>
             ${(world.locations || [])
@@ -2466,12 +2472,8 @@ function renderBuildingWorld() {
             </form>
           </div>
           ${renderChecklistBulkBar(world)}
-          <div class="checklist-sections">
-            ${checklistSections.map((section) => renderChecklistSection(section, world)).join("")}
-          </div>
+          ${renderMachineBoard(world)}
         </section>
-
-        ${renderMachineOrganizer(world)}
 
         <section class="card building-world__checklist">
           <div class="card__header"><div><p class="section-kicker">Inspection history</p><h2>Submitted, by week</h2></div></div>
@@ -2544,112 +2546,51 @@ function renderChecklistBulkBar(world) {
     </div>`;
 }
 
-function renderChecklistSection(section, world) {
-  const recentNote = section.groupId
-    ? (world.groupNotes || []).find((n) => n.equipment_group_id === section.groupId)
-    : null;
-  const todayPhoto = section.groupId
-    ? (world.todayGroupPhotos || []).find((p) => p.equipment_group_id === section.groupId)
-    : null;
-  const isRenaming = section.groupId && state.buildingWorldRenamingGroupId === section.groupId;
-  const isSelected = section.groupId && state.buildingWorldSelectedGroupIds.has(section.groupId);
-  return `
-    <div class="checklist-section">
-      <div class="checklist-section__header">
-        <div class="checklist-section__title">
-          ${section.groupId ? `<input type="checkbox" class="checklist-group-select" data-group-id="${section.groupId}" title="Select ${escapeHtml(section.name)} for a bulk action" ${isSelected ? "checked" : ""} />` : ""}
-          ${
-            isRenaming
-              ? `<span class="rename-inline">
-                  <input type="text" class="rename-group-input" value="${escapeHtml(section.name)}" maxlength="60" />
-                  <button type="button" class="icon-button rename-group-save" data-group-id="${section.groupId}" title="Save" aria-label="Save name">${icon("check")}</button>
-                  <button type="button" class="icon-button rename-group-cancel" title="Cancel" aria-label="Cancel">${icon("close")}</button>
-                </span>`
-              : `<h4>${escapeHtml(section.name)}${section.groupId ? "" : ' <span class="quiet-label">(ungrouped)</span>'}<span class="quiet-label"> · ${section.tags.length}</span></h4>
-                 ${section.groupId ? `<button type="button" class="icon-button rename-group-start" data-group-id="${section.groupId}" title="Rename ${escapeHtml(section.name)}" aria-label="Rename ${escapeHtml(section.name)}">${icon("edit")}</button>` : ""}`
-          }
-        </div>
-        ${
-          section.groupId
-            ? `<span class="machine-photo-badge ${todayPhoto ? "machine-photo-badge--done" : "machine-photo-badge--missing"}" title="${todayPhoto ? `Photographed ${escapeHtml(formatTimestamp(todayPhoto.captured_at))}` : "No photo yet today"}">${todayPhoto ? icon("check") : icon("camera")} ${todayPhoto ? "Photo taken today" : "No photo today"}</span>
-              <select class="assign-group-location" data-group-id="${section.groupId}">
-                <option value="">Set location for all…</option>
-                ${(world.locations || []).map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join("")}
-              </select>`
-            : ""
-        }
-      </div>
-      ${
-        recentNote
-          ? `<p class="checklist-section__note">${icon("edit")} <strong>${escapeHtml(formatInspectionDate(recentNote.inspection_date))}:</strong> ${escapeHtml(recentNote.note)}</p>`
-          : ""
-      }
-      <ul class="checklist-section__list">
-        ${section.tags
-          .map(
-            (t) => `<li>
-              <span>${escapeHtml([t.tag_no, t.reading_type].filter(Boolean).join(" — "))}</span>
-              <span class="checklist-preview__selects">
-                <select class="assign-tag-location" data-tag-id="${t.id}">
-                  <option value="">No location</option>
-                  ${(world.locations || []).map((l) => `<option value="${l.id}" ${t.location_id === l.id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
-                </select>
-              </span>
-            </li>`,
-          )
-          .join("")}
-      </ul>
-    </div>`;
-}
-
 // ---------------------------------------------------------------------
-// Machine organizer -- drag a reading onto a gray "machine" zone to group
-// it (equipment_group_id), same underlying data as the checklist card
-// above, just a visual, physical-feeling way to build it instead of a
-// dropdown per reading. Drag is implemented on Pointer Events rather than
-// native HTML5 drag-and-drop specifically so it works with a touch screen
-// too, not just a mouse -- see handleReadingChipDragStart below.
+// The checklist card, merged into one interface: every reading grouped
+// into a gray "machine" zone (equipment group), dragged between them to
+// regroup, alongside everything a manager actually needs per machine --
+// today's photo status, a bulk "set location for all" select, its most
+// recent group note, and per-reading location. This used to be two
+// separate cards (a plain grouped list, and a separate drag board below
+// it) -- merged into one so there's a single place to manage all of it,
+// not two showing the same data two different ways.
 // ---------------------------------------------------------------------
 
-function renderMachineOrganizer(world) {
+function renderMachineBoard(world) {
   const tags = world.tags || [];
   const groups = world.groups || [];
   const ungrouped = tags.filter((t) => !t.equipment_group_id);
   return `
-    <section class="card machine-organizer">
-      <div class="card__header">
-        <div><p class="section-kicker">Organize</p><h2>Machines</h2></div>
-        <form id="add-group-form" class="add-machine-form">
-          <input type="text" name="name" placeholder="+ New machine…" maxlength="60" autocomplete="off" />
-          <button type="submit" class="button button--outline button--small">Add</button>
-        </form>
-      </div>
-      <p class="parameters-intro">Press and drag a reading onto a machine to group it — any machine with readings needs a timestamped photo before the day can be submitted. A quick tap edits it instead.</p>
-      <div class="machine-board">
-        <div class="machine-zone machine-zone--ungrouped">
-          <div class="machine-zone__header">
-            <h4>Ungrouped readings</h4>
-            <span class="quiet-label">No photo required</span>
-          </div>
-          <div class="machine-zone__body" data-dropzone="">
-            ${
-              ungrouped.length
-                ? ungrouped.map(renderReadingChip).join("")
-                : `<p class="machine-zone__empty">Nothing ungrouped.</p>`
-            }
-          </div>
+    <p class="parameters-intro">Press and drag a reading onto a machine to group it — any machine with readings needs a timestamped photo before the day can be submitted. A quick tap edits it instead.</p>
+    <div class="machine-board">
+      <div class="machine-zone machine-zone--ungrouped">
+        <div class="machine-zone__header">
+          <h4>Ungrouped readings<span class="quiet-label"> · ${ungrouped.length}</span></h4>
+          <span class="quiet-label">No photo required</span>
         </div>
-        ${groups.map((g) => renderMachineZone(g, tags)).join("")}
+        <div class="machine-zone__body" data-dropzone="">
+          ${
+            ungrouped.length
+              ? ungrouped.map((t) => renderReadingChip(t, world)).join("")
+              : `<p class="machine-zone__empty">Nothing ungrouped.</p>`
+          }
+        </div>
       </div>
-    </section>`;
+      ${groups.map((g) => renderMachineZone(g, tags, world)).join("")}
+    </div>`;
 }
 
-function renderMachineZone(group, tags) {
+function renderMachineZone(group, tags, world) {
   const groupTags = tags.filter((t) => t.equipment_group_id === group.id);
   const isRenaming = state.buildingWorldRenamingGroupId === group.id;
+  const isSelected = state.buildingWorldSelectedGroupIds.has(group.id);
+  const recentNote = (world.groupNotes || []).find((n) => n.equipment_group_id === group.id);
+  const todayPhoto = (world.todayGroupPhotos || []).find((p) => p.equipment_group_id === group.id);
   return `
     <div class="machine-zone" data-group-id="${group.id}">
       <div class="machine-zone__header">
+        <input type="checkbox" class="checklist-group-select" data-group-id="${group.id}" title="Select ${escapeHtml(group.name)} for a bulk action" ${isSelected ? "checked" : ""} />
         ${
           isRenaming
             ? `<span class="rename-inline">
@@ -2657,32 +2598,49 @@ function renderMachineZone(group, tags) {
                 <button type="button" class="icon-button rename-group-save" data-group-id="${group.id}" title="Save" aria-label="Save name">${icon("check")}</button>
                 <button type="button" class="icon-button rename-group-cancel" title="Cancel" aria-label="Cancel">${icon("close")}</button>
               </span>`
-            : `<h4>${escapeHtml(group.name)}</h4>
+            : `<h4>${escapeHtml(group.name)}<span class="quiet-label"> · ${groupTags.length}</span></h4>
                <button type="button" class="icon-button rename-group-start" data-group-id="${group.id}" title="Rename ${escapeHtml(group.name)}" aria-label="Rename ${escapeHtml(group.name)}">${icon("edit")}</button>
                <button type="button" class="icon-button remove-group" data-group-id="${group.id}" title="Delete machine" aria-label="Delete ${escapeHtml(group.name)}">${icon("close")}</button>`
         }
       </div>
-      <span class="machine-zone__badge">${icon("camera")} Requires a photo</span>
+      <div class="machine-zone__meta">
+        <span class="machine-photo-badge ${todayPhoto ? "machine-photo-badge--done" : "machine-photo-badge--missing"}" title="${todayPhoto ? `Photographed ${escapeHtml(formatTimestamp(todayPhoto.captured_at))}` : "No photo yet today"}">${todayPhoto ? icon("check") : icon("camera")} ${todayPhoto ? "Photo taken today" : "No photo today"}</span>
+        <select class="assign-group-location" data-group-id="${group.id}">
+          <option value="">Set location for all…</option>
+          ${(world.locations || []).map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join("")}
+        </select>
+      </div>
+      ${
+        recentNote
+          ? `<p class="checklist-section__note">${icon("edit")} <strong>${escapeHtml(formatInspectionDate(recentNote.inspection_date))}:</strong> ${escapeHtml(recentNote.note)}</p>`
+          : ""
+      }
       <div class="machine-zone__body" data-dropzone="${group.id}">
         ${
           groupTags.length
-            ? groupTags.map(renderReadingChip).join("")
+            ? groupTags.map((t) => renderReadingChip(t, world)).join("")
             : `<p class="machine-zone__empty">Drag a reading here</p>`
         }
       </div>
     </div>`;
 }
 
-function renderReadingChip(tag) {
+function renderReadingChip(tag, world) {
   if (state.buildingWorldEditingTagId === tag.id) return renderReadingChipEditForm(tag);
   const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ") || tag.system_name;
   // The whole chip is the drag surface now, not just a small grip corner
   // -- press anywhere and hold-drag to move it, a plain tap opens the
-  // editor. See handleReadingChipPointerDown's movement-threshold logic.
+  // editor. See handleReadingChipPointerDown's movement-threshold logic
+  // (it explicitly ignores the location <select> below so that still
+  // opens normally instead of starting a drag).
   return `
     <div class="reading-chip" data-tag-id="${tag.id}" tabindex="0" role="button" aria-label="${escapeHtml(label)} — drag to move, tap to edit">
       <span class="reading-chip__grip" aria-hidden="true">⠿</span>
       <span class="reading-chip__label">${escapeHtml(label)}</span>
+      <select class="assign-tag-location reading-chip__location" data-tag-id="${tag.id}" title="Where this reading physically is">
+        <option value="">No location</option>
+        ${(world?.locations || []).map((l) => `<option value="${l.id}" ${tag.location_id === l.id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
+      </select>
     </div>`;
 }
 
