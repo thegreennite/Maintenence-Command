@@ -3,7 +3,7 @@
 // at the OM's discretion. Grant-only by OM/admin (canSeeAllBuildings) --
 // a plain ROM can't share a building they don't fully control themselves.
 
-import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 
 function requireOm(session, corsHeaders) {
   if (!canSeeAllBuildings(session)) {
@@ -18,19 +18,24 @@ export async function handleListRoms(session, env, corsHeaders) {
 
   const result = await env.DB.prepare(
     `SELECT id, full_name, job_title, region FROM users
-     WHERE role = 'regional_manager' AND building_access = 'own' AND status = 'active' AND is_active = 1
+     WHERE role = 'regional_manager' AND building_access = 'own' AND status = 'active' AND is_active = 1 AND client_id = ?
      ORDER BY full_name`,
-  ).all();
+  )
+    .bind(effectiveClientId(session))
+    .all();
   return jsonOk({ roms: result.results }, corsHeaders);
 }
 
 export async function handleBuildingSharing(request, session, env, corsHeaders) {
   const buildingId = Number.parseInt(new URL(request.url).searchParams.get("buildingId"), 10);
   const scoped = canSeeAllBuildings(session);
+  const clientId = effectiveClientId(session);
   const building = scoped
-    ? await env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first()
-    : await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
-        .bind(buildingId, session.id, session.id)
+    ? await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")}`)
+        .bind(buildingId, clientId)
+        .first()
+    : await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")} AND ${ownedOrSharedSql("buildings")}`)
+        .bind(buildingId, clientId, session.id, session.id)
         .first();
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
@@ -54,14 +59,20 @@ export async function handleShareBuilding(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   const buildingId = Number.parseInt(body.buildingId, 10);
   const userId = Number.parseInt(body.userId, 10);
+  const clientId = effectiveClientId(session);
 
-  const building = await env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
+  // Both the building and the person being granted access have to belong
+  // to the same client an OM is sharing FOR -- sharing is a within-one-
+  // company tool, not a way to cross a tenant boundary.
+  const building = await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")}`)
+    .bind(buildingId, clientId)
+    .first();
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   const rom = await env.DB.prepare(
-    "SELECT id FROM users WHERE id = ? AND role = 'regional_manager' AND is_active = 1",
+    "SELECT id FROM users WHERE id = ? AND role = 'regional_manager' AND is_active = 1 AND client_id = ?",
   )
-    .bind(userId)
+    .bind(userId, clientId)
     .first();
   if (!rom) return jsonError("That person can't be granted building access.", 400, corsHeaders);
 
@@ -82,6 +93,12 @@ export async function handleUnshareBuilding(request, session, env, corsHeaders) 
   const body = await request.json().catch(() => ({}));
   const buildingId = Number.parseInt(body.buildingId, 10);
   const userId = Number.parseInt(body.userId, 10);
+  const clientId = effectiveClientId(session);
+
+  const building = await env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")}`)
+    .bind(buildingId, clientId)
+    .first();
+  if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   await env.DB.prepare("DELETE FROM building_managers WHERE building_id = ? AND user_id = ?").bind(buildingId, userId).run();
   return jsonOk({ ok: true }, corsHeaders);

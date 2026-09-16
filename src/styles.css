@@ -61,6 +61,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .status-dot--success { background: #66c8a0; box-shadow: 0 0 0 4px rgba(102,200,160,.14); }
 .login-panel { display: grid; place-items: center; padding: 48px; }
 .login-form-wrap { width: min(100%, 420px); }
+.login-panel__top { display: flex; align-items: center; gap: 12px; margin-bottom: 64px; }
+.login-panel__top .mobile-brand { margin-bottom: 0; }
+.add-business-link { margin-left: auto; font-size: 12.5px; white-space: nowrap; }
 .mobile-brand { display: none; margin-bottom: 64px; }
 .eyebrow, .section-kicker { margin: 0; color: var(--forest); font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
 .eyebrow--light { color: var(--lime); }
@@ -287,6 +290,14 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--muted); background: var(--canvas); }
 .status-pill .icon { width: 14px; height: 14px; }
 .status-pill--success { color: var(--success); background: var(--success-soft); }
+.status-pill--neutral { color: var(--muted); background: var(--canvas); }
+
+/* Agency (cross-company) view */
+.agency-client-list { display: grid; }
+.agency-client-row { display: flex; align-items: center; gap: 16px; padding: 16px 22px; border-top: 1px solid var(--line); }
+.agency-client-row:first-child { border-top: none; }
+.agency-client-row__name { display: grid; gap: 2px; margin-right: auto; }
+.agency-client-row__name small { color: var(--muted); }
 .status-pill--warning { color: #aa6916; background: var(--warning-soft); }
 
 .inspection-card { margin-top: 22px; }

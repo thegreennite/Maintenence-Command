@@ -4,14 +4,17 @@
 // tag to a location lets command mode walk a superintendent through their
 // readings in physical order instead of checklist order.
 
-import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 
 async function ownsBuilding(env, session, buildingId) {
+  const clientId = effectiveClientId(session);
   if (canSeeAllBuildings(session)) {
-    return env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
+    return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")}`)
+      .bind(buildingId, clientId)
+      .first();
   }
-  return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
-    .bind(buildingId, session.id, session.id)
+  return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")} AND ${ownedOrSharedSql("buildings")}`)
+    .bind(buildingId, clientId, session.id, session.id)
     .first();
 }
 

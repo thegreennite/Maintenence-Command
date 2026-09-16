@@ -5,14 +5,17 @@
 // Same shape and pattern as building_locations/worker/locations.js on
 // purpose -- two independent classification axes over the same tags.
 
-import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 
 async function ownsBuilding(env, session, buildingId) {
+  const clientId = effectiveClientId(session);
   if (canSeeAllBuildings(session)) {
-    return env.DB.prepare("SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
+    return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")}`)
+      .bind(buildingId, clientId)
+      .first();
   }
-  return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
-    .bind(buildingId, session.id, session.id)
+  return env.DB.prepare(`SELECT id FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")} AND ${ownedOrSharedSql("buildings")}`)
+    .bind(buildingId, clientId, session.id, session.id)
     .first();
 }
 

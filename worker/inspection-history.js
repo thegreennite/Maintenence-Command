@@ -3,21 +3,26 @@
 // week; this just returns dates in order) and a full-detail endpoint for
 // rendering one day as a PDF client-side.
 
-import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 
 async function ownsBuilding(env, session, buildingId) {
   // A superintendent can pull their own building's history (read-only --
   // there's nothing to edit here, just weekly folders + PDF export), but
-  // only their own building, never another one.
+  // only their own building, never another one. Already implicitly
+  // client-scoped -- their own building_id was assigned within their own
+  // client to begin with.
   if (session.role === "superintendent") {
     if (session.building_id !== buildingId) return null;
     return env.DB.prepare("SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
   }
+  const clientId = effectiveClientId(session);
   if (canSeeAllBuildings(session)) {
-    return env.DB.prepare("SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
+    return env.DB.prepare(`SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")}`)
+      .bind(buildingId, clientId)
+      .first();
   }
-  return env.DB.prepare(`SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
-    .bind(buildingId, session.id, session.id)
+  return env.DB.prepare(`SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")} AND ${ownedOrSharedSql("buildings")}`)
+    .bind(buildingId, clientId, session.id, session.id)
     .first();
 }
 

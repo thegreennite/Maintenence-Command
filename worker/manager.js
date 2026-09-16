@@ -2,7 +2,7 @@
 // per-reading parameters and green/yellow/red flagging computed against
 // them. Parameters are opt-in — a tag with none set is just "not evaluated".
 
-import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 
 function today() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
@@ -43,37 +43,41 @@ export function flagFor(tag, rawValue, parameter) {
 
 async function resolveBuilding(env, session, buildingId) {
   const scoped = canSeeAllBuildings(session);
+  const clientId = effectiveClientId(session);
   if (buildingId) {
     if (scoped) {
-      return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND deleted_at IS NULL")
-        .bind(buildingId)
+      return env.DB.prepare(`SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")}`)
+        .bind(buildingId, clientId)
         .first();
     }
     return env.DB.prepare(
-      `SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`,
+      `SELECT id, name, region, inspection_days FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")} AND ${ownedOrSharedSql("buildings")}`,
     )
-      .bind(buildingId, session.id, session.id)
+      .bind(buildingId, clientId, session.id, session.id)
       .first();
   }
   if (scoped) {
-    return env.DB.prepare("SELECT id, name, region, inspection_days FROM buildings WHERE deleted_at IS NULL ORDER BY id LIMIT 1").first();
+    return env.DB.prepare(`SELECT id, name, region, inspection_days FROM buildings WHERE deleted_at IS NULL AND ${clientScopeSql("buildings")} ORDER BY id LIMIT 1`)
+      .bind(clientId)
+      .first();
   }
   return env.DB.prepare(
-    `SELECT id, name, region, inspection_days FROM buildings WHERE deleted_at IS NULL AND ${ownedOrSharedSql("buildings")} ORDER BY id LIMIT 1`,
+    `SELECT id, name, region, inspection_days FROM buildings WHERE deleted_at IS NULL AND ${clientScopeSql("buildings")} AND ${ownedOrSharedSql("buildings")} ORDER BY id LIMIT 1`,
   )
-    .bind(session.id, session.id)
+    .bind(clientId, session.id, session.id)
     .first();
 }
 
 export async function handleManagerSuperintendents(session, env, corsHeaders) {
   const scoped = canSeeAllBuildings(session);
+  const clientId = effectiveClientId(session);
   const result = await env.DB.prepare(
     `SELECT u.id, u.full_name, b.name AS building_name
      FROM users u JOIN buildings b ON b.id = u.building_id
-     WHERE u.role = 'superintendent' AND u.is_active = 1 ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`}
+     WHERE u.role = 'superintendent' AND u.is_active = 1 AND ${clientScopeSql("b")} ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`}
      ORDER BY u.full_name`,
   )
-    .bind(...(scoped ? [] : [session.id, session.id]))
+    .bind(clientId, ...(scoped ? [] : [session.id, session.id]))
     .all();
   return jsonOk({ superintendents: result.results }, corsHeaders);
 }

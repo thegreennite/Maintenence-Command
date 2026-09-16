@@ -5,31 +5,35 @@
 // -- see worker/access.js.
 
 import { storePhoto } from "./photos.js";
-import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 
 const VISION_MODEL = "gemini-3.6-flash";
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 async function findOwnedBuilding(env, session, buildingId, columns = "id, name, address, region, inspection_days, status, latitude, longitude, created_by, delete_requested_at") {
+  const clientId = effectiveClientId(session);
   if (canSeeAllBuildings(session)) {
-    return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND deleted_at IS NULL`).bind(buildingId).first();
+    return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")}`)
+      .bind(buildingId, clientId)
+      .first();
   }
-  return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${ownedOrSharedSql("buildings")}`)
-    .bind(buildingId, session.id, session.id)
+  return env.DB.prepare(`SELECT ${columns} FROM buildings WHERE id = ? AND deleted_at IS NULL AND ${clientScopeSql("buildings")} AND ${ownedOrSharedSql("buildings")}`)
+    .bind(buildingId, clientId, session.id, session.id)
     .first();
 }
 
 export async function handleBuildingsList(session, env, corsHeaders) {
   const scoped = canSeeAllBuildings(session);
+  const clientId = effectiveClientId(session);
   const result = await env.DB.prepare(
     `SELECT b.id, b.name, b.address, b.region, b.inspection_days, b.status, b.latitude, b.longitude,
        b.delete_requested_at,
        (SELECT COUNT(*) FROM inspection_tags t WHERE t.building_id = b.id) AS tag_count,
        (SELECT COUNT(*) FROM users u WHERE u.building_id = b.id AND u.role = 'superintendent' AND u.status = 'active') AS superintendent_count,
        b.created_by = ? AS is_owner
-     FROM buildings b WHERE b.deleted_at IS NULL ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`} ORDER BY b.id`,
+     FROM buildings b WHERE b.deleted_at IS NULL AND ${clientScopeSql("b")} ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`} ORDER BY b.id`,
   )
-    .bind(session.id, ...(scoped ? [] : [session.id, session.id]))
+    .bind(session.id, clientId, ...(scoped ? [] : [session.id, session.id]))
     .all();
   return jsonOk({ buildings: result.results }, corsHeaders);
 }
@@ -48,6 +52,26 @@ export async function handleBuildingCreate(request, session, env, corsHeaders) {
   if (!days.length) return jsonError("Select at least one inspection day.", 400, corsHeaders);
 
   const inspectionDays = DAY_NAMES.filter((day) => days.includes(day)).join(",");
+  const clientId = effectiveClientId(session);
+
+  // Basic/Plus plans cap how many buildings a client can register (Pro is
+  // unlimited -- building_limit is NULL). Checked here, not just shown in
+  // the UI, since this is a real plan boundary, not a suggestion.
+  const client = await env.DB.prepare("SELECT building_limit FROM clients WHERE id = ?").bind(clientId).first();
+  if (client?.building_limit != null) {
+    const { count } = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM buildings WHERE client_id = ? AND deleted_at IS NULL",
+    )
+      .bind(clientId)
+      .first();
+    if (count >= client.building_limit) {
+      return jsonError(
+        `This plan is limited to ${client.building_limit} buildings. Upgrade the plan to add more.`,
+        409,
+        corsHeaders,
+      );
+    }
+  }
 
   // Region used to be silently inherited from whoever registered the
   // building (their own account-level "region/team name") -- that's a
@@ -56,10 +80,10 @@ export async function handleBuildingCreate(request, session, env, corsHeaders) {
   // is now a per-building label an Area Manager/Admin sets explicitly
   // (see handleUpdateBuilding), starting empty.
   const inserted = await env.DB.prepare(
-    `INSERT INTO buildings (name, address, region, inspection_days, created_by, latitude, longitude, status)
-     VALUES (?, ?, NULL, ?, ?, ?, ?, 'registering')`,
+    `INSERT INTO buildings (name, address, region, inspection_days, created_by, latitude, longitude, status, client_id)
+     VALUES (?, ?, NULL, ?, ?, ?, ?, 'registering', ?)`,
   )
-    .bind(name, address || null, inspectionDays, session.id, latitude, longitude)
+    .bind(name, address || null, inspectionDays, session.id, latitude, longitude, clientId)
     .run();
 
   const building = await env.DB.prepare(
@@ -181,8 +205,10 @@ export async function handleCancelDeleteRequest(request, session, env, corsHeade
 
 export async function handleUnassignedSuperintendents(session, env, corsHeaders) {
   const result = await env.DB.prepare(
-    "SELECT id, username, full_name FROM users WHERE role = 'superintendent' AND building_id IS NULL AND is_active = 1 ORDER BY full_name",
-  ).all();
+    "SELECT id, username, full_name FROM users WHERE role = 'superintendent' AND building_id IS NULL AND is_active = 1 AND client_id = ? ORDER BY full_name",
+  )
+    .bind(effectiveClientId(session))
+    .all();
   return jsonOk({ superintendents: result.results }, corsHeaders);
 }
 
@@ -195,15 +221,16 @@ export async function handleAssignableSuperintendents(request, session, env, cor
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   const scoped = canSeeAllBuildings(session);
+  const clientId = effectiveClientId(session);
   const result = await env.DB.prepare(
     `SELECT u.id, u.full_name, u.building_id, b.name AS building_name
      FROM users u LEFT JOIN buildings b ON b.id = u.building_id
-     WHERE u.role = 'superintendent' AND u.is_active = 1 AND u.status = 'active'
+     WHERE u.role = 'superintendent' AND u.is_active = 1 AND u.status = 'active' AND u.client_id = ?
        AND (u.building_id IS NULL OR u.building_id != ?)
        AND (u.building_id IS NULL ${scoped ? "" : `OR ${ownedOrSharedSql("b")}`})
      ORDER BY u.full_name`,
   )
-    .bind(...(scoped ? [buildingId] : [buildingId, session.id, session.id]))
+    .bind(clientId, buildingId, ...(scoped ? [] : [session.id, session.id]))
     .all();
   return jsonOk({ superintendents: result.results }, corsHeaders);
 }
@@ -217,9 +244,9 @@ export async function handleAssignSuperintendent(request, session, env, corsHead
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   const target = await env.DB.prepare(
-    "SELECT id, building_id FROM users WHERE id = ? AND role = 'superintendent' AND is_active = 1",
+    "SELECT id, building_id FROM users WHERE id = ? AND role = 'superintendent' AND is_active = 1 AND client_id = ?",
   )
-    .bind(userId)
+    .bind(userId, effectiveClientId(session))
     .first();
   if (!target) return jsonError("Superintendent not found.", 404, corsHeaders);
   if (target.building_id && !(await findOwnedBuilding(env, session, target.building_id, "id"))) {
@@ -238,9 +265,9 @@ export async function handleRemoveSuperintendent(request, session, env, corsHead
   const userId = Number.parseInt(body.userId, 10);
 
   const target = await env.DB.prepare(
-    "SELECT id, building_id FROM users WHERE id = ? AND role = 'superintendent' AND is_active = 1",
+    "SELECT id, building_id FROM users WHERE id = ? AND role = 'superintendent' AND is_active = 1 AND client_id = ?",
   )
-    .bind(userId)
+    .bind(userId, effectiveClientId(session))
     .first();
   if (!target || !target.building_id) return jsonError("That superintendent isn't assigned to a building.", 404, corsHeaders);
   if (!(await findOwnedBuilding(env, session, target.building_id, "id"))) {

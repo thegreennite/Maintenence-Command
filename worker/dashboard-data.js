@@ -4,13 +4,16 @@
 // here now comes from D1, scoped by canSeeAllBuildings the same way the
 // rest of the manager API is.
 
-import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 
 export const roleLabels = {
   admin: "Administrator",
   regional_manager: "Area Manager",
   superintendent: "Superintendent",
   property_manager: "Property Manager",
+  // The agency account (Lucas, overseeing every company) before it's
+  // selected a company to look at -- see requireAgencySession in index.js.
+  agency: "Agency",
 };
 
 const TORONTO_TZ = "America/Toronto";
@@ -73,9 +76,9 @@ async function visibleActiveBuildings(env, session) {
   const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
     `SELECT id, name, inspection_days, created_by FROM buildings
-     WHERE status = 'active' AND deleted_at IS NULL AND ${scoped ? "1=1" : ownedOrSharedSql("buildings")}`,
+     WHERE status = 'active' AND deleted_at IS NULL AND ${clientScopeSql("buildings")} AND (${scoped ? "1=1" : ownedOrSharedSql("buildings")})`,
   )
-    .bind(...(scoped ? [] : [session.id, session.id]))
+    .bind(effectiveClientId(session), ...(scoped ? [] : [session.id, session.id]))
     .all();
   return result.results;
 }
@@ -118,9 +121,9 @@ async function buildManagerDashboard(env, session, fullName) {
       `SELECT COUNT(*) AS open_count, COUNT(DISTINCT w.building_id) AS building_count,
          SUM(CASE WHEN w.assigned_to IS NULL THEN 1 ELSE 0 END) AS unassigned_count
        FROM work_orders w JOIN buildings b ON b.id = w.building_id
-       WHERE w.status = 'open' AND b.deleted_at IS NULL AND ${scoped ? "1=1" : ownedOrSharedSql("b")}`,
+       WHERE w.status = 'open' AND b.deleted_at IS NULL AND ${clientScopeSql("b")} AND (${scoped ? "1=1" : ownedOrSharedSql("b")})`,
     )
-      .bind(...(scoped ? [] : [session.id, session.id]))
+      .bind(effectiveClientId(session), ...(scoped ? [] : [session.id, session.id]))
       .first(),
     submittedCount(
       env,

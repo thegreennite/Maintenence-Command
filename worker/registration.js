@@ -10,6 +10,7 @@
 
 import { hashPassword } from "./security.js";
 import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { getNativeClientId, recordLoginDirectory } from "./tenant-db.js";
 
 const SELF_SERVE_ROLES = new Set(["superintendent", "property_manager", "regional_manager", "operations_manager"]);
 const JOB_TITLES = {
@@ -70,15 +71,23 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   const { salt, hash } = await hashPassword(password);
   const isManagerTier = requestedRole === "regional_manager" || requestedRole === "operations_manager";
 
+  // This endpoint only ever runs against the static "DB" binding -- there's
+  // no company selector on the public sign-up form yet, so it can only
+  // ever be Forest Hill Group. client_id = 1 is that company's own local
+  // self-id (see LOCAL_CLIENT_SCHEMA_SQL in tenant-db.js); the control-plane
+  // id (which login_directory needs) is looked up rather than assumed.
+  const nativeClientId = await getNativeClientId(env);
+
   if (isManagerTier) {
     if (!regionName) return jsonError("A region/team name is required.", 400, corsHeaders);
     const buildingAccess = requestedRole === "operations_manager" ? "all" : "own";
     await env.DB.prepare(
-      `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at)
-       VALUES (?, ?, ?, ?, ?, 'regional_manager', ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP)`,
+      `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at, client_id)
+       VALUES (?, ?, ?, ?, ?, 'regional_manager', ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP, 1)`,
     )
       .bind(email, hash, salt, fullName, JOB_TITLES[requestedRole], buildingAccess, regionName, email, phone || null, profilePhoto)
       .run();
+    if (nativeClientId) await recordLoginDirectory(env, email, nativeClientId);
     return jsonOk({ ok: true, message: "Your request has been sent to an administrator for approval." }, corsHeaders);
   }
 
@@ -99,11 +108,12 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   }
 
   await env.DB.prepare(
-    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, building_id, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP)`,
+    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, building_id, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at, client_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP, 1)`,
   )
     .bind(email, hash, salt, fullName, JOB_TITLES[requestedRole], requestedRole, building.region, building.id, email, phone || null, profilePhoto)
     .run();
+  if (nativeClientId) await recordLoginDirectory(env, email, nativeClientId);
 
   return jsonOk(
     { ok: true, message: "Your request has been sent to your operations manager for approval." },

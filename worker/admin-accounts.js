@@ -8,6 +8,8 @@
 // dance -- an admin adding someone IS the approval.
 
 import { hashPassword } from "./security.js";
+import { effectiveClientId } from "./access.js";
+import { recordLoginDirectory } from "./tenant-db.js";
 
 export const CLASSIFICATIONS = {
   standard: "Standard",
@@ -69,8 +71,8 @@ export async function handleCreateAccount(request, session, env, corsHeaders) {
 
   const { salt, hash } = await hashPassword(password);
   await env.DB.prepare(
-    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, building_id, email, phone, status, is_active, contact_consent, contact_consent_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, 1, CURRENT_TIMESTAMP)`,
+    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, building_id, email, phone, status, is_active, contact_consent, contact_consent_at, client_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, 1, CURRENT_TIMESTAMP, ?)`,
   )
     .bind(
       email,
@@ -84,8 +86,14 @@ export async function handleCreateAccount(request, session, env, corsHeaders) {
       isFieldTier ? building.id : null,
       email,
       phone || null,
+      effectiveClientId(session),
     )
     .run();
+  // session.companyId is the control-plane id (which company, globally --
+  // not the local-to-this-database id effectiveClientId returns above),
+  // exactly what the login directory needs to route this person's next
+  // sign-in to the right database.
+  if (session.companyId) await recordLoginDirectory(env, email, session.companyId);
 
   return jsonOk({ ok: true, username: email }, corsHeaders);
 }

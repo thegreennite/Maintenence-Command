@@ -12,6 +12,30 @@ export function canSeeAllBuildings(session) {
   return session.role === "admin" || session.building_access === "all";
 }
 
+// Multi-tenant: every company (a maintenance company Power Log Command is
+// sold to) has its own physically separate database (see
+// worker/tenant-db.js) -- which one a request even talks to is resolved
+// before any handler runs (requireSession in index.js swaps env.DB to
+// the right one). session.client_id here is always the LOCAL self-id
+// inside that resolved database (always 1 by construction), never the
+// separate control-plane id that picked the database in the first
+// place -- see the detailed comment in requireSession. Given that, this
+// client_id scoping is now defense-in-depth rather than the primary
+// isolation boundary: it doesn't hurt, and it's what stops a bug in a
+// single query from accidentally touching another row even though
+// there's only ever one company's rows in play at all. active_client_id
+// is a leftover from before physical separation; it's never set on a
+// company's own sessions row anymore, so this always falls through to
+// session.client_id in practice.
+export function effectiveClientId(session) {
+  if (session.role === "admin") return session.active_client_id ?? session.client_id ?? null;
+  return session.client_id ?? null;
+}
+
+export function clientScopeSql(alias = "b") {
+  return `${alias}.client_id = ?`;
+}
+
 // Buildings a ROM can manage: their own (created_by) plus any an
 // Operations Manager has explicitly shared with them (building_managers).
 // A single fragment + the two params it needs (both session.id), reused

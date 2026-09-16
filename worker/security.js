@@ -79,14 +79,14 @@ export function readCookie(request, name) {
   return null;
 }
 
-export function sessionCookie(request, token, maxAgeSeconds) {
+export function sessionCookie(request, token, maxAgeSeconds, name = "fhg_session") {
   const url = new URL(request.url);
   const origin = request.headers.get("Origin");
   const originHost = origin ? new URL(origin).hostname : url.hostname;
   const isSecure = url.protocol === "https:";
   const crossSite = originHost !== url.hostname;
   const parts = [
-    `fhg_session=${encodeURIComponent(token)}`,
+    `${name}=${encodeURIComponent(token)}`,
     "Path=/",
     "HttpOnly",
     `Max-Age=${maxAgeSeconds}`,
@@ -96,6 +96,6 @@ export function sessionCookie(request, token, maxAgeSeconds) {
   return parts.join("; ");
 }
 
-export function clearSessionCookie(request) {
-  return sessionCookie(request, "", 0);
+export function clearSessionCookie(request, name = "fhg_session") {
+  return sessionCookie(request, "", 0, name);
 }

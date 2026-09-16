@@ -5,7 +5,7 @@
 // handle -- e.g. a ROM assigning a supply issue to the OM who owns
 // inventory.
 
-import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
+import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 
 const CATEGORY_LABELS = {
   inventory: "Inventory",
@@ -60,6 +60,7 @@ export async function handleFlagIssue(request, session, env, corsHeaders) {
 
 export async function handleManagerWorkOrders(session, env, corsHeaders) {
   const scoped = canSeeAllBuildings(session);
+  const clientId = effectiveClientId(session);
   const result = await env.DB.prepare(
     `SELECT w.id, w.source, w.category, w.title, w.description, w.reading_value, w.status,
        w.created_at, w.resolved_at, w.assigned_to, b.name AS building_name, b.id AS building_id,
@@ -68,25 +69,31 @@ export async function handleManagerWorkOrders(session, env, corsHeaders) {
      JOIN buildings b ON b.id = w.building_id
      LEFT JOIN users u ON u.id = w.created_by
      LEFT JOIN users assignee ON assignee.id = w.assigned_to
-     WHERE b.deleted_at IS NULL AND ${scoped ? "1=1" : `(${ownedOrSharedSql("b")} OR w.assigned_to = ?)`}
+     WHERE b.deleted_at IS NULL AND ${clientScopeSql("b")} AND ${scoped ? "1=1" : `(${ownedOrSharedSql("b")} OR w.assigned_to = ?)`}
      ORDER BY w.status ASC, w.created_at DESC
      LIMIT 50`,
   )
-    .bind(...(scoped ? [] : [session.id, session.id, session.id]))
+    .bind(clientId, ...(scoped ? [] : [session.id, session.id, session.id]))
     .all();
   return jsonOk({ workOrders: result.results }, corsHeaders);
 }
 
 async function findVisibleWorkOrder(env, session, workOrderId) {
   const scoped = canSeeAllBuildings(session);
+  const clientId = effectiveClientId(session);
   if (scoped) {
-    return env.DB.prepare("SELECT w.id, w.building_id FROM work_orders w WHERE w.id = ?").bind(workOrderId).first();
+    return env.DB.prepare(
+      `SELECT w.id, w.building_id FROM work_orders w JOIN buildings b ON b.id = w.building_id
+       WHERE w.id = ? AND ${clientScopeSql("b")}`,
+    )
+      .bind(workOrderId, clientId)
+      .first();
   }
   return env.DB.prepare(
     `SELECT w.id, w.building_id FROM work_orders w JOIN buildings b ON b.id = w.building_id
-     WHERE w.id = ? AND (${ownedOrSharedSql("b")} OR w.assigned_to = ?)`,
+     WHERE w.id = ? AND ${clientScopeSql("b")} AND (${ownedOrSharedSql("b")} OR w.assigned_to = ?)`,
   )
-    .bind(workOrderId, session.id, session.id, session.id)
+    .bind(workOrderId, clientId, session.id, session.id, session.id)
     .first();
 }
 
@@ -115,9 +122,9 @@ export async function handleAssignWorkOrder(request, session, env, corsHeaders) 
   if (!workOrder) return jsonError("Work order not found.", 404, corsHeaders);
 
   const assignee = await env.DB.prepare(
-    "SELECT id FROM users WHERE id = ? AND role IN ('regional_manager', 'admin') AND is_active = 1",
+    "SELECT id FROM users WHERE id = ? AND role IN ('regional_manager', 'admin') AND is_active = 1 AND client_id = ?",
   )
-    .bind(assigneeId)
+    .bind(assigneeId, effectiveClientId(session))
     .first();
   if (!assignee) return jsonError("That person can't be assigned work orders.", 400, corsHeaders);
 
@@ -133,10 +140,10 @@ export async function handleAssignWorkOrder(request, session, env, corsHeaders) 
 export async function handleAssignableUsers(session, env, corsHeaders) {
   const result = await env.DB.prepare(
     `SELECT id, full_name, job_title, role, building_access FROM users
-     WHERE role IN ('regional_manager', 'admin') AND is_active = 1 AND id != ?
+     WHERE role IN ('regional_manager', 'admin') AND is_active = 1 AND id != ? AND client_id = ?
      ORDER BY full_name`,
   )
-    .bind(session.id)
+    .bind(session.id, effectiveClientId(session))
     .all();
   return jsonOk({ users: result.results }, corsHeaders);
 }

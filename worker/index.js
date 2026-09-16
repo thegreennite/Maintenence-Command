@@ -66,6 +66,8 @@ import {
   handlePendingRequests,
   handlePendingRequestDecision,
 } from "./registration.js";
+import { dbForClient, clientForIdentifier, recordLoginDirectory } from "./tenant-db.js";
+import { handleListClients, handleSwitchClient, handleCreateBusiness } from "./clients.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 
@@ -109,6 +111,11 @@ export default {
       if (url.pathname === "/api/geocode/search" && request.method === "GET") {
         return handleGeocodeSearch(request, env, cors.headers);
       }
+      // "Add a business" -- also public, this IS how a brand-new
+      // company's first account gets created.
+      if (url.pathname === "/api/business/create" && request.method === "POST") {
+        return handleCreateBusiness(request, env, cors.headers);
+      }
 
       if (url.pathname === "/api/auth/logout" && request.method === "POST") {
         return handleLogout(request, env, cors.headers);
@@ -116,9 +123,30 @@ export default {
 
       const session = await requireSession(request, env);
       if (!session) return json({ error: "Authentication required" }, 401, cors.headers);
+      // From here on, env.DB transparently points at whichever company's
+      // database this session actually belongs to (or, for an agency
+      // session with no company selected yet, is left untouched --
+      // every handler below requires a real role/client_id match, which
+      // an agency-with-no-selection session deliberately doesn't have).
+      if (session.__db) env = { ...env, DB: session.__db };
 
       if (url.pathname === "/api/auth/me" && request.method === "GET") {
         return json(sessionPayload(session), 200, cors.headers);
+      }
+
+      // Agency-only: the broad, all-companies view and switching which
+      // company's data the rest of this app's routes below resolve to.
+      if (url.pathname === "/api/clients" && request.method === "GET") {
+        return handleListClients(session, env, cors.headers);
+      }
+      if (url.pathname === "/api/clients/switch" && request.method === "POST") {
+        return handleSwitchClient(request, session, env, cors.headers);
+      }
+      // An agency session with no company selected yet can't go any
+      // further than the two routes above -- every other route needs a
+      // real company's data to operate on.
+      if (session.isAgency && session.companyId == null) {
+        return json({ error: "Select a company first." }, 409, cors.headers);
       }
 
       if (url.pathname === "/api/dashboard" && request.method === "GET") {
@@ -587,10 +615,24 @@ async function handleLogin(request, env, corsHeaders) {
     return json({ error: "Username and password are required" }, 400, corsHeaders);
   }
 
+  // The agency (Lucas's cross-company) account is checked first -- it's a
+  // separate identity, not a row in any one company's own database.
+  const agencyResult = await tryAgencyLogin(request, env, username, password, corsHeaders);
+  if (agencyResult) return agencyResult;
+
+  // Otherwise, resolve which company this username belongs to before
+  // touching any app data -- a brand new company's users don't live in
+  // this Worker's static "DB" binding at all.
+  const clientId = await clientForIdentifier(env, username);
+  if (!clientId) return json({ error: "Invalid username or password" }, 401, corsHeaders);
+  const resolved = await dbForClient(env, clientId);
+  if (!resolved) return json({ error: "Invalid username or password" }, 401, corsHeaders);
+  const { client, db } = resolved;
+
   // Look up by username regardless of is_active — a pending/denied account
   // still needs to verify its password before we say anything about status,
   // so a wrong-password guess against a real email doesn't confirm it exists.
-  const user = await env.DB.prepare(
+  const user = await db.prepare(
     `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id, is_active, removed_at, classification
      FROM users WHERE username = ?`,
   )
@@ -602,6 +644,7 @@ async function handleLogin(request, env, corsHeaders) {
     : false;
 
   if (!valid) return json({ error: "Invalid username or password" }, 401, corsHeaders);
+  user.client_id = client.id;
 
   if (user.status === "pending") {
     return json({ error: "Your account is still pending approval from your operations manager." }, 403, corsHeaders);
@@ -621,15 +664,17 @@ async function handleLogin(request, env, corsHeaders) {
   const hasEmail = user.email || user.username.includes("@");
   if (hasEmail && needsVerification(user)) {
     try {
-      const pendingToken = await sendVerificationCode(env, user);
-      return json({ requiresVerification: true, pendingToken }, 200, corsHeaders);
+      const rawPendingToken = await sendVerificationCode(env, db, user);
+      // The client_id prefix lets handleVerifyCode find the right company
+      // database again -- a bare pending token doesn't say which one.
+      return json({ requiresVerification: true, pendingToken: `${client.id}.${rawPendingToken}` }, 200, corsHeaders);
     } catch (error) {
       console.error("2FA send failed", error);
       return json({ error: "Couldn't send your verification code. Try again in a moment." }, 502, corsHeaders);
     }
   }
 
-  return createSessionForUser(request, env, user, corsHeaders);
+  return createSessionForUser(request, env, db, client.id, user, corsHeaders);
 }
 
 async function handleVerifyCode(request, env, corsHeaders) {
@@ -638,34 +683,45 @@ async function handleVerifyCode(request, env, corsHeaders) {
   const code = String(body.code || "");
   if (!pendingToken || !code) return json({ error: "A code is required." }, 400, corsHeaders);
 
-  const result = await verifyCode(env, pendingToken, code);
+  const dot = pendingToken.indexOf(".");
+  const clientId = dot === -1 ? NaN : Number.parseInt(pendingToken.slice(0, dot), 10);
+  const rawToken = dot === -1 ? "" : pendingToken.slice(dot + 1);
+  const resolved = Number.isInteger(clientId) ? await dbForClient(env, clientId) : null;
+  if (!resolved) return json({ error: "That verification link has expired. Sign in again." }, 401, corsHeaders);
+  const { client, db } = resolved;
+
+  const result = await verifyCode(db, rawToken, code);
   if (!result.ok) return json({ error: result.error }, 401, corsHeaders);
 
-  const user = await env.DB.prepare(
+  const user = await db.prepare(
     `SELECT id, username, full_name, job_title, role, region, building_id, building_access, status, classification FROM users WHERE id = ?`,
   )
     .bind(result.userId)
     .first();
   if (!user) return json({ error: "Account not found." }, 404, corsHeaders);
 
-  return createSessionForUser(request, env, user, corsHeaders);
+  return createSessionForUser(request, env, db, client.id, user, corsHeaders);
 }
 
-async function createSessionForUser(request, env, user, corsHeaders) {
+async function createSessionForUser(request, env, db, clientId, user, corsHeaders) {
   const token = createSessionToken();
   const tokenHash = await hashToken(token);
   const ttlHours = Math.max(1, Number.parseInt(env.SESSION_TTL_HOURS || "12", 10));
   const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
 
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(new Date().toISOString()),
-    env.DB.prepare(
+  await db.batch([
+    db.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(new Date().toISOString()),
+    db.prepare(
       "INSERT INTO sessions (token_hash, user_id, actor_user_id, expires_at) VALUES (?, ?, ?, ?)",
     ).bind(tokenHash, user.id, user.id, expiresAt),
   ]);
 
+  user.client_id = clientId;
   const headers = new Headers(corsHeaders);
-  headers.set("Set-Cookie", sessionCookie(request, token, ttlHours * 60 * 60));
+  // The cookie value carries which company this session belongs to
+  // (clientId.token) -- requireSession needs that to know which
+  // database to even look the token up in.
+  headers.set("Set-Cookie", sessionCookie(request, `${clientId}.${token}`, ttlHours * 60 * 60));
   return json(
     {
       user: publicUser(user),
@@ -677,15 +733,73 @@ async function createSessionForUser(request, env, user, corsHeaders) {
   );
 }
 
-async function handleLogout(request, env, corsHeaders) {
-  const token = readCookie(request, "fhg_session");
-  if (token) {
-    await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?")
-      .bind(await hashToken(token))
-      .run();
-  }
+// The agency account lives in the control-plane database, entirely
+// separate from any one company's users -- it's the one identity that
+// needs to reach across every company. Returns a Response if `username`
+// matched an agency account (right or wrong password), or null so the
+// caller falls through to the normal per-company login.
+async function tryAgencyLogin(request, env, username, password, corsHeaders) {
+  const agencyUser = await env.CONTROL_DB.prepare(
+    "SELECT id, username, password_hash, password_salt, full_name, is_active FROM agency_users WHERE username = ?",
+  )
+    .bind(username)
+    .first();
+  if (!agencyUser) return null;
+
+  const valid = await verifyPassword(password, agencyUser.password_salt, agencyUser.password_hash);
+  if (!valid) return json({ error: "Invalid username or password" }, 401, corsHeaders);
+  if (!agencyUser.is_active) return json({ error: "This account has been removed." }, 403, corsHeaders);
+
+  const token = createSessionToken();
+  const tokenHash = await hashToken(token);
+  const ttlHours = 12;
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
+
+  await env.CONTROL_DB.batch([
+    env.CONTROL_DB.prepare("DELETE FROM agency_sessions WHERE expires_at <= ?").bind(new Date().toISOString()),
+    env.CONTROL_DB.prepare(
+      "INSERT INTO agency_sessions (token_hash, agency_user_id, expires_at, last_seen_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+    ).bind(tokenHash, agencyUser.id, expiresAt),
+  ]);
+
   const headers = new Headers(corsHeaders);
-  headers.set("Set-Cookie", clearSessionCookie(request));
+  headers.set("Set-Cookie", sessionCookie(request, token, ttlHours * 60 * 60, "plc_agency_session"));
+  return json(
+    {
+      user: { id: null, username: agencyUser.username, fullName: agencyUser.full_name, role: "agency", roleLabel: "Agency", isAgency: true },
+      actor: { id: null, username: agencyUser.username, fullName: agencyUser.full_name, role: "agency", roleLabel: "Agency", isAgency: true },
+      isImpersonating: false,
+      activeClientId: null,
+    },
+    200,
+    headers,
+  );
+}
+
+async function handleLogout(request, env, corsHeaders) {
+  const headers = new Headers(corsHeaders);
+  const agencyToken = readCookie(request, "plc_agency_session");
+  if (agencyToken) {
+    await env.CONTROL_DB.prepare("DELETE FROM agency_sessions WHERE token_hash = ?")
+      .bind(await hashToken(agencyToken))
+      .run();
+    headers.append("Set-Cookie", clearSessionCookie(request, "plc_agency_session"));
+  }
+
+  const raw = readCookie(request, "fhg_session");
+  if (raw) {
+    const dot = raw.indexOf(".");
+    const clientId = dot === -1 ? NaN : Number.parseInt(raw.slice(0, dot), 10);
+    const token = dot === -1 ? "" : raw.slice(dot + 1);
+    const resolved = Number.isInteger(clientId) ? await dbForClient(env, clientId) : null;
+    if (resolved && token) {
+      await resolved.db.prepare("DELETE FROM sessions WHERE token_hash = ?")
+        .bind(await hashToken(token))
+        .run();
+    }
+    headers.append("Set-Cookie", clearSessionCookie(request));
+  }
+
   return json({ ok: true }, 200, headers);
 }
 
@@ -718,6 +832,16 @@ async function handleImpersonate(request, session, env, corsHeaders) {
   const isManager = session.actor_role === "regional_manager";
   if (!isAdmin && !isManager) {
     return json({ error: "Not permitted" }, 403, corsHeaders);
+  }
+  // The agency account, viewing a company, is synthesized (id -1) rather
+  // than a real row in that company's own users table -- there's no
+  // session row to hand off to an impersonated account and back the way
+  // a real admin's session works, so this would silently no-op rather
+  // than actually switch (see the detailed note on requireAgencySession).
+  // Fail loudly here instead of letting the UI hang waiting for a
+  // dashboard that never changes.
+  if (session.isAgency) {
+    return json({ error: "The agency account can't open individual accounts yet — ask that company's own admin." }, 403, corsHeaders);
   }
 
   const body = await readJson(request);
@@ -758,6 +882,12 @@ async function handleAdminReturn(session, env, corsHeaders) {
   if (session.actor_role !== "admin" && session.actor_role !== "regional_manager") {
     return json({ error: "Not permitted" }, 403, corsHeaders);
   }
+  // See the matching guard in handleImpersonate -- an agency session was
+  // never actually impersonating anyone (that call is rejected up front),
+  // so there's nothing real to "return" from here either.
+  if (session.isAgency) {
+    return json({ error: "Not permitted" }, 403, corsHeaders);
+  }
 
   await env.DB.prepare("UPDATE sessions SET user_id = actor_user_id, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
     .bind(session.session_id)
@@ -767,13 +897,27 @@ async function handleAdminReturn(session, env, corsHeaders) {
   return json({ user: actor, actor, isImpersonating: false }, 200, corsHeaders);
 }
 
-async function requireSession(request, env) {
-  const token = readCookie(request, "fhg_session");
-  if (!token) return null;
+const INACTIVITY_LIMIT_MS = 60 * 60 * 1000;
 
-  const session = await env.DB.prepare(
+async function requireSession(request, env) {
+  const agencyToken = readCookie(request, "plc_agency_session");
+  if (agencyToken) return requireAgencySession(agencyToken, env);
+
+  const raw = readCookie(request, "fhg_session");
+  if (!raw) return null;
+  const dot = raw.indexOf(".");
+  if (dot === -1) return null;
+  const clientId = Number.parseInt(raw.slice(0, dot), 10);
+  const token = raw.slice(dot + 1);
+  if (!Number.isInteger(clientId) || !token) return null;
+
+  const resolved = await dbForClient(env, clientId);
+  if (!resolved) return null;
+  const { db } = resolved;
+
+  const session = await db.prepare(
     `SELECT s.id AS session_id, s.expires_at, s.last_seen_at,
-       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification,
+       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification, u.client_id,
        actor.id AS actor_id, actor.username AS actor_username,
        actor.full_name AS actor_full_name, actor.job_title AS actor_job_title,
        actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access
@@ -784,24 +928,121 @@ async function requireSession(request, env) {
   )
     .bind(await hashToken(token), new Date().toISOString())
     .first();
+  if (!session) return null;
 
   // Inactivity timeout: even within the absolute session lifetime, an hour
   // with no requests locks the account out and requires signing back in.
-  const INACTIVITY_LIMIT_MS = 60 * 60 * 1000;
-  if (session) {
-    const idleMs = Date.now() - new Date(session.last_seen_at + "Z").getTime();
-    if (idleMs > INACTIVITY_LIMIT_MS) {
-      await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(session.session_id).run();
-      return null;
-    }
+  const idleMs = Date.now() - new Date(session.last_seen_at + "Z").getTime();
+  if (idleMs > INACTIVITY_LIMIT_MS) {
+    await db.prepare("DELETE FROM sessions WHERE id = ?").bind(session.session_id).run();
+    return null;
   }
 
-  if (session) {
-    await env.DB.prepare("UPDATE sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .bind(session.session_id)
-      .run();
-  }
+  await db.prepare("UPDATE sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(session.session_id)
+    .run();
+
+  // session.client_id (selected above) is the LOCAL self-id inside this
+  // company's own database -- always 1 by construction (see
+  // provisionCompanyDatabase) -- and that's what effectiveClientId /
+  // clientScopeSql throughout worker/*.js correctly compares against,
+  // since that's the only company's data this database even contains.
+  // clientId (from the cookie) is the separate control-plane id, used
+  // only to have picked the right `db` above and to tell the frontend
+  // which real company this is -- it must never be written onto
+  // session.client_id, which single-database-per-company code relies on
+  // staying local (an earlier draft of this code did exactly that and it
+  // silently broke every company except Forest Hill Group's, whose two
+  // ids happen to coincidentally both be 1).
+  session.companyId = clientId;
+  session.__db = db;
   return session;
+}
+
+// The agency account (Lucas, overseeing every company) lives in the
+// control-plane database, not inside any one company's own users table.
+// With no company selected yet, the returned session's role ("agency")
+// doesn't satisfy any existing handler's role check, which is exactly
+// the "pick a company first" gate the broad view needs. Once a company
+// IS selected (see handleSwitchClient in worker/clients.js), this
+// synthesizes a session that looks exactly like that company's own
+// admin, so every existing handler works completely unchanged -- id -1
+// is a sentinel for "the agency account", since there's no real row for
+// it in that company's own users table.
+async function requireAgencySession(token, env) {
+  const row = await env.CONTROL_DB.prepare(
+    `SELECT s.id AS session_id, s.expires_at, s.last_seen_at, s.active_client_id,
+       a.id AS agency_user_id, a.username, a.full_name, a.is_active
+     FROM agency_sessions s JOIN agency_users a ON a.id = s.agency_user_id
+     WHERE s.token_hash = ? AND s.expires_at > ?`,
+  )
+    .bind(await hashToken(token), new Date().toISOString())
+    .first();
+  if (!row || !row.is_active) return null;
+
+  const idleMs = Date.now() - new Date(row.last_seen_at + "Z").getTime();
+  if (idleMs > INACTIVITY_LIMIT_MS) {
+    await env.CONTROL_DB.prepare("DELETE FROM agency_sessions WHERE id = ?").bind(row.session_id).run();
+    return null;
+  }
+  await env.CONTROL_DB.prepare("UPDATE agency_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(row.session_id)
+    .run();
+
+  const base = {
+    isAgency: true,
+    agencyUserId: row.agency_user_id,
+    session_id: row.session_id,
+    username: row.username,
+    full_name: row.full_name,
+  };
+
+  if (row.active_client_id == null) {
+    return {
+      ...base,
+      id: null,
+      role: "agency",
+      actor_id: null,
+      actor_username: row.username,
+      actor_full_name: row.full_name,
+      actor_role: "agency",
+      client_id: null,
+      companyId: null,
+    };
+  }
+
+  const resolved = await dbForClient(env, row.active_client_id);
+  if (!resolved) {
+    // The company they were inside got suspended/removed since they
+    // switched into it -- fall back to the broad view rather than error.
+    await env.CONTROL_DB.prepare("UPDATE agency_sessions SET active_client_id = NULL WHERE id = ?")
+      .bind(row.session_id)
+      .run();
+    return requireAgencySession(token, env);
+  }
+
+  return {
+    ...base,
+    id: -1,
+    job_title: "Agency",
+    role: "admin",
+    region: null,
+    building_id: null,
+    building_access: "all",
+    classification: "standard",
+    // Local self-id inside the target company's own database, not the
+    // control-plane id -- see the matching comment in requireSession.
+    client_id: 1,
+    actor_id: -1,
+    actor_username: row.username,
+    actor_full_name: row.full_name,
+    actor_job_title: "Agency",
+    actor_role: "admin",
+    actor_region: null,
+    actor_building_access: "all",
+    companyId: row.active_client_id,
+    __db: resolved.db,
+  };
 }
 
 function sessionPayload(session) {
@@ -809,6 +1050,14 @@ function sessionPayload(session) {
     user: publicUser(session),
     actor: actorUser(session),
     isImpersonating: session.id !== session.actor_id,
+    isAgency: session.isAgency === true,
+    // The real, control-plane company id -- which company (if any) this
+    // session is currently looking at. Switchable for the agency account
+    // (see worker/clients.js); everyone else is always looking at their
+    // own home company. Not the same as user.clientId below, which is
+    // always the harmless-but-meaningless local id (1) inside whichever
+    // company database this request resolved to.
+    activeClientId: session.companyId ?? null,
   };
 }
 
@@ -828,6 +1077,7 @@ function publicUser(user) {
     roleLabel: displayRoleLabel(user.role, user.building_access),
     region: user.region,
     classification: user.classification || "standard",
+    clientId: user.companyId ?? user.client_id ?? null,
   };
 }
 

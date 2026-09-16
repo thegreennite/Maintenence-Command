@@ -8,6 +8,21 @@ database_name = "fhg-command-db"
 database_id = "96ae85a7-61f5-493e-847b-51a17aa39465"
 migrations_dir = "migrations"
 
+# Control-plane database: the registry of every company using Power Log
+# Command (the "clients" table) plus the email->company directory login
+# uses to find the right company database before a session exists. Each
+# company's actual app data (users, buildings, inspections, everything)
+# lives in ITS OWN separate D1 database, never in this one -- see
+# worker/tenant-db.js. Forest Hill Group is the one exception that gets
+# to use the fast native "DB" binding above directly instead of the HTTP
+# API path every other (future) company uses, since it's already wired
+# in as a real binding.
+[[d1_databases]]
+binding = "CONTROL_DB"
+database_name = "power-log-command-control"
+database_id = "f321a737-e02b-490a-a5b0-61da0551b7c6"
+migrations_dir = "control-migrations"
+
 [[r2_buckets]]
 binding = "PHOTOS"
 bucket_name = "fhg-command-photos"

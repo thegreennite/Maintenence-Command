@@ -78,6 +78,9 @@ const state = {
   // default so it doesn't dump one building's entire reading list onto the
   // dashboard; same arrow-toggle idea as the portfolio rows above.
   managerParametersExpanded: false,
+  // Agency (cross-company) account state -- see worker/clients.js.
+  agencyClients: [],
+  agencyActiveCompanyName: null,
 };
 
 // In dev, Vite proxies /api to the local Worker (see vite.config.js), so a
@@ -139,6 +142,18 @@ const api = {
   },
   returnToAdmin() {
     return this.request("/admin/return", { method: "POST" });
+  },
+  // Agency (cross-company) account only -- see worker/clients.js.
+  listClients() {
+    return this.request("/clients");
+  },
+  switchClient(clientId) {
+    return this.request("/clients/switch", { method: "POST", body: JSON.stringify({ clientId }) });
+  },
+  // Public: no session required, this IS how a brand-new company's first
+  // account gets created ("Add a business" on the login screen).
+  createBusiness(payload) {
+    return this.request("/business/create", { method: "POST", body: JSON.stringify(payload) });
   },
   inspectionToday() {
     return this.request("/inspections/today");
@@ -448,9 +463,12 @@ function renderLogin(message = "") {
       </section>
       <section class="login-panel">
         <div class="login-form-wrap">
-          <div class="mobile-brand brand">
-            <span class="brand-mark">${icon("command")}</span>
-            <span>FHG <strong>Command</strong></span>
+          <div class="login-panel__top">
+            <div class="mobile-brand brand">
+              <span class="brand-mark">${icon("command")}</span>
+              <span>FHG <strong>Command</strong></span>
+            </div>
+            <button type="button" class="link-button add-business-link" id="add-business-link">+ Add a business</button>
           </div>
           <p class="eyebrow">Secure access</p>
           <h2>Welcome back</h2>
@@ -476,10 +494,79 @@ function renderLogin(message = "") {
     </main>`;
 
   document.querySelector("#create-account-link")?.addEventListener("click", () => startRegistration());
+  document.querySelector("#add-business-link")?.addEventListener("click", () => renderAddBusinessModal());
 
   document.querySelector("#login-form").addEventListener("submit", handleLogin);
   bindPasswordToggles();
   document.querySelector('input[name="username"]').focus();
+}
+
+// "Add a business" -- self-serve company signup, reachable from the login
+// screen without an account. Instant: the new Operations Manager account
+// is usable the moment this succeeds, credentials arrive by email.
+// `fromAgencyView`: true when opened from inside the already-logged-in
+// agency broad view (as opposed to the public login screen) -- changes
+// the close button's label/behavior to refresh the companies list
+// instead of implying a return to sign-in.
+function renderAddBusinessModal(fromAgencyView = false) {
+  const existing = document.querySelector("#add-business-modal");
+  if (existing) existing.remove();
+
+  const wrap = document.createElement("div");
+  wrap.id = "add-business-modal";
+  wrap.className = "modal-overlay";
+  wrap.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="add-business-title">
+      <h3 id="add-business-title">${icon("command")} Set up your company</h3>
+      <p class="form-intro">Get your own Power Log Command workspace, fully separate from every other company's. You'll be set up as the Operations Manager — from there you can add Area Managers and Superintendents and start registering buildings.</p>
+      <form id="add-business-form" class="login-form">
+        <label><span>Company name</span><input name="companyName" required maxlength="120" autocomplete="organization" /></label>
+        <label><span>Your name</span><input name="fullName" required maxlength="120" autocomplete="name" /></label>
+        <label><span>Your email</span><input name="email" type="email" required autocomplete="email" /></label>
+        <label><span>Phone <small>(optional)</small></span><input name="phone" type="tel" autocomplete="tel" /></label>
+        <p class="form-error" id="add-business-error" hidden role="alert"></p>
+        <div class="inspection-actions">
+          <button type="button" class="button button--outline" id="cancel-add-business">Cancel</button>
+          <button type="submit" class="button button--primary">Create my workspace</button>
+        </div>
+      </form>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  wrap.querySelector("#cancel-add-business").addEventListener("click", () => wrap.remove());
+  wrap.querySelector("#add-business-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const error = wrap.querySelector("#add-business-error");
+    const data = new FormData(form);
+    error.hidden = true;
+    button.disabled = true;
+    button.textContent = "Setting up…";
+    try {
+      const response = await api.createBusiness({
+        companyName: data.get("companyName"),
+        fullName: data.get("fullName"),
+        email: data.get("email"),
+        phone: data.get("phone"),
+      });
+      wrap.querySelector(".modal-card").innerHTML = `
+        <h3>${icon("shield")} You're all set</h3>
+        <p>${escapeHtml(response.message)}</p>
+        <div class="inspection-actions">
+          <button type="button" class="button button--primary" id="close-add-business">${fromAgencyView ? "Done" : "Back to sign in"}</button>
+        </div>`;
+      wrap.querySelector("#close-add-business").addEventListener("click", async () => {
+        wrap.remove();
+        if (fromAgencyView) await loadAgencyBroadView();
+      });
+    } catch (requestError) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+      button.disabled = false;
+      button.textContent = "Create my workspace";
+    }
+  });
 }
 
 const ROLE_LABELS_FOR_REGISTRATION = {
@@ -539,7 +626,7 @@ function renderRegisterRoleStep() {
         <select name="role" required>
           <option value="" disabled selected>Select your role</option>
           <option value="superintendent">Superintendent</option>
-          <option value="property_manager">Property Manager</option>
+          <option value="property_manager" disabled>Property Manager (coming soon)</option>
           <option value="regional_manager">Area Manager</option>
           <option value="operations_manager">Operations Manager</option>
         </select>
@@ -681,7 +768,11 @@ async function handleLogin(event) {
       return;
     }
     state.session = response;
-    await loadDashboard();
+    if (response.user.role === "agency" && response.activeClientId == null) {
+      await loadAgencyBroadView();
+    } else {
+      await loadDashboard();
+    }
   } catch (requestError) {
     error.textContent = requestError.message;
     error.hidden = false;
@@ -756,8 +847,41 @@ async function handleVerifyCode(event, pendingToken) {
   }
 }
 
+// Broad, all-companies view for the agency account (Lucas) -- shown
+// instead of a normal dashboard whenever no company is selected yet.
+async function loadAgencyBroadView() {
+  renderLoading();
+  const { clients } = await api.listClients().catch(() => ({ clients: [] }));
+  state.agencyClients = clients;
+  state.agencyActiveCompanyName = null;
+  renderApp();
+}
+
+async function handleEnterClient(clientId) {
+  await api.switchClient(clientId);
+  state.session = await api.session();
+  state.agencyActiveCompanyName = state.agencyClients.find((c) => c.id === clientId)?.name || null;
+  await loadDashboard();
+}
+
+async function handleExitAgencyClient() {
+  await api.switchClient(null);
+  state.session = await api.session();
+  await loadAgencyBroadView();
+}
+
 async function loadDashboard() {
   renderLoading();
+  // An agency session already inside a company (isAgency, but a real
+  // company is selected) still needs the company's real name for the
+  // "which company am I in" banner -- refetched here too, not just on
+  // handleEnterClient, so a page reload while already inside a company
+  // shows the right name instead of a blank one.
+  if (state.session?.isAgency && state.session?.activeClientId != null && !state.agencyActiveCompanyName) {
+    const { clients } = await api.listClients().catch(() => ({ clients: [] }));
+    state.agencyClients = clients;
+    state.agencyActiveCompanyName = clients.find((c) => c.id === state.session.activeClientId)?.name || null;
+  }
   const isAdminActor = state.session?.actor?.role === "admin";
   const isAdminViewing = state.session?.user?.role === "admin";
   const isSuperintendent = state.session?.user?.role === "superintendent";
@@ -840,8 +964,9 @@ function stopAdminStatsAutoRefresh() {
 }
 
 function renderApp() {
-  const { user, actor, isImpersonating } = state.session;
-  setDocumentTitle(user.roleLabel);
+  const { user, actor, isImpersonating, isAgency } = state.session;
+  const isAgencyBroadView = user.role === "agency";
+  setDocumentTitle(isAgencyBroadView ? "All companies" : user.roleLabel);
   app.innerHTML = `
     <div class="app-shell">
       <header class="topbar">
@@ -851,11 +976,15 @@ function renderApp() {
         </a>
         <div class="topbar__right">
           <span class="role-pill">${escapeHtml(user.roleLabel)}</span>
-          <button class="user-identity user-identity--button" id="open-profile-edit" title="Edit your profile">
-            <span class="avatar">${escapeHtml(initials(user.fullName))}</span>
-            <span><strong>${escapeHtml(user.fullName)}</strong><small>${escapeHtml(user.jobTitle)}</small></span>
-            ${icon("edit")}
-          </button>
+          ${
+            user.id != null
+              ? `<button class="user-identity user-identity--button" id="open-profile-edit" title="Edit your profile">
+                  <span class="avatar">${escapeHtml(initials(user.fullName))}</span>
+                  <span><strong>${escapeHtml(user.fullName)}</strong><small>${escapeHtml(user.jobTitle || "")}</small></span>
+                  ${icon("edit")}
+                </button>`
+              : `<span class="user-identity"><span class="avatar">${escapeHtml(initials(user.fullName))}</span><span><strong>${escapeHtml(user.fullName)}</strong></span></span>`
+          }
           <button class="icon-button" id="logout-button" title="Sign out" aria-label="Sign out">${icon("logout")}</button>
         </div>
       </header>
@@ -865,22 +994,76 @@ function renderApp() {
               <span>${icon("shield")} <strong>${escapeHtml(actor.fullName)}</strong> is viewing as ${escapeHtml(user.fullName)}</span>
               <button class="button button--small button--light" id="return-admin">Return to ${escapeHtml(actor.fullName.split(" ")[0])}</button>
             </aside>`
-          : ""
+          : isAgency && !isAgencyBroadView
+            ? `<aside class="impersonation-bar">
+                <span>${icon("shield")} Agency view — <strong>${escapeHtml(state.agencyActiveCompanyName || "this company")}</strong></span>
+                <button class="button button--small button--light" id="exit-agency-client">← All companies</button>
+              </aside>`
+            : ""
       }
       <main class="dashboard">
-        ${renderDashboard(state.dashboard)}
+        ${isAgencyBroadView ? renderAgencyClients() : renderDashboard(state.dashboard)}
       </main>
       <footer class="app-footer"><span>FHG Command</span><span>Phase 5 · Secure operations workspace</span></footer>
     </div>`;
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
   document.querySelector("#return-admin")?.addEventListener("click", handleReturnToAdmin);
+  document.querySelector("#exit-agency-client")?.addEventListener("click", handleExitAgencyClient);
   document.querySelector("#open-profile-edit")?.addEventListener("click", () => renderProfileEditModal(user));
+  if (isAgencyBroadView) {
+    bindAgencyClientsEvents();
+    return;
+  }
   if (state.commandMode?.active) {
     bindCommandModeEvents();
   } else {
     bindDashboardEvents();
   }
+}
+
+function renderAgencyClients() {
+  const clients = state.agencyClients || [];
+  return `
+    <section class="dashboard-heading">
+      <div>
+        <p class="eyebrow">Agency view</p>
+        <h1>All companies</h1>
+        <p>Every company running on Power Log Command. Enter one to see its dashboard exactly as its own Operations Manager would.</p>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card__header">
+        <div><p class="section-kicker">Companies</p><h2>${clients.length} total</h2></div>
+        <button class="button button--primary button--small" id="agency-add-business">+ Add a business</button>
+      </div>
+      ${
+        clients.length
+          ? `<div class="agency-client-list">
+              ${clients
+                .map(
+                  (c) => `
+                <div class="agency-client-row">
+                  <div class="agency-client-row__name">
+                    <strong>${escapeHtml(c.name)}</strong>
+                    <small>${escapeHtml(c.plan)} plan${c.building_limit != null ? ` · up to ${c.building_limit} buildings` : " · unlimited buildings"}</small>
+                  </div>
+                  <span class="status-pill status-pill--${c.status === "active" ? "success" : "neutral"}">${escapeHtml(c.status)}</span>
+                  <button class="button button--small" data-client-id="${c.id}" data-action="enter-client">Enter company</button>
+                </div>`,
+                )
+                .join("")}
+            </div>`
+          : `<p class="empty-state">No companies yet — add the first one to get started.</p>`
+      }
+    </section>`;
+}
+
+function bindAgencyClientsEvents() {
+  document.querySelector("#agency-add-business")?.addEventListener("click", () => renderAddBusinessModal(true));
+  document.querySelectorAll('[data-action="enter-client"]').forEach((button) => {
+    button.addEventListener("click", () => handleEnterClient(Number(button.dataset.clientId)));
+  });
 }
 
 function renderDashboard(data) {
@@ -1669,7 +1852,10 @@ function renderAdminAddAccountForm() {
       <label class="inspection-field"><span>Role</span>
         <select name="role" id="add-account-role">
           ${Object.entries(ADMIN_CREATABLE_ROLES)
-            .map(([value, label]) => `<option value="${value}" ${role === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
+            .map(
+              ([value, label]) =>
+                `<option value="${value}" ${role === value ? "selected" : ""} ${value === "property_manager" ? "disabled" : ""}>${escapeHtml(label)}${value === "property_manager" ? " (coming soon)" : ""}</option>`,
+            )
             .join("")}
         </select>
       </label>
@@ -5276,6 +5462,8 @@ async function handleLogout(event) {
   state.session = null;
   state.dashboard = null;
   state.accounts = [];
+  state.agencyClients = [];
+  state.agencyActiveCompanyName = null;
   renderLogin();
 }
 
@@ -5283,7 +5471,11 @@ async function bootstrap() {
   renderLoading();
   try {
     state.session = await api.session();
-    await loadDashboard();
+    if (state.session.user.role === "agency" && state.session.activeClientId == null) {
+      await loadAgencyBroadView();
+    } else {
+      await loadDashboard();
+    }
   } catch (error) {
     if (error.status && error.status !== 401) {
       renderLogin("The command service is unavailable. Start the local Worker and try again.");

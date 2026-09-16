@@ -13,12 +13,17 @@ export function needsVerification(user) {
   return ageMs > VERIFICATION_VALID_DAYS * 24 * 60 * 60 * 1000;
 }
 
-export async function sendVerificationCode(env, user) {
+// `db` is the resolved company database (FHG's native binding, or the
+// HTTP-routed one for any other company) -- resolved by the caller
+// (handleLogin/handleVerifyCode in index.js) since a pending 2FA token
+// alone doesn't say which company it belongs to; the caller encodes
+// that into the token it hands back to the frontend instead.
+export async function sendVerificationCode(env, db, user) {
   const code = String(Math.floor(100_000 + Math.random() * 900_000));
   const pendingToken = createSessionToken();
   const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60 * 1000).toISOString();
 
-  await env.DB.prepare(
+  await db.prepare(
     "INSERT INTO two_factor_codes (user_id, code, pending_token, expires_at) VALUES (?, ?, ?, ?)",
   )
     .bind(user.id, code, pendingToken, expiresAt)
@@ -27,7 +32,7 @@ export async function sendVerificationCode(env, user) {
   let contactId = user.ghl_contact_id;
   if (!contactId) {
     contactId = await ghlUpsertContact(env, { email: user.username.includes("@") ? user.username : user.email, name: user.full_name });
-    await env.DB.prepare("UPDATE users SET ghl_contact_id = ? WHERE id = ?").bind(contactId, user.id).run();
+    await db.prepare("UPDATE users SET ghl_contact_id = ? WHERE id = ?").bind(contactId, user.id).run();
   }
 
   await ghlSendEmail(env, {
@@ -39,8 +44,8 @@ export async function sendVerificationCode(env, user) {
   return pendingToken;
 }
 
-export async function verifyCode(env, pendingToken, code) {
-  const row = await env.DB.prepare(
+export async function verifyCode(db, pendingToken, code) {
+  const row = await db.prepare(
     "SELECT id, user_id, code, expires_at FROM two_factor_codes WHERE pending_token = ?",
   )
     .bind(pendingToken)
@@ -48,16 +53,16 @@ export async function verifyCode(env, pendingToken, code) {
 
   if (!row) return { ok: false, error: "That verification link has expired. Sign in again." };
   if (new Date(row.expires_at + "Z").getTime() < Date.now()) {
-    await env.DB.prepare("DELETE FROM two_factor_codes WHERE id = ?").bind(row.id).run();
+    await db.prepare("DELETE FROM two_factor_codes WHERE id = ?").bind(row.id).run();
     return { ok: false, error: "That code has expired. Sign in again to get a new one." };
   }
   if (row.code !== String(code).trim()) {
     return { ok: false, error: "That code doesn't match. Try again." };
   }
 
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM two_factor_codes WHERE id = ?").bind(row.id),
-    env.DB.prepare("UPDATE users SET last_2fa_verified_at = CURRENT_TIMESTAMP WHERE id = ?").bind(row.user_id),
+  await db.batch([
+    db.prepare("DELETE FROM two_factor_codes WHERE id = ?").bind(row.id),
+    db.prepare("UPDATE users SET last_2fa_verified_at = CURRENT_TIMESTAMP WHERE id = ?").bind(row.user_id),
   ]);
 
   return { ok: true, userId: row.user_id };
