@@ -5,12 +5,12 @@
 // sub-account's media library, organized into one folder per ISO week
 // of the inspection, never mixed with any other company's media.
 //
-// NOT YET WIRED IN as the live photo store -- worker/photos.js's
-// storePhoto() still writes to R2. This module needs to be exercised
-// against the real FHG Maintenance sub-account first (folder-lookup and
-// upload request shapes below are built from GHL's documented API
-// surface, not yet confirmed against a live response) before anything
-// switches over.
+// Live as of 2026-09-17 -- worker/photos.js's storePhoto() uses this
+// whenever env.GHL_API_KEY/env.GHL_LOCATION_ID are configured (falls
+// back to R2 otherwise, for a future company without its own sub-
+// account yet). Confirmed against FHG's real sub-account: folder
+// list/create uses altId+altType=location (not locationId, which GHL's
+// API rejects with a 422).
 
 const GHL_API = "https://services.leadconnectorhq.com";
 
@@ -62,7 +62,7 @@ async function ensureFolder(creds, name, parentId = null) {
   const cacheKey = `${parentId || "root"}/${name}`;
   if (folderIdCache.has(cacheKey)) return folderIdCache.get(cacheKey);
 
-  const listParams = new URLSearchParams({ locationId: creds.locationId, type: "folder" });
+  const listParams = new URLSearchParams({ altId: creds.locationId, altType: "location", type: "folder" });
   if (parentId) listParams.set("parentId", parentId);
   const listed = await ghlMediaFetch(creds, `/medias/files?${listParams}`);
   const existing = (listed.files || listed.medias || []).find((f) => f.name === name);
@@ -74,7 +74,7 @@ async function ensureFolder(creds, name, parentId = null) {
   const created = await ghlMediaFetch(creds, "/medias/folder", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ locationId: creds.locationId, name, parentId: parentId || undefined }),
+    body: JSON.stringify({ altId: creds.locationId, altType: "location", name, parentId: parentId || undefined }),
   });
   const folderId = created.id || created.folder?.id;
   folderIdCache.set(cacheKey, folderId);
@@ -92,7 +92,8 @@ export async function uploadInspectionPhotoToGhl(creds, { imageBase64, mediaType
   const binary = Uint8Array.from(atob(imageBase64), (c) => c.charCodeAt(0));
   const form = new FormData();
   form.append("file", new Blob([binary], { type: mediaType }), fileName);
-  form.append("locationId", creds.locationId);
+  form.append("altId", creds.locationId);
+  form.append("altType", "location");
   form.append("parentId", weekFolderId);
 
   const uploaded = await ghlMediaFetch(creds, "/medias/upload-file", { method: "POST", body: form });

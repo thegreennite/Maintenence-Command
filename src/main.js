@@ -290,8 +290,8 @@ const api = {
   updateProfile(payload) {
     return this.request("/profile", { method: "POST", body: JSON.stringify(payload) });
   },
-  photoViewUrl(key) {
-    return `${API_BASE}/api/photos/view?key=${encodeURIComponent(key)}`;
+  photoViewUrl(key, buildingId) {
+    return `${API_BASE}/api/photos/view?key=${encodeURIComponent(key)}&buildingId=${buildingId}`;
   },
   commandModePhoto(payload) {
     return this.request("/inspections/command-photo", { method: "POST", body: JSON.stringify(payload) });
@@ -3112,8 +3112,8 @@ function renderPhotoLibraryCard(defaultBuildingId, buildingOptions) {
                 ? lib.photos
                     .map((p) =>
                       p.key.toLowerCase().endsWith(".pdf")
-                        ? `<a href="${api.photoViewUrl(p.key)}" target="_blank" rel="noopener" class="photo-library__thumb photo-library__thumb--file">${icon("file")}<span>PDF · ${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`
-                        : `<a href="${api.photoViewUrl(p.key)}" target="_blank" rel="noopener" class="photo-library__thumb"><img src="${api.photoViewUrl(p.key)}" alt="" loading="lazy" /><span>${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`,
+                        ? `<a href="${api.photoViewUrl(p.key, lib.buildingId)}" target="_blank" rel="noopener" class="photo-library__thumb photo-library__thumb--file">${icon("file")}<span>PDF · ${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`
+                        : `<a href="${api.photoViewUrl(p.key, lib.buildingId)}" target="_blank" rel="noopener" class="photo-library__thumb"><img src="${api.photoViewUrl(p.key, lib.buildingId)}" alt="" loading="lazy" /><span>${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`,
                     )
                     .join("")
                 : lib.selectedDate
