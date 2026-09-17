@@ -46,6 +46,7 @@ export async function storePhoto(env, { buildingId, imageBase64, mediaType, cont
     const result = await uploadInspectionPhotoToGhl(
       { apiKey: env.GHL_API_KEY, locationId: env.GHL_LOCATION_ID },
       { imageBase64, mediaType, buildingName: building?.name || `building-${buildingId}`, inspectionDateIso: date, fileName },
+      env,
     );
     backend = "ghl";
     location = result.url;

@@ -3861,7 +3861,12 @@ function startCommandMode() {
   renderApp();
 }
 
-function exitCommandMode() {
+// Awaits any pending/in-flight background save first (see
+// commandModeScheduleSave) -- with saves now debounced rather than
+// blocking every question, this is the one moment that actually needs
+// the server fully caught up before state.commandMode disappears.
+async function exitCommandMode() {
+  await commandModeFlushSave();
   state.commandMode = null;
   renderApp();
 }
@@ -3963,6 +3968,45 @@ async function commandModeSave() {
   }
 }
 
+// Autosaving used to block every single answer on a full network
+// round-trip before letting you move to the next question -- across a
+// 136-reading inspection, that's 136 waits in a row, which is exactly
+// what made command mode feel like it "takes forever." The value itself
+// is already recorded locally the instant it's entered (see
+// commandModeAcceptValue) and command mode advances immediately now;
+// this just debounces the actual server sync to run quietly in the
+// background instead of gating navigation on it. commandModeFlushSave()
+// forces an immediate, awaited save for the moments that actually need
+// the server caught up first (leaving command mode).
+let commandModeSaveTimer = null;
+let commandModeSaveInFlight = null;
+const COMMAND_MODE_SAVE_DEBOUNCE_MS = 700;
+
+function commandModeScheduleSave() {
+  clearTimeout(commandModeSaveTimer);
+  commandModeSaveTimer = setTimeout(() => {
+    commandModeSaveTimer = null;
+    commandModeFlushSave();
+  }, COMMAND_MODE_SAVE_DEBOUNCE_MS);
+}
+
+async function commandModeFlushSave() {
+  clearTimeout(commandModeSaveTimer);
+  commandModeSaveTimer = null;
+  if (!state.commandMode) return;
+  // A save already in flight reflects whatever state existed when it
+  // started -- if something changed since, that save alone isn't
+  // enough, so wait for it and then run one more with the latest state.
+  if (commandModeSaveInFlight) {
+    await commandModeSaveInFlight.catch(() => {});
+    if (!state.commandMode) return;
+  }
+  commandModeSaveInFlight = commandModeSave().finally(() => {
+    commandModeSaveInFlight = null;
+  });
+  await commandModeSaveInFlight;
+}
+
 // A tag's group requires its own timestamped photo before the day can be
 // submitted (see migrations/0017_group_photos.sql). Command mode is
 // sequential, so "requires a photo now" means: this was the last reading
@@ -4052,10 +4096,10 @@ async function commandModeCaptureGroupPhoto(file) {
   }
 }
 
-async function commandModeAfterValueSettled() {
+function commandModeAfterValueSettled() {
   const cm = state.commandMode;
   cm.abnormalPrompt = null;
-  await commandModeSave();
+  commandModeScheduleSave();
 
   if (cm.reviewingSingleFlag) {
     cm.reviewingSingleFlag = false;
@@ -4133,13 +4177,13 @@ function handleCommandModeAbnormalIncorrect() {
   renderApp();
 }
 
-async function handleCommandModeFlag() {
+function handleCommandModeFlag() {
   const cm = state.commandMode;
   const tagId = cm.order[cm.index];
   cm.flags[tagId] = true;
   cm.abnormalPrompt = null;
   cm.entryMode = "choose";
-  await commandModeSave();
+  commandModeScheduleSave();
 
   if (cm.reviewingSingleFlag) {
     cm.reviewingSingleFlag = false;

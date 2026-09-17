@@ -48,36 +48,51 @@ export function isoWeekFolderName(dateIso) {
   return `${target.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
 
+// In-memory first (free, instant, lives as long as this isolate stays
+// warm), D1 second (survives isolate recycling -- a folder's id never
+// changes once created, so once any isolate has ever resolved it, every
+// later request anywhere should find it in one indexed lookup instead
+// of paying GHL's list-then-maybe-create round trip again).
 const folderIdCache = new Map();
 
-// Find-or-create the week's folder in the Media Library -- GHL's folders
-// are just media-library entries of type "folder" scoped by parentId, so
-// this lists what's under `parentId` (a building-named parent folder,
-// itself find-or-created the same way) filtering by name, creating one
-// if none matches. Cached per Worker instance (folders don't change
-// often); TODO verify this list/create shape against the real API --
-// the exact request/response fields here are the ones GHL's docs
-// describe, not yet confirmed live.
-async function ensureFolder(creds, name, parentId = null) {
-  const cacheKey = `${parentId || "root"}/${name}`;
+async function ensureFolder(creds, name, parentId, env) {
+  const cacheKey = `${creds.locationId}/${parentId || "root"}/${name}`;
   if (folderIdCache.has(cacheKey)) return folderIdCache.get(cacheKey);
+
+  const cached = await env.DB.prepare("SELECT folder_id FROM ghl_folder_cache WHERE cache_key = ?").bind(cacheKey).first();
+  if (cached) {
+    folderIdCache.set(cacheKey, cached.folder_id);
+    return cached.folder_id;
+  }
 
   const listParams = new URLSearchParams({ altId: creds.locationId, altType: "location", type: "folder" });
   if (parentId) listParams.set("parentId", parentId);
   const listed = await ghlMediaFetch(creds, `/medias/files?${listParams}`);
   const existing = (listed.files || listed.medias || []).find((f) => f.name === name);
+
+  // GHL's media/folder documents are MongoDB-backed -- the real
+  // identifier field is `_id`, confirmed against a live create response
+  // (`id`/`folder.id`, guessed before that was confirmed, were both
+  // silently undefined -- meaning every freshly-created folder was
+  // uploading its photos to the media library's root instead of the
+  // intended building/week folder until this was caught).
+  let folderId;
   if (existing) {
-    folderIdCache.set(cacheKey, existing.id);
-    return existing.id;
+    folderId = existing._id || existing.id;
+  } else {
+    const created = await ghlMediaFetch(creds, "/medias/folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ altId: creds.locationId, altType: "location", name, parentId: parentId || undefined }),
+    });
+    folderId = created._id || created.id || created.folder?._id || created.folder?.id;
+    if (!folderId) throw new Error(`GHL folder create returned no id: ${JSON.stringify(created)}`);
   }
 
-  const created = await ghlMediaFetch(creds, "/medias/folder", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ altId: creds.locationId, altType: "location", name, parentId: parentId || undefined }),
-  });
-  const folderId = created.id || created.folder?.id;
   folderIdCache.set(cacheKey, folderId);
+  await env.DB.prepare("INSERT INTO ghl_folder_cache (cache_key, folder_id) VALUES (?, ?) ON CONFLICT (cache_key) DO NOTHING")
+    .bind(cacheKey, folderId)
+    .run();
   return folderId;
 }
 
@@ -85,9 +100,9 @@ async function ensureFolder(creds, name, parentId = null) {
 // library. `imageBase64` is the same client-compressed JPEG payload
 // worker/photos.js's storePhoto() already receives -- decoded here into
 // raw bytes for the multipart upload. Returns the GHL file's id + url.
-export async function uploadInspectionPhotoToGhl(creds, { imageBase64, mediaType, buildingName, inspectionDateIso, fileName }) {
-  const buildingFolderId = await ensureFolder(creds, buildingName);
-  const weekFolderId = await ensureFolder(creds, isoWeekFolderName(inspectionDateIso), buildingFolderId);
+export async function uploadInspectionPhotoToGhl(creds, { imageBase64, mediaType, buildingName, inspectionDateIso, fileName }, env) {
+  const buildingFolderId = await ensureFolder(creds, buildingName, null, env);
+  const weekFolderId = await ensureFolder(creds, isoWeekFolderName(inspectionDateIso), buildingFolderId, env);
 
   const binary = Uint8Array.from(atob(imageBase64), (c) => c.charCodeAt(0));
   const form = new FormData();
