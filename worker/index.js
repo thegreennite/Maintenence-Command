@@ -149,6 +149,7 @@ export default {
         return json({ error: "Select a company first." }, 409, cors.headers);
       }
 
+
       if (url.pathname === "/api/dashboard" && request.method === "GET") {
         return json({ dashboard: await dashboardForRole(session.role, session.full_name, env, session) }, 200, cors.headers);
       }

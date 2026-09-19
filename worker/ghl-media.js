@@ -21,7 +21,13 @@ const GHL_API = "https://services.leadconnectorhq.com";
 // / `ghl_api_key` pair on the control-plane clients table, mirroring
 // `database_id` -- not built yet, since only FHG has a real sub-account
 // to test against so far).
-async function ghlMediaFetch(creds, path, options = {}) {
+// A single photo capture in command mode is a one-shot moment for
+// whoever's standing in front of the machine -- worth one automatic
+// retry on exactly the errors that are transient (a rate limit, or GHL
+// itself hiccuping) rather than surfacing "it didn't work" for
+// something a half-second retry would have quietly absorbed. Never
+// retries a real rejection (bad request, auth failure, etc.).
+async function ghlMediaFetch(creds, path, options = {}, attempt = 1) {
   const response = await fetch(`${GHL_API}${path}`, {
     ...options,
     headers: {
@@ -31,6 +37,11 @@ async function ghlMediaFetch(creds, path, options = {}) {
     },
   });
   if (!response.ok) {
+    const transient = response.status === 429 || response.status >= 500;
+    if (transient && attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 400));
+      return ghlMediaFetch(creds, path, options, attempt + 1);
+    }
     const text = await response.text().catch(() => "");
     throw new Error(`GHL Media API error (${response.status}): ${text.slice(0, 300)}`);
   }
@@ -59,10 +70,19 @@ async function ensureFolder(creds, name, parentId, env) {
   const cacheKey = `${creds.locationId}/${parentId || "root"}/${name}`;
   if (folderIdCache.has(cacheKey)) return folderIdCache.get(cacheKey);
 
-  const cached = await env.DB.prepare("SELECT folder_id FROM ghl_folder_cache WHERE cache_key = ?").bind(cacheKey).first();
-  if (cached) {
-    folderIdCache.set(cacheKey, cached.folder_id);
-    return cached.folder_id;
+  // Best-effort only -- this is purely a speed optimization (see the
+  // comment above folderIdCache). A D1 hiccup here must never be able
+  // to fail a photo upload that GHL's own list/create would otherwise
+  // have handled fine; falling through to that is always safe, just
+  // slightly slower this one time.
+  try {
+    const cached = await env.DB.prepare("SELECT folder_id FROM ghl_folder_cache WHERE cache_key = ?").bind(cacheKey).first();
+    if (cached) {
+      folderIdCache.set(cacheKey, cached.folder_id);
+      return cached.folder_id;
+    }
+  } catch (error) {
+    console.error("ghl_folder_cache read failed, falling through to GHL", error);
   }
 
   const listParams = new URLSearchParams({ altId: creds.locationId, altType: "location", type: "folder" });
@@ -90,9 +110,15 @@ async function ensureFolder(creds, name, parentId, env) {
   }
 
   folderIdCache.set(cacheKey, folderId);
-  await env.DB.prepare("INSERT INTO ghl_folder_cache (cache_key, folder_id) VALUES (?, ?) ON CONFLICT (cache_key) DO NOTHING")
-    .bind(cacheKey, folderId)
-    .run();
+  // Also best-effort -- the folder is already real and usable (we just
+  // resolved it above) even if this particular write never lands.
+  try {
+    await env.DB.prepare("INSERT INTO ghl_folder_cache (cache_key, folder_id) VALUES (?, ?) ON CONFLICT (cache_key) DO NOTHING")
+      .bind(cacheKey, folderId)
+      .run();
+  } catch (error) {
+    console.error("ghl_folder_cache write failed, continuing anyway", error);
+  }
   return folderId;
 }
 

@@ -64,11 +64,19 @@ export async function storePhoto(env, { buildingId, imageBase64, mediaType, cont
     return null;
   }
 
-  await env.DB.prepare(
-    "INSERT INTO photos (building_id, date, context, backend, location, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)",
-  )
-    .bind(buildingId, date, context, backend, location, uploadedBy || null)
-    .run();
+  // The photo itself is already safely stored at this point (GHL or R2,
+  // above) -- this index is what makes it browsable in the app's photo
+  // library, but a hiccup writing it must never make an already-
+  // successful upload look like it failed to whoever's waiting on it.
+  try {
+    await env.DB.prepare(
+      "INSERT INTO photos (building_id, date, context, backend, location, uploaded_by) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+      .bind(buildingId, date, context, backend, location, uploadedBy || null)
+      .run();
+  } catch (error) {
+    console.error("photos index write failed, photo is still stored", location, error);
+  }
 
   return location;
 }
