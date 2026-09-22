@@ -4129,20 +4129,29 @@ function historyFlagFor(tag, rawValue) {
 function startCommandMode() {
   const tags = state.inspection?.tags || [];
   if (!tags.length) return;
-  // Always the original scanned/created order -- ungrouped readings
-  // first, then machine by machine (equipment_group_sort_order, set
-  // once when a machine is created and never changed after), and within
-  // each machine by the tag's own immutable sort_order. Deliberately
-  // NOT board_sort_order -- that's the machine board's own drag-and-drop
-  // arrangement (see handleReorderTags), which is for a manager's own
-  // organizing and must never reshuffle what a superintendent actually
-  // walks through. Not physical location either, which could jump
-  // between machines out of sequence.
+  // Always the original scanned/created order -- exactly what the
+  // regular checklist already shows (groupTagsForChecklist), just made
+  // explicit here. A machine's position is wherever its EARLIEST
+  // reading originally landed in scan order, not
+  // equipment_groups.sort_order -- that only reflects whenever the
+  // machine *record* happened to get created (e.g. Crest's 39 machines
+  // were all bulk-created in one migration, in an order that has
+  // nothing to do with each one's actual scan position), so it can
+  // land a machine completely out of sequence. Deliberately not
+  // board_sort_order either -- that's the machine board's own
+  // drag-and-drop arrangement, for a manager's own organizing, and
+  // must never reshuffle what a superintendent actually walks through.
+  const groupPosition = new Map();
+  for (const tag of [...tags].sort((a, b) => a.sort_order - b.sort_order)) {
+    if (tag.equipment_group_id != null && !groupPosition.has(tag.equipment_group_id)) {
+      groupPosition.set(tag.equipment_group_id, tag.sort_order);
+    }
+  }
   const order = [...tags]
     .sort((a, b) => {
-      const ga = a.equipment_group_id == null ? -1 : (a.equipment_group_sort_order ?? Number.MAX_SAFE_INTEGER);
-      const gb = b.equipment_group_id == null ? -1 : (b.equipment_group_sort_order ?? Number.MAX_SAFE_INTEGER);
-      if (ga !== gb) return ga - gb;
+      const pa = a.equipment_group_id == null ? a.sort_order : groupPosition.get(a.equipment_group_id);
+      const pb = b.equipment_group_id == null ? b.sort_order : groupPosition.get(b.equipment_group_id);
+      if (pa !== pb) return pa - pb;
       return a.sort_order - b.sort_order;
     })
     .map((t) => t.id);
