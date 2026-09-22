@@ -4129,13 +4129,15 @@ function historyFlagFor(tag, rawValue) {
 function startCommandMode() {
   const tags = state.inspection?.tags || [];
   if (!tags.length) return;
-  // Follows the exact same outline as the checklist/machine board --
-  // ungrouped readings first (they sit at the top of the board too),
-  // then machine by machine in the board's own order, and within each
-  // machine in whatever order its readings were dragged into (the same
-  // sort_order handleReorderTags maintains) -- not by physical location,
-  // which could jump between machines out of sequence and no longer
-  // match what's actually been organized on the board.
+  // Always the original scanned/created order -- ungrouped readings
+  // first, then machine by machine (equipment_group_sort_order, set
+  // once when a machine is created and never changed after), and within
+  // each machine by the tag's own immutable sort_order. Deliberately
+  // NOT board_sort_order -- that's the machine board's own drag-and-drop
+  // arrangement (see handleReorderTags), which is for a manager's own
+  // organizing and must never reshuffle what a superintendent actually
+  // walks through. Not physical location either, which could jump
+  // between machines out of sequence.
   const order = [...tags]
     .sort((a, b) => {
       const ga = a.equipment_group_id == null ? -1 : (a.equipment_group_sort_order ?? Number.MAX_SAFE_INTEGER);
