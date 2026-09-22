@@ -1090,6 +1090,100 @@ function bindAgencyClientsEvents() {
   });
 }
 
+// Superintendent-only: their own building's notices from the operations
+// manager, recent notes left on past inspections (daily + per-machine),
+// and a quick visual on how their own inspections have been going --
+// all of it already existed for a manager looking at this same
+// building (worker/buildings.js's handleBuildingDetail); this is the
+// same information, just surfaced on the super's own side too.
+function renderSuperintendentOverview(inspection) {
+  if (!inspection?.building) return "";
+  const notices = inspection.notices || [];
+  const recentNotes = inspection.recentNotes || [];
+  const recentGroupNotes = inspection.recentGroupNotes || [];
+  const noteItems = [
+    ...recentNotes.map((n) => ({ date: n.inspection_date, text: n.notes })),
+    ...recentGroupNotes.map((n) => ({ date: n.inspection_date, text: `${n.group_name}: ${n.note}` })),
+  ]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 6);
+
+  return `
+    <section class="card super-overview">
+      <div class="card__header"><div><p class="section-kicker">Your building</p><h2>${escapeHtml(inspection.building.name)}</h2></div></div>
+      <div class="super-overview__grid">
+        <div class="super-overview__col">
+          <h3>Notices from your operations manager</h3>
+          ${
+            notices.length
+              ? `<ul class="super-note-list">${notices
+                  .slice(0, 5)
+                  .map(
+                    (n) =>
+                      `<li><p>${escapeHtml(n.message)}</p><small>${escapeHtml(n.created_by_name || "")} · ${escapeHtml(formatTimestamp(n.created_at))}</small></li>`,
+                  )
+                  .join("")}</ul>`
+              : `<p class="quiet-label">No notices yet.</p>`
+          }
+        </div>
+        <div class="super-overview__col">
+          <h3>Recent notes</h3>
+          ${
+            noteItems.length
+              ? `<ul class="super-note-list">${noteItems
+                  .map((n) => `<li><p>${escapeHtml(n.text)}</p><small>${escapeHtml(formatInspectionDate(n.date))}</small></li>`)
+                  .join("")}</ul>`
+              : `<p class="quiet-label">No notes yet.</p>`
+          }
+        </div>
+      </div>
+      ${renderSuperMetrics(state.buildingWorldHistory)}
+    </section>`;
+}
+
+// A quick, honest visual on how this super's own inspections have gone
+// -- readings logged and readings flagged, per submitted day, over the
+// last 8 submissions. Hand-rolled SVG (a few bars), not a charting
+// library -- there's nothing here that needs one.
+function renderSuperMetrics(history) {
+  if (!history || !history.length) {
+    return `<p class="quiet-label super-metrics__empty">Submit a few inspections to see your metrics here.</p>`;
+  }
+  const recent = [...history].sort((a, b) => a.inspection_date.localeCompare(b.inspection_date)).slice(-8);
+  const totalFlagged = history.reduce((sum, r) => sum + (r.flagged_count || 0), 0);
+  const maxReadings = Math.max(...recent.map((r) => r.reading_count || 0), 1);
+  const barWidth = 28;
+  const gap = 12;
+  const chartHeight = 90;
+  const width = recent.length * (barWidth + gap) - gap;
+
+  const bars = recent
+    .map((r, i) => {
+      const h = Math.max(4, Math.round(((r.reading_count || 0) / maxReadings) * chartHeight));
+      const flaggedH = r.reading_count ? Math.round(((r.flagged_count || 0) / r.reading_count) * h) : 0;
+      const x = i * (barWidth + gap);
+      const label = formatInspectionDate(r.inspection_date).split(",")[0] || "";
+      return `
+        <g>
+          <title>${escapeHtml(formatInspectionDate(r.inspection_date))}: ${r.reading_count || 0} readings, ${r.flagged_count || 0} flagged</title>
+          <rect x="${x}" y="${chartHeight - h}" width="${barWidth}" height="${h}" rx="3" fill="#4caf7d" />
+          ${flaggedH ? `<rect x="${x}" y="${chartHeight - flaggedH}" width="${barWidth}" height="${flaggedH}" rx="3" fill="#e8a33d" />` : ""}
+          <text x="${x + barWidth / 2}" y="${chartHeight + 16}" text-anchor="middle" font-size="9" fill="#8a9490">${escapeHtml(label)}</text>
+        </g>`;
+    })
+    .join("");
+
+  return `
+    <div class="super-metrics">
+      <div class="super-metrics__stats">
+        <div><strong>${history.length}</strong><span>Submitted inspections</span></div>
+        <div><strong>${totalFlagged}</strong><span>Flagged readings, all time</span></div>
+      </div>
+      <svg viewBox="0 0 ${width} ${chartHeight + 24}" class="super-metrics__chart" role="img" aria-label="Readings and flags per recent inspection">${bars}</svg>
+      <p class="quiet-label super-metrics__legend"><span class="legend-dot legend-dot--green"></span>Readings logged<span class="legend-dot legend-dot--amber"></span>Flagged</p>
+    </div>`;
+}
+
 function renderDashboard(data) {
   if (!data) return renderErrorState();
   if (state.commandMode?.active && data.kind === "superintendent") {
@@ -1104,7 +1198,8 @@ function renderDashboard(data) {
       : data.kind === "admin"
         ? renderAdminDashboard(data)
         : data.kind === "superintendent"
-          ? renderInspectionView(state.inspection) +
+          ? renderSuperintendentOverview(state.inspection) +
+            renderInspectionView(state.inspection) +
             renderFlagIssuePanel() +
             (state.inspection?.building
               ? `<section class="card building-world__checklist">

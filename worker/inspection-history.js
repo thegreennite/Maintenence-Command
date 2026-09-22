@@ -32,7 +32,8 @@ export async function handleInspectionHistory(request, session, env, corsHeaders
 
   const result = await env.DB.prepare(
     `SELECT s.inspection_date, s.submitted_at, u.full_name AS superintendent_name,
-       (SELECT COUNT(*) FROM inspection_readings r WHERE r.submission_id = s.id) AS reading_count
+       (SELECT COUNT(*) FROM inspection_readings r WHERE r.submission_id = s.id) AS reading_count,
+       (SELECT COUNT(*) FROM inspection_readings r WHERE r.submission_id = s.id AND r.flagged = 1) AS flagged_count
      FROM inspection_submissions s
      LEFT JOIN users u ON u.id = s.superintendent_id
      WHERE s.building_id = ? AND s.status = 'submitted'

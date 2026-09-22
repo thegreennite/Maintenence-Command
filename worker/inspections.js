@@ -152,7 +152,7 @@ export async function handleInspectionToday(session, env, corsHeaders) {
     return jsonError("No building is assigned to this account yet.", 409, corsHeaders);
   }
 
-  const [building, tags, { submission, readings, flags, photoKeys, groupNotes, groupPhotos }, notices] = await Promise.all([
+  const [building, tags, { submission, readings, flags, photoKeys, groupNotes, groupPhotos }, notices, recentNotes, recentGroupNotes] = await Promise.all([
     env.DB.prepare("SELECT id, name, region, inspection_days, status, deleted_at FROM buildings WHERE id = ?")
       .bind(buildingId)
       .first(),
@@ -162,6 +162,28 @@ export async function handleInspectionToday(session, env, corsHeaders) {
       `SELECT n.id, n.message, n.created_at, u.full_name AS created_by_name
        FROM building_notices n LEFT JOIN users u ON u.id = n.created_by
        WHERE n.building_id = ? ORDER BY n.created_at DESC`,
+    )
+      .bind(buildingId)
+      .all(),
+    // Past daily inspection notes -- whatever a super (or an operations
+    // manager reviewing the same building) left behind on a previous
+    // day, not just today's own note field.
+    env.DB.prepare(
+      `SELECT inspection_date, notes, submitted_at FROM inspection_submissions
+       WHERE building_id = ? AND notes IS NOT NULL AND TRIM(notes) != '' AND inspection_date != ?
+       ORDER BY inspection_date DESC LIMIT 10`,
+    )
+      .bind(buildingId, today())
+      .all(),
+    // Per-machine notes left on past days -- the same recent-notes feed
+    // an operations manager already sees on their side (worker/buildings.js's
+    // handleBuildingDetail), mirrored here so a super sees it too.
+    env.DB.prepare(
+      `SELECT gn.equipment_group_id, g.name AS group_name, gn.note, gn.updated_at, s.inspection_date
+       FROM group_notes gn
+       JOIN inspection_submissions s ON s.id = gn.submission_id
+       JOIN equipment_groups g ON g.id = gn.equipment_group_id
+       WHERE s.building_id = ? ORDER BY s.inspection_date DESC LIMIT 10`,
     )
       .bind(buildingId)
       .all(),
@@ -190,6 +212,8 @@ export async function handleInspectionToday(session, env, corsHeaders) {
       groupNotes,
       groupPhotos,
       notices: notices.results,
+      recentNotes: recentNotes.results,
+      recentGroupNotes: recentGroupNotes.results,
     },
     corsHeaders,
   );
