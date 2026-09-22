@@ -123,7 +123,7 @@ export async function handleReorderTags(request, session, env, corsHeaders) {
 
   const placeholders = orderedTagIds.map(() => "?").join(",");
   const existing = await env.DB.prepare(
-    `SELECT id, building_id, sort_order FROM inspection_tags WHERE id IN (${placeholders})`,
+    `SELECT id, building_id, COALESCE(board_sort_order, sort_order) AS board_sort_order FROM inspection_tags WHERE id IN (${placeholders})`,
   )
     .bind(...orderedTagIds)
     .all();
@@ -140,9 +140,15 @@ export async function handleReorderTags(request, session, env, corsHeaders) {
     if (!group) return jsonError("Machine not found.", 404, corsHeaders);
   }
 
-  const slots = existing.results.map((r) => r.sort_order).sort((a, b) => a - b);
+  // Only board_sort_order moves here -- sort_order (the original
+  // scanned/created order a superintendent actually follows) is
+  // deliberately untouched. Dragging a reading between machines still
+  // updates equipment_group_id for real, since that's a genuine "this
+  // belongs to a different machine" correction, not just cosmetic
+  // board arrangement.
+  const slots = existing.results.map((r) => r.board_sort_order).sort((a, b) => a - b);
   const statements = orderedTagIds.map((tagId, index) =>
-    env.DB.prepare("UPDATE inspection_tags SET equipment_group_id = ?, sort_order = ? WHERE id = ?").bind(groupId, slots[index], tagId),
+    env.DB.prepare("UPDATE inspection_tags SET equipment_group_id = ?, board_sort_order = ? WHERE id = ?").bind(groupId, slots[index], tagId),
   );
   await env.DB.batch(statements);
   return jsonOk({ ok: true }, corsHeaders);
@@ -176,13 +182,22 @@ export async function handleCreateTag(request, session, env, corsHeaders) {
   const isSprinkler = /sprinkler/i.test(`${tagNo || ""} ${readingType}`);
   const valueType = isSprinkler ? "open_closed" : requestedValueType;
 
+  // A brand new reading has no "original scan" position of its own, so
+  // it's simply appended after everything else that currently exists --
+  // it still lands correctly in a superintendent's walkthrough because
+  // command mode groups by machine first (equipment_group_id) before
+  // falling back to this sort_order as a tiebreaker, so it shows up
+  // alongside its machine's other readings regardless of this number's
+  // absolute size. board_sort_order starts equal to it (appended at the
+  // end on the board too), independently movable from there on.
   const max = await env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM inspection_tags WHERE building_id = ?")
     .bind(buildingId)
     .first();
+  const newOrder = (max?.m ?? -1) + 1;
   const inserted = await env.DB.prepare(
-    "INSERT INTO inspection_tags (building_id, system_name, tag_no, reading_type, unit, answer_kind, equipment_group_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO inspection_tags (building_id, system_name, tag_no, reading_type, unit, answer_kind, equipment_group_id, sort_order, board_sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   )
-    .bind(buildingId, systemName, tagNo, readingType, unit, valueType, groupId, (max?.m ?? -1) + 1)
+    .bind(buildingId, systemName, tagNo, readingType, unit, valueType, groupId, newOrder, newOrder)
     .run();
 
   return jsonOk({ ok: true, tagId: inserted.meta.last_row_id, valueType }, corsHeaders);

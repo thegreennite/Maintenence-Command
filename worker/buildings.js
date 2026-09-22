@@ -494,7 +494,8 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
        FROM inspection_tags t
        LEFT JOIN building_locations l ON l.id = t.location_id
        LEFT JOIN equipment_groups g ON g.id = t.equipment_group_id
-       WHERE t.building_id = ? ORDER BY t.sort_order`,
+       WHERE t.building_id = ?
+       ORDER BY COALESCE(t.board_sort_order, t.sort_order)`,
     )
       .bind(buildingId)
       .all(),
