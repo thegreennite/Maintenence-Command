@@ -683,6 +683,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .reading-chip--editing input, .reading-chip--editing select {
   height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; font-size: 12.5px;
 }
+.unit-field { display: flex; gap: 6px; }
+.unit-field .unit-preset-select, .unit-field .unit-custom-input { flex: 1; min-width: 0; }
 .reading-chip__edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .reading-chip__edit-actions .icon-button { width: 30px; height: 30px; }
 .reading-chip__edit-actions .icon-button .icon { width: 13px; }

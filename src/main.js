@@ -338,6 +338,9 @@ const api = {
   assignTagGroup(payload) {
     return this.request("/manager/tags/group", { method: "POST", body: JSON.stringify(payload) });
   },
+  reorderTags(payload) {
+    return this.request("/manager/tags/reorder", { method: "POST", body: JSON.stringify(payload) });
+  },
   updateTag(payload) {
     return this.request("/manager/tags/update", { method: "POST", body: JSON.stringify(payload) });
   },
@@ -2461,9 +2464,26 @@ function handleReadingChipPointerCancel() {
   if (chipPointer) releaseChipPointer(chipPointer);
 }
 
-async function handleReadingChipPointerUp() {
+// Reflects a reorder in state.buildingWorld.tags immediately (rather
+// than waiting on the round trip) -- pulls the moved set out from
+// wherever it sits in the array and reinserts it, in its new relative
+// order, at the end. That's enough for correct rendering: each machine
+// zone independently filters+iterates this same array, so only the
+// *relative* order among one group's own members ever matters, not
+// their absolute position in the whole list.
+function reorderLocalTags(orderedTagIds) {
+  const tags = state.buildingWorld.tags;
+  const idSet = new Set(orderedTagIds);
+  const byId = new Map(tags.map((t) => [t.id, t]));
+  const untouched = tags.filter((t) => !idSet.has(t.id));
+  const moved = orderedTagIds.map((id) => byId.get(id)).filter(Boolean);
+  state.buildingWorld.tags = [...untouched, ...moved];
+}
+
+async function handleReadingChipPointerUp(event) {
   if (!chipPointer) return;
   const p = chipPointer;
+  const dropClientY = event.clientY;
   releaseChipPointer(p);
 
   if (!p.dragging) {
@@ -2475,15 +2495,36 @@ async function handleReadingChipPointerUp() {
   }
 
   if (!p.hoverZone) return; // released outside any zone -- treat as cancelled
-  const targetGroupId = p.hoverZone.dataset.dropzone;
-  if (targetGroupId === p.originGroupId) return; // dropped back where it started
+  const zoneEl = p.hoverZone;
+  const targetGroupId = zoneEl.dataset.dropzone;
+  const targetGroupIdNum = targetGroupId ? Number(targetGroupId) : null;
+
+  // Where among the target zone's current chips this one should land --
+  // same math whether it's moving zones or just reordering within the
+  // one it's already in (the old code skipped this entirely for a
+  // same-zone drop, which is exactly why reordering never worked).
+  const siblingTagIds = Array.from(zoneEl.querySelectorAll(".reading-chip:not(.reading-chip--ghost)"))
+    .map((el) => Number(el.dataset.tagId))
+    .filter((id) => id !== p.tagId);
+  let insertAt = siblingTagIds.length;
+  for (let i = 0; i < siblingTagIds.length; i += 1) {
+    const chipEl = zoneEl.querySelector(`.reading-chip[data-tag-id="${siblingTagIds[i]}"]`);
+    if (!chipEl) continue;
+    const rect = chipEl.getBoundingClientRect();
+    if (dropClientY < rect.top + rect.height / 2) {
+      insertAt = i;
+      break;
+    }
+  }
+  siblingTagIds.splice(insertAt, 0, p.tagId);
 
   const tag = state.buildingWorld.tags.find((t) => t.id === p.tagId);
   const previousGroupId = tag?.equipment_group_id ?? null;
-  if (tag) tag.equipment_group_id = targetGroupId ? Number(targetGroupId) : null;
+  if (tag) tag.equipment_group_id = targetGroupIdNum;
+  reorderLocalTags(siblingTagIds);
   renderApp();
   // A confirming pulse on the zone it landed in -- purely visual, the
-  // assignment itself already happened above.
+  // assignment/reorder itself already happened above.
   requestAnimationFrame(() => {
     const landedZone = document.querySelector(`[data-dropzone="${targetGroupId}"]`);
     if (!landedZone) return;
@@ -2492,7 +2533,7 @@ async function handleReadingChipPointerUp() {
   });
 
   try {
-    await api.assignTagGroup({ tagId: p.tagId, groupId: targetGroupId || null });
+    await api.reorderTags({ groupId: targetGroupIdNum, orderedTagIds: siblingTagIds });
   } catch (error) {
     if (tag) tag.equipment_group_id = previousGroupId;
     renderApp();
@@ -2805,6 +2846,43 @@ function renderChecklistBulkBar(world) {
 // not two showing the same data two different ways.
 // ---------------------------------------------------------------------
 
+// Keeps units consistent instead of a free-text field that ends up with
+// "psi", "PSI", "Psi", "lbs" all meaning the same thing -- PSI and ° cover
+// almost every reading on a real checklist; "Custom…" reveals a plain
+// text box for the rare exception. The actual submitted field is always
+// name="unit" regardless of which one is showing -- see
+// bindUnitFieldToggle, which keeps the hidden one in sync.
+function renderUnitField(currentUnit) {
+  const isPreset = currentUnit === "PSI" || currentUnit === "°";
+  const preset = isPreset ? currentUnit : currentUnit ? "custom" : "";
+  return `
+    <span class="unit-field">
+      <select class="unit-preset-select">
+        <option value="" ${preset === "" ? "selected" : ""}>No unit</option>
+        <option value="PSI" ${preset === "PSI" ? "selected" : ""}>PSI</option>
+        <option value="°" ${preset === "°" ? "selected" : ""}>°</option>
+        <option value="custom" ${preset === "custom" ? "selected" : ""}>Custom…</option>
+      </select>
+      <input type="text" name="unit" class="unit-custom-input" value="${escapeHtml(currentUnit || "")}" placeholder="Unit" ${preset === "custom" ? "" : "hidden"} />
+    </span>`;
+}
+
+function bindUnitFieldToggle(formEl) {
+  const select = formEl?.querySelector(".unit-preset-select");
+  const input = formEl?.querySelector(".unit-custom-input");
+  if (!select || !input) return;
+  select.addEventListener("change", () => {
+    if (select.value === "custom") {
+      input.hidden = false;
+      input.value = "";
+      input.focus();
+    } else {
+      input.hidden = true;
+      input.value = select.value;
+    }
+  });
+}
+
 function renderMachineBoard(world) {
   const tags = world.tags || [];
   const groups = world.groups || [];
@@ -2842,7 +2920,7 @@ function renderAddReadingControl(groupKey, groupId, world) {
         <input type="text" name="system_name" placeholder="System (e.g. Boiler H1B)" required autofocus />
         <input type="text" name="tag_no" placeholder="Tag no. (optional)" />
         <input type="text" name="reading_type" placeholder="Reading (e.g. Inlet temperature)" required />
-        <input type="text" name="unit" placeholder="Unit (e.g. PSI, °)" />
+        ${renderUnitField(null)}
         <select name="value_type">
           <option value="numeric" selected>Numeric</option>
           ${Object.entries(CLOSED_CHOICE_TYPES)
@@ -2929,7 +3007,7 @@ function renderReadingChipEditForm(tag) {
       <input type="text" name="system_name" value="${escapeHtml(tag.system_name)}" placeholder="System" required />
       <input type="text" name="tag_no" value="${escapeHtml(tag.tag_no || "")}" placeholder="Tag no. (optional)" />
       <input type="text" name="reading_type" value="${escapeHtml(tag.reading_type)}" placeholder="Reading" required />
-      <input type="text" name="unit" value="${escapeHtml(tag.unit || "")}" placeholder="Unit (optional)" />
+      ${renderUnitField(tag.unit)}
       <select name="value_type">
         <option value="numeric" ${!CLOSED_CHOICE_TYPES[tag.value_type] ? "selected" : ""}>Numeric</option>
         ${Object.entries(CLOSED_CHOICE_TYPES)
@@ -5174,6 +5252,7 @@ function bindDashboardEvents() {
   });
   document.querySelector("#edit-tag-form")?.addEventListener("submit", handleEditReadingChipSave);
   document.querySelector(".cancel-edit-tag")?.addEventListener("click", handleEditReadingChipCancel);
+  bindUnitFieldToggle(document.querySelector("#edit-tag-form"));
   document.querySelectorAll(".add-reading-start").forEach((button) => {
     button.addEventListener("click", () => {
       state.buildingWorldAddingTagGroupId = button.dataset.groupKey;
@@ -5181,6 +5260,7 @@ function bindDashboardEvents() {
     });
   });
   document.querySelector("#add-tag-form")?.addEventListener("submit", handleAddReadingSave);
+  bindUnitFieldToggle(document.querySelector("#add-tag-form"));
   document.querySelector(".cancel-add-tag")?.addEventListener("click", () => {
     state.buildingWorldAddingTagGroupId = undefined;
     renderApp();

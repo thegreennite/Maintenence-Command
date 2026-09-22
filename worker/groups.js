@@ -83,6 +83,54 @@ export async function handleAssignTagGroup(request, session, env, corsHeaders) {
   return jsonOk({ ok: true }, corsHeaders);
 }
 
+// Drag-and-drop reordering within a machine (or the ungrouped zone) --
+// sets the whole zone's reading order in one shot, and doubles as
+// handleAssignTagGroup when the drop also changes which machine a
+// reading belongs to (the machine board's drag handler always sends
+// the full desired order for wherever it landed).
+//
+// Reuses the exact sort_order values this set of readings already
+// holds (just permuted into the new sequence) instead of handing out
+// fresh ones -- keeps this whole block sitting in the same place in
+// the building's overall reading order relative to every other
+// machine, rather than scrambling that too. Never collides with an
+// untouched reading's sort_order, since every value used here already
+// belonged to one of these exact rows.
+export async function handleReorderTags(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const groupId = body.groupId == null || body.groupId === "" ? null : Number.parseInt(body.groupId, 10);
+  const orderedTagIds = Array.isArray(body.orderedTagIds)
+    ? body.orderedTagIds.map((id) => Number.parseInt(id, 10)).filter((id) => Number.isInteger(id))
+    : [];
+  if (!orderedTagIds.length) return jsonError("Nothing to reorder.", 400, corsHeaders);
+
+  const placeholders = orderedTagIds.map(() => "?").join(",");
+  const existing = await env.DB.prepare(
+    `SELECT id, building_id, sort_order FROM inspection_tags WHERE id IN (${placeholders})`,
+  )
+    .bind(...orderedTagIds)
+    .all();
+  if (existing.results.length !== orderedTagIds.length) return jsonError("Reading not found.", 404, corsHeaders);
+
+  const buildingId = existing.results[0].building_id;
+  if (existing.results.some((r) => r.building_id !== buildingId)) return jsonError("Reading not found.", 404, corsHeaders);
+  if (!(await ownsBuilding(env, session, buildingId))) return jsonError("Reading not found.", 404, corsHeaders);
+
+  if (groupId != null) {
+    const group = await env.DB.prepare("SELECT id FROM equipment_groups WHERE id = ? AND building_id = ?")
+      .bind(groupId, buildingId)
+      .first();
+    if (!group) return jsonError("Machine not found.", 404, corsHeaders);
+  }
+
+  const slots = existing.results.map((r) => r.sort_order).sort((a, b) => a - b);
+  const statements = orderedTagIds.map((tagId, index) =>
+    env.DB.prepare("UPDATE inspection_tags SET equipment_group_id = ?, sort_order = ? WHERE id = ?").bind(groupId, slots[index], tagId),
+  );
+  await env.DB.batch(statements);
+  return jsonOk({ ok: true }, corsHeaders);
+}
+
 // Adding a single new reading to an already-live checklist -- the AI
 // checklist build (handleSaveTags) is a once-only bulk pass; this is for
 // "we added a gauge, add one more line" without redoing the whole thing.
