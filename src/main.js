@@ -1158,15 +1158,20 @@ function scheduledCompletionSeries(history, inspectionDays, count = 10) {
   const scheduledSet = new Set(String(inspectionDays || "Mon,Tue,Wed,Thu,Fri").split(",").map((d) => d.trim()));
   const submittedDates = new Set((history || []).map((h) => h.inspection_date));
   const series = [];
+  const todayIso = new Date().toLocaleDateString("en-CA");
   const cursor = new Date();
   cursor.setHours(0, 0, 0, 0);
-  // Walk backward from today (not counting today, which is still in
-  // progress) collecting scheduled days until there are `count` of them.
-  cursor.setDate(cursor.getDate() - 1);
+  // Walk backward from today. Today only joins the line once it's
+  // actually been submitted -- that's what makes the graph visibly
+  // move the moment a super hits submit, without ever showing today
+  // as "missed" while the day is still in progress. A day that's
+  // already past always joins, submitted or not, which is what turns
+  // it red starting the very next day if nothing was ever submitted.
   while (series.length < count) {
     const weekday = WEEKDAY_ABBR[cursor.getDay()];
-    if (scheduledSet.has(weekday)) {
-      const iso = cursor.toLocaleDateString("en-CA");
+    const iso = cursor.toLocaleDateString("en-CA");
+    const isToday = iso === todayIso;
+    if (scheduledSet.has(weekday) && (!isToday || submittedDates.has(iso))) {
       series.push({ date: iso, weekday, completed: submittedDates.has(iso) });
     }
     cursor.setDate(cursor.getDate() - 1);
@@ -5050,6 +5055,15 @@ async function submitInspection(form) {
     });
     state.confirmedOutOfRange = false;
     state.confirmedAbnormalTagIds = [];
+    // Refresh the completion history right away so the super's own
+    // line graph reflects today's submission the moment it lands,
+    // rather than waiting for the next full dashboard reload. Best
+    // effort -- a failed refetch here shouldn't undo a real submit.
+    if (state.inspection?.building) {
+      state.buildingWorldHistory = (
+        await api.inspectionHistory(state.inspection.building.id).catch(() => ({ submissions: state.buildingWorldHistory }))
+      ).submissions;
+    }
     renderApp();
   } catch (requestError) {
     if (error) {
