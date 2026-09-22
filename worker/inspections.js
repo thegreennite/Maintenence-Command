@@ -334,7 +334,20 @@ async function upsertDraft(session, env, { notes, readings, flags, photoKeys, gr
 export async function handleInspectionSave(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   try {
-    await upsertDraft(session, env, body);
+    if (body.clearAll === true) {
+      // Resolve only this account's current editable inspection. Never delete
+      // historical inspections or the original recovery copies in GHL/R2.
+      const { submissionId, buildingId, date } = await ensureSubmission(session, env);
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM inspection_readings WHERE submission_id = ?').bind(submissionId),
+        env.DB.prepare('DELETE FROM group_photos WHERE submission_id = ?').bind(submissionId),
+        env.DB.prepare('DELETE FROM group_notes WHERE submission_id = ?').bind(submissionId),
+        env.DB.prepare("UPDATE inspection_submissions SET notes = '' WHERE id = ?").bind(submissionId),
+        env.DB.prepare("DELETE FROM photos WHERE building_id = ? AND date = ? AND (context = 'inspection' OR context GLOB 'group-[0-9]*' OR context GLOB 'command-[0-9]*')").bind(buildingId, date),
+      ]);
+    } else {
+      await upsertDraft(session, env, body);
+    }
   } catch (error) {
     if (error.status) return jsonError(error.message, error.status, corsHeaders);
     throw error;

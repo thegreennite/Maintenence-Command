@@ -26,20 +26,41 @@ export async function handleInspectionPhoto(request, session, env, corsHeaders) 
     return jsonError("AI photo reading isn't available on this account yet.", 403, corsHeaders);
   }
 
-  const body = await request.json().catch(() => ({}));
-  const tagIds = Array.isArray(body.tagIds) ? body.tagIds.map((id) => Number.parseInt(id, 10)) : [];
-  const imageBase64 = body.imageBase64;
-  const mediaType = body.mediaType;
+  const isMultipart = request.headers.get("content-type")?.includes("multipart/form-data");
+  const body = isMultipart ? await request.formData().catch(() => null) : await request.json().catch(() => ({}));
+  const tagIds = isMultipart
+    ? (() => {
+        try {
+          const parsed = JSON.parse(String(body?.get("tagIds") || "[]"));
+          return Array.isArray(parsed) ? parsed.map((id) => Number.parseInt(id, 10)) : [];
+        } catch {
+          return [];
+        }
+      })()
+    : Array.isArray(body.tagIds)
+      ? body.tagIds.map((id) => Number.parseInt(id, 10))
+      : [];
+  const imageBlob = isMultipart ? body?.get("photo") : null;
+  const mediaType = isMultipart ? imageBlob?.type : body.mediaType;
+  const imageBase64 = isMultipart ? null : body.imageBase64;
 
-  if (!tagIds.length || !imageBase64) {
+  if (!tagIds.length || (!imageBase64 && !imageBlob)) {
     return jsonError("A photo and at least one reading are required.", 400, corsHeaders);
   }
   if (!ALLOWED_MEDIA_TYPES.has(mediaType)) {
     return jsonError("Unsupported image type — use JPEG, PNG, or WEBP.", 400, corsHeaders);
   }
-  if (imageBase64.length > 6_000_000) {
+  if (imageBlob && (typeof imageBlob.arrayBuffer !== "function" || imageBlob.size > 12_000_000)) {
+    return jsonError("That photo is too large. Use the camera's standard photo setting and try again.", 400, corsHeaders);
+  }
+  if (imageBase64 && imageBase64.length > 6_000_000) {
     return jsonError("That photo is too large. Try again with a smaller image.", 400, corsHeaders);
   }
+
+  // Only the AI path needs base64, and doing this conversion here keeps the
+  // phone from allocating a second copy of the camera image. The original
+  // Blob is retained for direct GHL storage below.
+  const encodedImage = imageBase64 || (await arrayBufferToBase64(await imageBlob.arrayBuffer()));
 
   const placeholders = tagIds.map(() => "?").join(",");
   const tags = await env.DB.prepare(
@@ -88,7 +109,7 @@ Return a JSON array of exactly ${orderedTags.length} objects, one per numbered r
         body: JSON.stringify({
           contents: [
             {
-              parts: [{ inline_data: { mime_type: mediaType, data: imageBase64 } }, { text: prompt }],
+              parts: [{ inline_data: { mime_type: mediaType, data: encodedImage } }, { text: prompt }],
             },
           ],
           generationConfig: {
@@ -143,13 +164,24 @@ Return a JSON array of exactly ${orderedTags.length} objects, one per numbered r
   // is evidence someone was there and tried, not just clean successes.
   await storePhoto(env, {
     buildingId: session.building_id,
-    imageBase64,
+    imageBase64: encodedImage,
+    imageBlob,
     mediaType,
     context: "inspection",
     uploadedBy: session.id,
   }).catch((error) => console.error("Photo library store failed", error));
 
   return jsonOk({ results }, corsHeaders);
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 // Command mode: one tag, one photo, read as fast as possible. Two things

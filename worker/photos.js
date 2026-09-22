@@ -33,7 +33,7 @@ function ghlConfigured(env) {
   return Boolean(env.GHL_API_KEY && env.GHL_LOCATION_ID);
 }
 
-export async function storePhoto(env, { buildingId, imageBase64, mediaType, context, uploadedBy }) {
+export async function storePhoto(env, { buildingId, imageBase64, imageBlob, mediaType, context, uploadedBy }) {
   const date = todayIso();
   const ext = EXTENSIONS_BY_MEDIA_TYPE[mediaType] || "jpg";
   const rand = crypto.randomUUID().slice(0, 8);
@@ -45,7 +45,7 @@ export async function storePhoto(env, { buildingId, imageBase64, mediaType, cont
     const fileName = `${date}-${context}-${rand}.${ext}`;
     const result = await uploadInspectionPhotoToGhl(
       { apiKey: env.GHL_API_KEY, locationId: env.GHL_LOCATION_ID },
-      { imageBase64, mediaType, buildingName: building?.name || `building-${buildingId}`, inspectionDateIso: date, fileName },
+      { imageBase64, imageBlob, mediaType, buildingName: building?.name || `building-${buildingId}`, inspectionDateIso: date, fileName },
       env,
     );
     backend = "ghl";
@@ -53,7 +53,7 @@ export async function storePhoto(env, { buildingId, imageBase64, mediaType, cont
   } else if (env.PHOTOS) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const key = `${buildingId}/${date}/${stamp}-${rand}-${context}.${ext}`;
-    const binary = Uint8Array.from(atob(imageBase64), (c) => c.charCodeAt(0));
+    const binary = imageBlob ? await imageBlob.arrayBuffer() : Uint8Array.from(atob(imageBase64), (c) => c.charCodeAt(0));
     await env.PHOTOS.put(key, binary, {
       httpMetadata: { contentType: mediaType },
       customMetadata: { context, uploadedBy: String(uploadedBy || "") },

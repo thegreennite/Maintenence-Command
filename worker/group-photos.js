@@ -1,9 +1,7 @@
-// The mandatory "proof of presence" photo per equipment group -- plain
-// storage only, no AI reading, so it costs nothing beyond an R2 write no
-// matter how many times a super retakes it. The timestamp (and
-// geolocation, if granted) are already burned into the image pixels by
-// the browser before this ever sees the bytes -- see src/main.js's
-// captureComplianceProof().
+// The mandatory proof-of-presence photo per equipment group -- plain
+// storage only, no AI reading. The browser sends the original camera file
+// as multipart binary; capture time and geolocation are stored alongside it
+// in D1. Avoiding canvas/image decoding prevents Android Chrome bitmap OOM.
 
 import { ensureSubmission } from "./inspections.js";
 import { storePhoto } from "./photos.js";
@@ -26,19 +24,23 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 }
 
 export async function handleGroupPhotoUpload(request, session, env, corsHeaders) {
-  const body = await request.json().catch(() => ({}));
-  const groupId = Number.parseInt(body.groupId, 10);
-  const imageBase64 = body.imageBase64;
-  const mediaType = body.mediaType;
-  const capturedAt = String(body.capturedAt || new Date().toISOString());
-  const latitude = Number.isFinite(body.latitude) ? body.latitude : null;
-  const longitude = Number.isFinite(body.longitude) ? body.longitude : null;
+  const body = await request.formData().catch(() => null);
+  const groupId = Number.parseInt(body?.get("groupId"), 10);
+  const imageBlob = body?.get("photo");
+  const mediaType = imageBlob?.type || "";
+  const capturedAt = String(body?.get("capturedAt") || new Date().toISOString());
+  const latitudeValue = body?.has("latitude") ? Number(body.get("latitude")) : NaN;
+  const longitudeValue = body?.has("longitude") ? Number(body.get("longitude")) : NaN;
+  const latitude = Number.isFinite(latitudeValue) ? latitudeValue : null;
+  const longitude = Number.isFinite(longitudeValue) ? longitudeValue : null;
 
-  if (!groupId || !imageBase64) return jsonError("A photo and a machine are required.", 400, corsHeaders);
+  if (!groupId || !imageBlob || typeof imageBlob.arrayBuffer !== "function") {
+    return jsonError("A photo and a machine are required.", 400, corsHeaders);
+  }
   if (!ALLOWED_MEDIA_TYPES.has(mediaType)) {
     return jsonError("Unsupported image type — use JPEG, PNG, or WEBP.", 400, corsHeaders);
   }
-  if (imageBase64.length > 8_000_000) {
+  if (imageBlob.size > 20_000_000) {
     return jsonError("That photo is too large. Try again.", 400, corsHeaders);
   }
 
@@ -57,7 +59,7 @@ export async function handleGroupPhotoUpload(request, session, env, corsHeaders)
 
   const photoKey = await storePhoto(env, {
     buildingId,
-    imageBase64,
+    imageBlob,
     mediaType,
     context: `group-${groupId}`,
     uploadedBy: session.id,

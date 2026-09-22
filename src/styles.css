@@ -613,6 +613,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   padding: 6px; border-radius: 8px;
   transition: background .15s ease, box-shadow .15s ease;
 }
+.machine-zone__body > .add-reading-start { align-self: flex-start; margin-top: 2px; }
 /* The "cookie-cutter" outline a zone gets the moment a dragged reading
    crosses into it -- a dashed perimeter plus a slight lift, so which
    zone is about to receive it is never ambiguous. */
@@ -823,3 +824,18 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 @supports (padding: max(0px)) {
   .command-mode { padding-bottom: env(safe-area-inset-bottom, 0); }
 }
+.inspection-camera { width: min(94vw, 640px); max-height: 95dvh; overflow: auto; border: 0; border-radius: 16px; padding: 20px; background: #fff; color: #122024; }
+.inspection-camera::backdrop { background: rgba(0,0,0,.75); }
+.inspection-camera video { display: block; width: 100%; max-height: 60dvh; background: #122024; object-fit: contain; border-radius: 10px; }
+.inspection-camera__actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.photo-feedback { position: fixed; bottom: max(24px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); box-sizing: border-box; z-index: 10000; display: flex; align-items: center; gap: 14px; padding: 18px; border-radius: 20px; background: #f0fff7; color: #146347; border: 1px solid #a6d9c3; box-shadow: 0 12px 40px #102a2526; animation: photo-arrive .4s cubic-bezier(.2,.8,.2,1) both; }
+.photo-feedback--error { background: #fff4f2; color: #a4332b; border-color: #edb7b1; }
+.photo-feedback svg { width: 48px; height: 48px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.photo-feedback svg path { stroke-dasharray: 60; stroke-dashoffset: 60; animation: photo-draw .45s .15s ease forwards; }
+.photo-feedback--error svg { animation: photo-shake .4s ease; }
+.photo-feedback p { margin: 4px 0 0; font-size: 13px; line-height: 1.4; }
+.photo-feedback button { margin-left: auto; background: transparent; border: 0; color: inherit; font-size: 24px; min-width: 32px; min-height: 44px; cursor: pointer; }
+@keyframes photo-arrive { from { opacity: 0; transform: translate(-50%, 18px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+@keyframes photo-draw { to { stroke-dashoffset: 0; } }
+@keyframes photo-shake { 25%, 75% { transform: translateX(-3px); } 50% { transform: translateX(3px); } }
+@media (prefers-reduced-motion: reduce) { .photo-feedback, .photo-feedback svg, .photo-feedback svg path { animation: none; stroke-dashoffset: 0; } }

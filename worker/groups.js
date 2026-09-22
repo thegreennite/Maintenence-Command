@@ -83,6 +83,46 @@ export async function handleAssignTagGroup(request, session, env, corsHeaders) {
   return jsonOk({ ok: true }, corsHeaders);
 }
 
+// Adding a single new reading to an already-live checklist -- the AI
+// checklist build (handleSaveTags) is a once-only bulk pass; this is for
+// "we added a gauge, add one more line" without redoing the whole thing.
+export async function handleCreateTag(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const buildingId = Number.parseInt(body.buildingId, 10);
+  const systemName = String(body.systemName || "").trim();
+  const tagNo = body.tagNo != null ? String(body.tagNo).trim() || null : null;
+  const readingType = String(body.readingType || "").trim();
+  const unit = body.unit != null ? String(body.unit).trim() || null : null;
+  const groupId = body.groupId == null || body.groupId === "" ? null : Number.parseInt(body.groupId, 10);
+  const requestedValueType = ["numeric", "on_off", "hoa", "open_closed"].includes(body.valueType) ? body.valueType : "numeric";
+
+  if (!systemName || !readingType) return jsonError("A system and a reading are both required.", 400, corsHeaders);
+  if (!(await ownsBuilding(env, session, buildingId))) return jsonError("Building not found.", 404, corsHeaders);
+
+  if (groupId != null) {
+    const group = await env.DB.prepare("SELECT id FROM equipment_groups WHERE id = ? AND building_id = ?")
+      .bind(groupId, buildingId)
+      .first();
+    if (!group) return jsonError("Machine not found.", 404, corsHeaders);
+  }
+
+  // Same hard rule as everywhere else a reading gets typed or edited --
+  // see handleUpdateTag below and worker/buildings.js.
+  const isSprinkler = /sprinkler/i.test(`${tagNo || ""} ${readingType}`);
+  const valueType = isSprinkler ? "open_closed" : requestedValueType;
+
+  const max = await env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM inspection_tags WHERE building_id = ?")
+    .bind(buildingId)
+    .first();
+  const inserted = await env.DB.prepare(
+    "INSERT INTO inspection_tags (building_id, system_name, tag_no, reading_type, unit, answer_kind, equipment_group_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  )
+    .bind(buildingId, systemName, tagNo, readingType, unit, valueType, groupId, (max?.m ?? -1) + 1)
+    .run();
+
+  return jsonOk({ ok: true, tagId: inserted.meta.last_row_id, valueType }, corsHeaders);
+}
+
 // Editing a reading after the checklist's already live -- a manager fixing
 // a mistyped label or an AI misread, not part of the once-only initial
 // checklist build (handleSaveTags).

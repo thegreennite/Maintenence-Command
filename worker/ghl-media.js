@@ -126,13 +126,13 @@ async function ensureFolder(creds, name, parentId, env) {
 // library. `imageBase64` is the same client-compressed JPEG payload
 // worker/photos.js's storePhoto() already receives -- decoded here into
 // raw bytes for the multipart upload. Returns the GHL file's id + url.
-export async function uploadInspectionPhotoToGhl(creds, { imageBase64, mediaType, buildingName, inspectionDateIso, fileName }, env) {
+export async function uploadInspectionPhotoToGhl(creds, { imageBase64, imageBlob, mediaType, buildingName, inspectionDateIso, fileName }, env) {
   const buildingFolderId = await ensureFolder(creds, buildingName, null, env);
   const weekFolderId = await ensureFolder(creds, isoWeekFolderName(inspectionDateIso), buildingFolderId, env);
 
-  const binary = Uint8Array.from(atob(imageBase64), (c) => c.charCodeAt(0));
   const form = new FormData();
-  form.append("file", new Blob([binary], { type: mediaType }), fileName);
+  const file = imageBlob || new Blob([Uint8Array.from(atob(imageBase64), (c) => c.charCodeAt(0))], { type: mediaType });
+  form.append("file", file, fileName);
   form.append("altId", creds.locationId);
   form.append("altType", "location");
   form.append("parentId", weekFolderId);

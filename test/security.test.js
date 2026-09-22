@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { hashToken, hexToBytes, verifyPassword } from "../worker/security.js";
 
 test("hexToBytes accepts valid hexadecimal values", () => {
@@ -11,9 +12,9 @@ test("hexToBytes rejects malformed values", () => {
 });
 
 test("seed password verification succeeds and rejects a wrong password", async () => {
-  const salt = "af7afb5593e443f741b84ccb292e5e5d";
-  const hash = "e5d8400a890979525e7328f6f4fa8ec111eaa58d5958b326d517f176939d5489";
-  assert.equal(await verifyPassword("Ops!Alex2026", salt, hash), true);
+  const migration = readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8');
+  const [, hash, salt] = migration.match(/\('alex.kim', '([^']+)', '([^']+)'/);
+  assert.equal(await verifyPassword("FHG-Manager-2026!", salt, hash), true);
   assert.equal(await verifyPassword("wrong", salt, hash), false);
 });
 

@@ -1,4 +1,6 @@
 import "./styles.css";
+import { installCameraCapture, liveCaptureTime, showPhotoFeedback } from "./camera.js";
+installCameraCapture();
 import { jsPDF } from "jspdf";
 
 // Google Maps JS API loads as a global script, not an npm module — lazily
@@ -58,6 +60,9 @@ const state = {
   buildingWorldManagingLocations: false,
   buildingWorldRenamingGroupId: null,
   buildingWorldEditingTagId: null,
+  // Which machine's (or the ungrouped zone's, via the string "ungrouped")
+  // "+ Add reading" form is currently open -- undefined = none open.
+  buildingWorldAddingTagGroupId: undefined,
   buildingWorldSelectedGroupIds: new Set(),
   buildingWorldRenamingBuilding: false,
   buildingWorldHistory: null,
@@ -91,11 +96,12 @@ const API_BASE = import.meta.env.VITE_API_URL || "";
 
 const api = {
   async request(path, options = {}) {
+    const isFormDataBody = typeof FormData !== "undefined" && options.body instanceof FormData;
     const response = await fetch(`${API_BASE}/api${path}`, {
       credentials: "include",
       ...options,
       headers: {
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.body && !isFormDataBody ? { "Content-Type": "application/json" } : {}),
         ...options.headers,
       },
     });
@@ -165,7 +171,10 @@ const api = {
     return this.request("/inspections/submit", { method: "POST", body: JSON.stringify(payload) });
   },
   inspectionPhoto(payload) {
-    return this.request("/inspections/photo", { method: "POST", body: JSON.stringify(payload) });
+    const body = new FormData();
+    body.append("tagIds", JSON.stringify(payload.tagIds));
+    body.append("photo", payload.file, payload.file.name || "inspection.jpg");
+    return this.request("/inspections/photo", { method: "POST", body });
   },
   managerInspection() {
     return this.request("/manager/inspection");
@@ -296,8 +305,14 @@ const api = {
   commandModePhoto(payload) {
     return this.request("/inspections/command-photo", { method: "POST", body: JSON.stringify(payload) });
   },
-  groupPhotoUpload(payload) {
-    return this.request("/inspections/group-photo", { method: "POST", body: JSON.stringify(payload) });
+  groupPhotoUpload({ groupId, imageBlob, capturedAt, latitude, longitude }) {
+    const body = new FormData();
+    body.append("groupId", String(groupId));
+    body.append("photo", imageBlob, "inspection-proof.jpg");
+    body.append("capturedAt", capturedAt);
+    if (latitude != null) body.append("latitude", String(latitude));
+    if (longitude != null) body.append("longitude", String(longitude));
+    return this.request("/inspections/group-photo", { method: "POST", body });
   },
   managerLocations(buildingId) {
     return this.request(`/manager/locations?buildingId=${buildingId}`);
@@ -325,6 +340,9 @@ const api = {
   },
   updateTag(payload) {
     return this.request("/manager/tags/update", { method: "POST", body: JSON.stringify(payload) });
+  },
+  createTag(payload) {
+    return this.request("/manager/tags/create", { method: "POST", body: JSON.stringify(payload) });
   },
   inspectionHistory(buildingId) {
     return this.request(`/manager/buildings/inspection-history?buildingId=${buildingId}`);
@@ -2294,6 +2312,50 @@ async function handleEditReadingChipSave(event) {
   }
 }
 
+async function handleAddReadingSave(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = document.querySelector("#add-tag-error");
+  const button = form.querySelector('button[type="submit"]');
+  const data = new FormData(form);
+  const groupKey = form.dataset.groupKey;
+  const groupId = groupKey === "ungrouped" ? null : Number(groupKey);
+  button.disabled = true;
+  try {
+    const systemName = data.get("system_name").trim();
+    const tagNo = data.get("tag_no").trim() || null;
+    const readingType = data.get("reading_type").trim();
+    const unit = data.get("unit").trim() || null;
+    const result = await api.createTag({
+      buildingId: state.buildingWorld.buildingId,
+      groupId,
+      systemName,
+      tagNo,
+      readingType,
+      unit,
+      valueType: data.get("value_type"),
+    });
+    const group = groupId != null ? state.buildingWorld.groups.find((g) => g.id === groupId) : null;
+    state.buildingWorld.tags.push({
+      id: result.tagId,
+      system_name: systemName,
+      tag_no: tagNo,
+      reading_type: readingType,
+      unit,
+      value_type: result.valueType,
+      equipment_group_id: groupId,
+      equipment_group_name: group?.name || null,
+      location_id: null,
+    });
+    state.buildingWorldAddingTagGroupId = undefined;
+    renderApp();
+  } catch (requestError) {
+    button.disabled = false;
+    error.textContent = requestError.message;
+    error.hidden = false;
+  }
+}
+
 // ---------------------------------------------------------------------
 // Reading-chip drag + tap-to-edit, unified. Press anywhere on a chip and
 // hold-drag it onto another machine to regroup it; a plain tap opens
@@ -2761,10 +2823,40 @@ function renderMachineBoard(world) {
               ? ungrouped.map((t) => renderReadingChip(t, world)).join("")
               : `<p class="machine-zone__empty">Nothing ungrouped.</p>`
           }
+          ${renderAddReadingControl("ungrouped", null, world)}
         </div>
       </div>
       ${groups.map((g) => renderMachineZone(g, tags, world)).join("")}
     </div>`;
+}
+
+// A single new reading, typed straight in -- no need to redo the whole
+// AI checklist build just to add one gauge. Sits at the end of a
+// machine's (or the ungrouped zone's) reading list; tapping it opens the
+// same field set as editing a reading (renderReadingChipEditForm), just
+// empty and wired to create instead of update.
+function renderAddReadingControl(groupKey, groupId, world) {
+  if (state.buildingWorldAddingTagGroupId === groupKey) {
+    return `
+      <form class="reading-chip reading-chip--editing" id="add-tag-form" data-group-key="${groupKey}">
+        <input type="text" name="system_name" placeholder="System (e.g. Boiler H1B)" required autofocus />
+        <input type="text" name="tag_no" placeholder="Tag no. (optional)" />
+        <input type="text" name="reading_type" placeholder="Reading (e.g. Inlet temperature)" required />
+        <input type="text" name="unit" placeholder="Unit (e.g. PSI, °)" />
+        <select name="value_type">
+          <option value="numeric" selected>Numeric</option>
+          ${Object.entries(CLOSED_CHOICE_TYPES)
+            .map(([value, { label }]) => `<option value="${value}">${escapeHtml(label)}</option>`)
+            .join("")}
+        </select>
+        <div class="reading-chip__edit-actions">
+          <button type="submit" class="icon-button" title="Add" aria-label="Add reading">${icon("check")}</button>
+          <button type="button" class="icon-button cancel-add-tag" title="Cancel" aria-label="Cancel">${icon("close")}</button>
+        </div>
+        <p class="form-error" id="add-tag-error" hidden role="alert"></p>
+      </form>`;
+  }
+  return `<button type="button" class="button button--outline button--small add-reading-start" data-group-key="${groupKey}" data-group-id="${groupId ?? ""}">+ Add reading</button>`;
 }
 
 function renderMachineZone(group, tags, world) {
@@ -2807,6 +2899,7 @@ function renderMachineZone(group, tags, world) {
             ? groupTags.map((t) => renderReadingChip(t, world)).join("")
             : `<p class="machine-zone__empty">Drag a reading here</p>`
         }
+        ${renderAddReadingControl(String(group.id), group.id, world)}
       </div>
     </div>`;
 }
@@ -3266,7 +3359,7 @@ function renderMachinePhotoBlock(groupId, name, proof, locked) {
       <p class="machine-photo__status">
         ${
           proof
-            ? `${icon("check")} Photo taken ${escapeHtml(formatTimestamp(proof.capturedAt))}${proof.latitude != null ? " · location tagged" : ""}`
+            ? `${icon("check")} Photo taken ${escapeHtml(formatTimestamp(proof.capturedAt))}${proof.latitude != null && proof.longitude != null ? " · location tagged" : " · location unavailable"}`
             : `${icon("warning")} Required before submitting: a timestamped photo of ${escapeHtml(name)}`
         }
       </p>
@@ -3410,26 +3503,30 @@ async function normalizeToDecodableImage(file) {
   }
 }
 
-// A modern phone's camera photo (often 12-48MP, 4-15MB) base64-inflates
-// well past what the AI endpoints accept and takes noticeably longer to
-// upload and process to boot. Gemini doesn't need pixel-for-pixel detail
-// to read a gauge or a label -- downscale + re-encode as JPEG client-side
-// before every photo upload. Falls back to the raw file if this browser
-// can't decode it for some other reason, so a photo can never silently
-// fail to send because of this step (HEIC/HEIF is the one format that's
-// truly unrecoverable if the WASM decoder itself fails, since the server
-// doesn't accept that media type either).
+// A modern phone's camera photo (often 12-48MP, 4-15MB) can exceed Android
+// Chrome's bitmap memory limit before it ever reaches the network. Gemini
+// doesn't need pixel-for-pixel detail to read a gauge or a label, so ask the
+// image decoder to resize during decode. This is important: decoding first
+// and shrinking on a canvas still allocates the full-resolution bitmap and
+// is exactly what produces Android's "Unable to complete previous operation
+// due to low memory" toast after a few photos.
 async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } = {}) {
   const sourceFile = await normalizeToDecodableImage(file);
   try {
-    const bitmap = await createImageBitmap(sourceFile);
-    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
+    // Supplying only resizeWidth preserves aspect ratio while ensuring even
+    // a 48MP portrait capture is decoded into a bounded bitmap. A portrait
+    // image may be a little taller than maxDimension, which is intentional:
+    // preserving the inspection photo's geometry is more useful than
+    // distorting it by forcing both dimensions.
+    const bitmap = await createImageBitmap(sourceFile, { resizeWidth: maxDimension, resizeQuality: "high" });
+    const width = bitmap.width;
+    const height = bitmap.height;
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.drawImage(bitmap, 0, 0, width, height);
     bitmap.close?.();
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
@@ -3442,12 +3539,7 @@ async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } =
     if (!blob) throw new Error("Canvas produced no image data.");
     return { base64: await fileToBase64(blob), mediaType: "image/jpeg" };
   } catch (error) {
-    if (sourceFile !== file) {
-      // Already converted out of HEIC into a real JPEG blob -- send that
-      // as-is rather than the original (server-rejected) HEIC bytes.
-      return { base64: await fileToBase64(sourceFile), mediaType: "image/jpeg" };
-    }
-    return { base64: await fileToBase64(file), mediaType: file.type || "image/jpeg" };
+    throw new Error("This photo is too large for the phone to process. Retake it with the camera's lower-resolution or standard setting.");
   }
 }
 
@@ -3456,29 +3548,21 @@ async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } =
 // no cost reason to hold back; it just quietly omits itself if the
 // device/browser won't grant it in time.
 //
-// The browser only ever actually prompts for location permission once
-// per site (it remembers "Allow"/"Block" after that) -- but calling
-// getCurrentPosition fresh on every single photo still shows a location
-// indicator each time and costs a moment waiting on a GPS fix. Since a
-// building doesn't move mid-inspection, the first successful fix for
-// this session is cached and reused for every later photo instead.
-let cachedGeolocation = null;
+// Request a fresh fix per capture: the inspector may move between buildings.
 function getGeolocation(timeoutMs = 4000) {
-  if (cachedGeolocation) return Promise.resolve(cachedGeolocation);
   if (!navigator.geolocation) return Promise.resolve(null);
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), timeoutMs);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         clearTimeout(timer);
-        cachedGeolocation = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-        resolve(cachedGeolocation);
+        resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
       },
       () => {
         clearTimeout(timer);
         resolve(null);
       },
-      { enableHighAccuracy: false, timeout: timeoutMs, maximumAge: 60_000 },
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
     );
   });
 }
@@ -3489,52 +3573,16 @@ function formatCoords(latitude, longitude) {
   return `${lat}, ${lon}`;
 }
 
-// The mandatory "proof this machine was actually checked today" photo --
-// burns a visible timestamp (and geolocation, if granted) directly into
-// the image's pixels client-side before it's ever uploaded, specifically
-// so it can't be a photo from a previous day. Deliberately a separate,
-// plain-upload path from compressImageFile's -- this never goes through
-// Gemini, so retaking it costs nothing.
+// The mandatory proof photo stays on a native binary-upload path. Capture
+// time and geolocation are recorded in D1; the original camera file goes to
+// GHL without client-side canvas decoding, which avoids Android bitmap OOM.
 async function captureComplianceProof(file) {
+  const capturedAt = liveCaptureTime(file);
+  if (!capturedAt) throw new Error("Take a live photo with the inspection camera. Stored images are not accepted.");
   const geo = await getGeolocation();
-  const sourceFile = await normalizeToDecodableImage(file);
-  const bitmap = await createImageBitmap(sourceFile);
-  const maxDimension = 1600;
-  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close?.();
-
-  const capturedAt = new Date();
-  const stampLine1 = `${capturedAt.toLocaleString("en-US", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" })} ET`;
-  const stampLine2 = geo ? formatCoords(geo.latitude, geo.longitude) : null;
-  const barHeight = stampLine2 ? 52 : 32;
-
-  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
-  ctx.fillRect(0, height - barHeight, width, barHeight);
-  ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "600 15px Arial, sans-serif";
-  ctx.fillText(stampLine1, 12, height - (stampLine2 ? 30 : 11));
-  if (stampLine2) {
-    ctx.font = "500 13px Arial, sans-serif";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-    ctx.fillText(stampLine2, 12, height - 11);
-  }
-
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
-  canvas.width = 0;
-  canvas.height = 0;
-  if (!blob) throw new Error("Couldn't process that photo. Try again.");
   return {
-    imageBase64: await fileToBase64(blob),
-    mediaType: "image/jpeg",
-    capturedAt: capturedAt.toISOString(),
+    imageBlob: file,
+    capturedAt,
     latitude: geo?.latitude ?? null,
     longitude: geo?.longitude ?? null,
   };
@@ -3553,8 +3601,8 @@ async function handlePhotoCapture(event) {
   status.className = "photo-capture__status photo-capture__status--busy";
   const stopAnimation = startReadingAnimation(status, { estimateSeconds: 6 });
   try {
-    const { base64: imageBase64, mediaType } = await compressImageFile(file);
-    const response = await api.inspectionPhoto({ tagIds, imageBase64, mediaType });
+    if (!liveCaptureTime(file)) throw new Error("Live camera photos only. Please take a new photo.");
+    const response = await api.inspectionPhoto({ tagIds, file });
     stopAnimation();
     let filled = 0;
     const unclear = [];
@@ -3597,8 +3645,8 @@ async function handleSinglePhotoCapture(event) {
   const photoButton = field?.querySelector(".inspection-field__photo-button");
   if (photoButton) photoButton.classList.add("inspection-field__photo-button--busy");
   try {
-    const { base64: imageBase64, mediaType } = await compressImageFile(file);
-    const response = await api.inspectionPhoto({ tagIds: [tagId], imageBase64, mediaType });
+    if (!liveCaptureTime(file)) throw new Error("Live camera photos only. Please take a new photo.");
+    const response = await api.inspectionPhoto({ tagIds: [tagId], file });
     const result = response.results?.[0];
     if (result && result.value != null && !result.unclear && fieldInput) {
       fieldInput.value = result.value;
@@ -3618,7 +3666,7 @@ async function handleMachinePhotoCapture(groupId, file) {
   const block = document.querySelector(`[data-machine-photo-group="${groupId}"]`);
   const statusEl = block?.querySelector(".machine-photo__status");
   const originalStatus = statusEl?.innerHTML;
-  if (statusEl) statusEl.innerHTML = `${icon("clock")} Stamping and uploading…`;
+  if (statusEl) statusEl.innerHTML = `${icon("clock")} Uploading photo…`;
   try {
     const proof = await captureComplianceProof(file);
     const result = await api.groupPhotoUpload({ groupId, ...proof });
@@ -3635,8 +3683,10 @@ async function handleMachinePhotoCapture(groupId, file) {
     const error = document.querySelector("#inspection-error");
     if (error && !missingGroupPhotoNames().length) error.hidden = true;
     renderApp();
+    showPhotoFeedback(true, result.latitude != null ? "Timestamp and location recorded." : "Timestamp recorded. Location unavailable — check location permission.");
   } catch (error) {
     if (statusEl) statusEl.innerHTML = originalStatus;
+    showPhotoFeedback(false, `${error.message} Please retake the photo.`);
     const errorEl = document.querySelector("#inspection-error");
     if (errorEl) {
       errorEl.textContent = error.message;
@@ -3871,12 +3921,8 @@ async function exitCommandMode() {
   renderApp();
 }
 
-// A full reset of today's inspection -- every value, flag, and photo
-// reference wiped back to blank. Reuses the regular save endpoint rather
-// than a dedicated "clear" API: upsertDraft only ever touches a column
-// for a tag it's explicitly told about (see worker/inspections.js), so
-// sending every tag with an empty value / false flag / null photo forces
-// exactly that, without needing new backend surface.
+// Reset today's draft atomically through the save endpoint, including
+// proof photos and notes. Original storage objects remain recoverable.
 async function handleConfirmClearAll() {
   const modal = document.querySelector("#clear-all-modal");
   const button = modal?.querySelector("#confirm-clear-all");
@@ -3885,15 +3931,15 @@ async function handleConfirmClearAll() {
     button.textContent = "Clearing…";
   }
   try {
-    const allTagIds = state.inspection.tags.map((t) => t.id);
-    const readings = Object.fromEntries(allTagIds.map((id) => [id, ""]));
-    const flags = Object.fromEntries(allTagIds.map((id) => [id, false]));
-    const photoKeys = Object.fromEntries(allTagIds.map((id) => [id, null]));
-    const data = await api.inspectionSave({ notes: state.inspection.notes, readings, flags, photoKeys });
-
-    state.inspection.readings = data.readings;
-    state.inspection.flags = data.flags;
-    state.inspection.photoKeys = data.photoKeys;
+    clearTimeout(commandModeSaveTimer);
+    commandModeSaveTimer = null;
+    // Let any already-sent autosave finish before the reset, so it cannot
+    // restore old values/photo references after clearing.
+    if (commandModeSaveInFlight) await commandModeSaveInFlight;
+    const data = await api.inspectionSave({ clearAll: true });
+    state.inspection = data;
+    state.photoLibrary = { open: false, buildingId: null, dates: [], selectedDate: null, photos: [], loading: false };
+    document.querySelector('.photo-feedback')?.remove();
     state.confirmedAbnormalTagIds = [];
 
     const cm = state.commandMode;
@@ -3901,6 +3947,11 @@ async function handleConfirmClearAll() {
       cm.readings = {};
       cm.flags = {};
       cm.photoKeys = {};
+      cm.groupPhotos = {};
+      cm.pendingGroupPhoto = null;
+      cm.groupPhotoUploading = false;
+      cm.lastLocationWarning = null;
+      cm.manualDraft = "";
       cm.index = 0;
       cm.entryMode = "choose";
       cm.scanResult = null;
@@ -3934,7 +3985,7 @@ function renderClearAllConfirmModal() {
   wrap.innerHTML = `
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="clear-all-title">
       <h3 id="clear-all-title">${icon("warning")} Clear everything?</h3>
-      <p class="parameters-intro">This wipes every value, flag, and photo entered for today's inspection on this building — back to a blank sheet. This can't be undone.</p>
+      <p class="parameters-intro">Clear today's readings, flags, notes, and all inspection photos for this building? Photos will disappear from this checklist and today's photo library. Older inspections are unchanged. Original stored files remain available for recovery; this reset cannot be undone in the app.</p>
       <p class="form-error" id="clear-all-error" hidden role="alert"></p>
       <div class="inspection-actions">
         <button type="button" class="button button--outline" id="cancel-clear-all">Cancel</button>
@@ -4078,7 +4129,10 @@ async function commandModeCaptureGroupPhoto(file) {
       capturedAt: result.capturedAt,
       latitude: result.latitude,
       longitude: result.longitude,
+      distanceFromBuildingM: result.distanceFromBuildingM,
+      locationMismatch: result.locationMismatch,
     };
+    state.inspection.groupPhotos = { ...state.inspection.groupPhotos, [groupId]: { ...cm.groupPhotos[groupId] } };
     // Command mode auto-advances right past this screen, so a per-photo
     // location mismatch can't just sit as an inline badge the way it
     // does on the regular checklist card -- carried forward as a small
@@ -4089,10 +4143,12 @@ async function commandModeCaptureGroupPhoto(file) {
     cm.pendingGroupPhoto = null;
     cm.groupPhotoUploading = false;
     commandModeContinueAdvance();
+    showPhotoFeedback(true, result.latitude != null ? "Timestamp and location recorded. Checklist updated." : "Checklist updated. Timestamp recorded; location unavailable.");
   } catch (error) {
     cm.groupPhotoUploading = false;
     cm.error = error.message;
     renderApp();
+    showPhotoFeedback(false, `${error.message} Please retake the photo.`);
   }
 }
 
@@ -4269,6 +4325,7 @@ async function handleCommandModePhotoInput(event) {
   const status = document.querySelector("#command-mode-busy-status");
   const stopAnimation = status ? startReadingAnimation(status, { estimateSeconds: 4 }) : () => {};
   try {
+    if (!liveCaptureTime(file)) throw new Error("Live camera photos only. Please take a new photo.");
     const { base64: imageBase64, mediaType } = await compressImageFile(file);
     const result = await api.commandModePhoto({ tagId, imageBase64, mediaType });
     stopAnimation();
@@ -4413,8 +4470,7 @@ function renderCommandModeChoose(currentValue, isFlagged, tag) {
         aiPhotoEnabled()
           ? `<label class="button button--primary command-mode__action" for="command-mode-camera">${icon("camera")} Take picture</label>
              <input type="file" accept="image/*" capture="environment" id="command-mode-camera" hidden />
-             <label class="button button--outline command-mode__action" for="command-mode-upload">${icon("image")} Upload from device</label>
-             <input type="file" accept="image/*" id="command-mode-upload" hidden />`
+             `
           : ""
       }
       <button type="button" class="button ${aiPhotoEnabled() ? "button--outline" : "button--primary"} command-mode__action" id="command-mode-manual">${icon("edit")} Enter manually</button>
@@ -4529,11 +4585,11 @@ function renderCommandModeGroupPhoto(cm) {
       <div class="command-mode__stage">
         <p class="command-mode__location">Required before moving on</p>
         <h1 class="command-mode__label">${icon("camera")} Photo of ${escapeHtml(groupName || "this machine")}</h1>
-        <p class="command-mode__scan-note">${icon("warning")} A timestamp gets stamped onto the photo automatically — this is how we confirm every machine was actually checked today, not just filled in from memory.</p>
+        <p class="command-mode__scan-note">${icon("warning")} The capture time and location are recorded with this photo so we can confirm the machine was checked today.</p>
         ${cm.error ? `<p class="form-error">${escapeHtml(cm.error)}</p>` : ""}
         ${
           cm.groupPhotoUploading
-            ? `<div class="command-mode__busy"><span class="loading-bar"><span></span></span><p>Stamping and uploading…</p></div>`
+            ? `<div class="command-mode__busy"><span class="loading-bar"><span></span></span><p>Uploading photo…</p></div>`
             : `<div class="command-mode__actions">
                 <label class="button button--primary command-mode__action" for="command-mode-group-photo">${icon("camera")} Take the photo</label>
                 <input type="file" accept="image/*" capture="environment" id="command-mode-group-photo" hidden />
@@ -4604,7 +4660,6 @@ function bindCommandModeEvents() {
     });
   });
   document.querySelector("#command-mode-camera")?.addEventListener("change", handleCommandModePhotoInput);
-  document.querySelector("#command-mode-upload")?.addEventListener("change", handleCommandModePhotoInput);
   document.querySelector("#command-mode-scan-accept")?.addEventListener("click", handleCommandModeScanAccept);
   document.querySelector("#command-mode-scan-retake")?.addEventListener("click", handleCommandModeScanRetake);
   document.querySelector("#command-mode-scan-manual")?.addEventListener("click", handleCommandModeScanManual);
@@ -5119,6 +5174,17 @@ function bindDashboardEvents() {
   });
   document.querySelector("#edit-tag-form")?.addEventListener("submit", handleEditReadingChipSave);
   document.querySelector(".cancel-edit-tag")?.addEventListener("click", handleEditReadingChipCancel);
+  document.querySelectorAll(".add-reading-start").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.buildingWorldAddingTagGroupId = button.dataset.groupKey;
+      renderApp();
+    });
+  });
+  document.querySelector("#add-tag-form")?.addEventListener("submit", handleAddReadingSave);
+  document.querySelector(".cancel-add-tag")?.addEventListener("click", () => {
+    state.buildingWorldAddingTagGroupId = undefined;
+    renderApp();
+  });
   document.querySelectorAll(".rename-group-start").forEach((button) => {
     button.addEventListener("click", () => handleRenameGroupStart(button));
   });
