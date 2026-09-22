@@ -1103,17 +1103,19 @@ function renderSuperintendentOverview(inspection) {
   const recentGroupNotes = inspection.recentGroupNotes || [];
   const noteItems = [
     ...recentNotes.map((n) => ({ date: n.inspection_date, text: n.notes })),
-    ...recentGroupNotes.map((n) => ({ date: n.inspection_date, text: `${n.group_name}: ${n.note}` })),
+    ...recentGroupNotes.map((n) => ({ date: n.inspection_date, text: n.note, tag: n.group_name })),
   ]
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, 6);
 
   return `
     <section class="card super-overview">
-      <div class="card__header"><div><p class="section-kicker">Your building</p><h2>${escapeHtml(inspection.building.name)}</h2></div></div>
+      <div class="card__header">
+        <div><p class="section-kicker">Your building</p><h2>${escapeHtml(inspection.building.name)}</h2></div>
+      </div>
       <div class="super-overview__grid">
         <div class="super-overview__col">
-          <h3>Notices from your operations manager</h3>
+          <h3>${icon("shield")} Notices from your operations manager</h3>
           ${
             notices.length
               ? `<ul class="super-note-list">${notices
@@ -1123,17 +1125,20 @@ function renderSuperintendentOverview(inspection) {
                       `<li><p>${escapeHtml(n.message)}</p><small>${escapeHtml(n.created_by_name || "")} · ${escapeHtml(formatTimestamp(n.created_at))}</small></li>`,
                   )
                   .join("")}</ul>`
-              : `<p class="quiet-label">No notices yet.</p>`
+              : `<p class="super-overview__empty">Nothing posted yet.</p>`
           }
         </div>
         <div class="super-overview__col">
-          <h3>Recent notes</h3>
+          <h3>${icon("edit")} Recent notes</h3>
           ${
             noteItems.length
               ? `<ul class="super-note-list">${noteItems
-                  .map((n) => `<li><p>${escapeHtml(n.text)}</p><small>${escapeHtml(formatInspectionDate(n.date))}</small></li>`)
+                  .map(
+                    (n) =>
+                      `<li><p>${n.tag ? `<strong>${escapeHtml(n.tag)}:</strong> ` : ""}${escapeHtml(n.text)}</p><small>${escapeHtml(formatInspectionDate(n.date))}</small></li>`,
+                  )
                   .join("")}</ul>`
-              : `<p class="quiet-label">No notes yet.</p>`
+              : `<p class="super-overview__empty">Nothing left yet.</p>`
           }
         </div>
       </div>
@@ -1144,31 +1149,38 @@ function renderSuperintendentOverview(inspection) {
 // A quick, honest visual on how this super's own inspections have gone
 // -- readings logged and readings flagged, per submitted day, over the
 // last 8 submissions. Hand-rolled SVG (a few bars), not a charting
-// library -- there's nothing here that needs one.
+// library -- there's nothing here that needs one. The SVG is given
+// explicit pixel width/height matching the viewBox 1:1 (rather than
+// letting max-width:100% stretch a tiny viewBox across a wide card,
+// which blows bars and labels up to several times their size) and sits
+// in its own horizontally-scrollable strip so it never has to squash
+// or distort on a narrow phone either.
 function renderSuperMetrics(history) {
   if (!history || !history.length) {
-    return `<p class="quiet-label super-metrics__empty">Submit a few inspections to see your metrics here.</p>`;
+    return `<p class="super-overview__empty super-metrics__empty">Submit a few inspections to see your metrics here.</p>`;
   }
   const recent = [...history].sort((a, b) => a.inspection_date.localeCompare(b.inspection_date)).slice(-8);
   const totalFlagged = history.reduce((sum, r) => sum + (r.flagged_count || 0), 0);
   const maxReadings = Math.max(...recent.map((r) => r.reading_count || 0), 1);
-  const barWidth = 28;
-  const gap = 12;
-  const chartHeight = 90;
+  const barWidth = 34;
+  const gap = 18;
+  const chartHeight = 110;
+  const topPad = 6;
   const width = recent.length * (barWidth + gap) - gap;
 
   const bars = recent
     .map((r, i) => {
-      const h = Math.max(4, Math.round(((r.reading_count || 0) / maxReadings) * chartHeight));
+      const h = Math.max(6, Math.round(((r.reading_count || 0) / maxReadings) * (chartHeight - topPad)));
       const flaggedH = r.reading_count ? Math.round(((r.flagged_count || 0) / r.reading_count) * h) : 0;
       const x = i * (barWidth + gap);
-      const label = formatInspectionDate(r.inspection_date).split(",")[0] || "";
+      const d = new Date(`${r.inspection_date}T00:00:00`);
+      const label = `${d.getMonth() + 1}/${d.getDate()}`;
       return `
-        <g>
+        <g class="super-metrics__bar" style="animation-delay: ${i * 60}ms">
           <title>${escapeHtml(formatInspectionDate(r.inspection_date))}: ${r.reading_count || 0} readings, ${r.flagged_count || 0} flagged</title>
-          <rect x="${x}" y="${chartHeight - h}" width="${barWidth}" height="${h}" rx="3" fill="#4caf7d" />
-          ${flaggedH ? `<rect x="${x}" y="${chartHeight - flaggedH}" width="${barWidth}" height="${flaggedH}" rx="3" fill="#e8a33d" />` : ""}
-          <text x="${x + barWidth / 2}" y="${chartHeight + 16}" text-anchor="middle" font-size="9" fill="#8a9490">${escapeHtml(label)}</text>
+          <rect x="${x}" y="${chartHeight - h}" width="${barWidth}" height="${h}" rx="6" fill="url(#superBarFill)" />
+          ${flaggedH ? `<rect x="${x}" y="${chartHeight - flaggedH}" width="${barWidth}" height="${flaggedH}" rx="6" fill="#e8a33d" />` : ""}
+          <text x="${x + barWidth / 2}" y="${chartHeight + 18}" text-anchor="middle" class="super-metrics__label">${escapeHtml(label)}</text>
         </g>`;
     })
     .join("");
@@ -1176,11 +1188,21 @@ function renderSuperMetrics(history) {
   return `
     <div class="super-metrics">
       <div class="super-metrics__stats">
-        <div><strong>${history.length}</strong><span>Submitted inspections</span></div>
-        <div><strong>${totalFlagged}</strong><span>Flagged readings, all time</span></div>
+        <div class="super-metrics__stat"><strong>${history.length}</strong><span>Submitted inspections</span></div>
+        <div class="super-metrics__stat super-metrics__stat--${totalFlagged ? "amber" : "green"}"><strong>${totalFlagged}</strong><span>Flagged readings, all time</span></div>
       </div>
-      <svg viewBox="0 0 ${width} ${chartHeight + 24}" class="super-metrics__chart" role="img" aria-label="Readings and flags per recent inspection">${bars}</svg>
-      <p class="quiet-label super-metrics__legend"><span class="legend-dot legend-dot--green"></span>Readings logged<span class="legend-dot legend-dot--amber"></span>Flagged</p>
+      <div class="super-metrics__chart-wrap">
+        <svg width="${width}" height="${chartHeight + 30}" viewBox="0 0 ${width} ${chartHeight + 30}" class="super-metrics__chart" role="img" aria-label="Readings and flags per recent inspection">
+          <defs>
+            <linearGradient id="superBarFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#5fc794" />
+              <stop offset="100%" stop-color="#3f9d6c" />
+            </linearGradient>
+          </defs>
+          ${bars}
+        </svg>
+      </div>
+      <p class="super-metrics__legend"><span class="legend-dot legend-dot--green"></span>Readings logged<span class="legend-dot legend-dot--amber"></span>Flagged</p>
     </div>`;
 }
 
