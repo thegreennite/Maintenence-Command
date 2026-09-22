@@ -56,7 +56,7 @@ async function loadTags(env, buildingId) {
     env.DB.prepare(
       `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.answer_kind AS value_type, t.location_id,
          l.name AS location_name, l.sort_order AS location_sort_order,
-         t.equipment_group_id, g.name AS equipment_group_name, g.requires_photo,
+         t.equipment_group_id, g.name AS equipment_group_name, g.requires_photo, g.sort_order AS equipment_group_sort_order,
          p.min_value, p.max_value, p.expected_value
        FROM inspection_tags t
        LEFT JOIN inspection_parameters p ON p.tag_id = t.id
@@ -85,6 +85,7 @@ async function loadTags(env, buildingId) {
     location_sort_order: row.location_sort_order,
     equipment_group_id: row.equipment_group_id,
     equipment_group_name: row.equipment_group_name,
+    equipment_group_sort_order: row.equipment_group_sort_order,
     // null for a tag with no group at all, not just "doesn't require a
     // photo" -- groupNeedsPhotoNow (src/main.js) only cares about the
     // latter, which is `row.requires_photo === 0`.
