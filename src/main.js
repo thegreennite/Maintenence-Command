@@ -1208,12 +1208,22 @@ function renderSuperMetrics(history, inspectionDays) {
     y: s.completed ? topY : bottomY,
   }));
   const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  // Dots live outside the SVG as plain HTML circles, positioned by
+  // percentage. width="100%" + preserveAspectRatio="none" on the <svg>
+  // stretches the X axis by a different factor than Y on every screen
+  // wider than viewW -- fine for straight line segments, but an in-SVG
+  // <circle> gets that same non-uniform stretch applied to its own
+  // geometry and renders as an ellipse, not a circle (a real bug caught
+  // on a wide desktop screen). A CSS border-radius circle has no
+  // coordinate system to distort, so it always stays round. Y is a
+  // plain pixel value here because the SVG's height attribute is fixed
+  // (only width stretches), so 1 viewBox Y unit is always 1 real pixel.
   const dots = points
     .map(
       (p, i) => `
-        <circle class="super-metrics__dot" style="animation-delay: ${300 + i * 70}ms" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.5" fill="${p.completed ? "#3f9d6c" : "#d9564a"}">
-          <title>${escapeHtml(formatInspectionDate(p.date))}: ${p.completed ? "Completed" : "Missed"}</title>
-        </circle>`,
+        <span class="super-metrics__dot super-metrics__dot--${p.completed ? "green" : "red"}"
+          style="left: ${((p.x / viewW) * 100).toFixed(2)}%; top: ${p.y.toFixed(1)}px; animation-delay: ${300 + i * 70}ms"
+          title="${escapeHtml(formatInspectionDate(p.date))}: ${p.completed ? "Completed" : "Missed"}"></span>`,
     )
     .join("");
   const firstLabel = `${new Date(`${series[0].date}T00:00:00`).getMonth() + 1}/${new Date(`${series[0].date}T00:00:00`).getDate()}`;
@@ -1227,13 +1237,13 @@ function renderSuperMetrics(history, inspectionDays) {
         </div>
         <div class="super-metrics__stat"><strong>${completedCount}/${series.length}</strong><span>Assignments finished</span></div>
       </div>
-      <div class="super-metrics__chart-wrap">
+      <div class="super-metrics__chart-wrap" style="height: ${viewH}px;">
         <svg width="100%" height="${viewH}" viewBox="0 0 ${viewW} ${viewH}" preserveAspectRatio="none" class="super-metrics__chart" role="img" aria-label="Inspection completion over recent scheduled days">
           <line x1="${padX}" y1="${topY}" x2="${viewW - padX}" y2="${topY}" class="super-metrics__gridline" />
           <line x1="${padX}" y1="${bottomY}" x2="${viewW - padX}" y2="${bottomY}" class="super-metrics__gridline" />
           <path d="${pathD}" class="super-metrics__line" pathLength="1000" />
-          ${dots}
         </svg>
+        <div class="super-metrics__dots">${dots}</div>
       </div>
       <div class="super-metrics__axis">
         <span>${escapeHtml(firstLabel)}</span>
