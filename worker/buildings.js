@@ -530,7 +530,7 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
     env.DB.prepare("SELECT id, name, sort_order FROM building_locations WHERE building_id = ? ORDER BY sort_order, name")
       .bind(buildingId)
       .all(),
-    env.DB.prepare("SELECT id, name, sort_order FROM equipment_groups WHERE building_id = ? ORDER BY sort_order, name")
+    env.DB.prepare("SELECT id, name, sort_order, requires_photo FROM equipment_groups WHERE building_id = ? ORDER BY sort_order, name")
       .bind(buildingId)
       .all(),
     env.DB.prepare(

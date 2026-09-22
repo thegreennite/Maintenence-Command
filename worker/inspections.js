@@ -56,7 +56,7 @@ async function loadTags(env, buildingId) {
     env.DB.prepare(
       `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.answer_kind AS value_type, t.location_id,
          l.name AS location_name, l.sort_order AS location_sort_order,
-         t.equipment_group_id, g.name AS equipment_group_name,
+         t.equipment_group_id, g.name AS equipment_group_name, g.requires_photo,
          p.min_value, p.max_value, p.expected_value
        FROM inspection_tags t
        LEFT JOIN inspection_parameters p ON p.tag_id = t.id
@@ -85,6 +85,10 @@ async function loadTags(env, buildingId) {
     location_sort_order: row.location_sort_order,
     equipment_group_id: row.equipment_group_id,
     equipment_group_name: row.equipment_group_name,
+    // null for a tag with no group at all, not just "doesn't require a
+    // photo" -- groupNeedsPhotoNow (src/main.js) only cares about the
+    // latter, which is `row.requires_photo === 0`.
+    equipment_group_requires_photo: row.equipment_group_id == null ? null : Boolean(row.requires_photo),
     parameter:
       row.min_value != null || row.max_value != null || row.expected_value != null
         ? { min: row.min_value, max: row.max_value, expected: row.expected_value }
@@ -384,10 +388,12 @@ export async function handleInspectionSubmit(request, session, env, corsHeaders)
   // needs its own timestamped proof photo for today before the day can
   // be closed out -- see migrations/0017_group_photos.sql for why (it's
   // an anti-fraud measure, not an AI feature, so this applies to every
-  // superintendent, not just the beta tester).
+  // superintendent, not just the beta tester) -- unless a manager has
+  // explicitly turned that off for a particular machine (migrations/
+  // 0022_group_requires_photo.sql).
   const missingGroupPhotos = await env.DB.prepare(
     `SELECT g.id, g.name FROM equipment_groups g
-     WHERE g.building_id = ?
+     WHERE g.building_id = ? AND g.requires_photo = 1
        AND EXISTS (SELECT 1 FROM inspection_tags t WHERE t.equipment_group_id = g.id)
        AND NOT EXISTS (SELECT 1 FROM group_photos p WHERE p.submission_id = ? AND p.equipment_group_id = g.id)
      ORDER BY g.sort_order, g.name`,

@@ -341,6 +341,9 @@ const api = {
   reorderTags(payload) {
     return this.request("/manager/tags/reorder", { method: "POST", body: JSON.stringify(payload) });
   },
+  setGroupPhotoRequirement(payload) {
+    return this.request("/manager/groups/photo-requirement", { method: "POST", body: JSON.stringify(payload) });
+  },
   updateTag(payload) {
     return this.request("/manager/tags/update", { method: "POST", body: JSON.stringify(payload) });
   },
@@ -2212,6 +2215,24 @@ async function handleAssignGroupLocationChange(select) {
   }
 }
 
+async function handleRequirePhotoToggle(checkbox) {
+  const groupId = Number(checkbox.dataset.groupId);
+  const requiresPhoto = checkbox.checked;
+  checkbox.disabled = true;
+  const group = state.buildingWorld.groups.find((g) => g.id === groupId);
+  const previous = group?.requires_photo;
+  if (group) group.requires_photo = requiresPhoto ? 1 : 0;
+  try {
+    await api.setGroupPhotoRequirement({ groupId, requiresPhoto });
+    renderApp();
+  } catch (error) {
+    if (group) group.requires_photo = previous;
+    checkbox.checked = !requiresPhoto;
+    checkbox.disabled = false;
+    checkbox.title = error.message;
+  }
+}
+
 function handleChecklistGroupSelectToggle(checkbox) {
   const groupId = Number(checkbox.dataset.groupId);
   if (checkbox.checked) state.buildingWorldSelectedGroupIds.add(groupId);
@@ -2960,7 +2981,15 @@ function renderMachineZone(group, tags, world) {
         }
       </div>
       <div class="machine-zone__meta">
-        <span class="machine-photo-badge ${todayPhoto ? "machine-photo-badge--done" : "machine-photo-badge--missing"}" title="${todayPhoto ? `Photographed ${escapeHtml(formatTimestamp(todayPhoto.captured_at))}` : "No photo yet today"}">${todayPhoto ? icon("check") : icon("camera")} ${todayPhoto ? "Photo taken today" : "No photo today"}</span>
+        ${
+          group.requires_photo
+            ? `<span class="machine-photo-badge ${todayPhoto ? "machine-photo-badge--done" : "machine-photo-badge--missing"}" title="${todayPhoto ? `Photographed ${escapeHtml(formatTimestamp(todayPhoto.captured_at))}` : "No photo yet today"}">${todayPhoto ? icon("check") : icon("camera")} ${todayPhoto ? "Photo taken today" : "No photo today"}</span>`
+            : ""
+        }
+        <label class="require-photo-toggle" title="Whether this machine needs a timestamped photo before the day can be submitted">
+          <input type="checkbox" class="require-photo-checkbox" data-group-id="${group.id}" ${group.requires_photo ? "checked" : ""} />
+          Requires photo
+        </label>
         <select class="assign-group-location" data-group-id="${group.id}">
           <option value="">Set location for all…</option>
           ${(world.locations || []).map((l) => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join("")}
@@ -3395,6 +3424,7 @@ function renderInspectionGroup(section, readings, locked, flags = {}, groupNotes
   const photoInputId = `photo-${slugify(name)}`;
   const note = groupId ? groupNotes[groupId] || "" : "";
   const proof = groupId ? groupPhotos[groupId] : null;
+  const requiresPhoto = tags[0]?.equipment_group_requires_photo !== false;
   return `
     <fieldset class="inspection-group">
       <legend>${escapeHtml(name)}</legend>
@@ -3418,7 +3448,7 @@ function renderInspectionGroup(section, readings, locked, flags = {}, groupNotes
               <span>${icon("edit")} Note for ${escapeHtml(name)} today</span>
               <textarea data-group-note-id="${groupId}" rows="2" ${locked ? "disabled" : ""} placeholder="Anything worth flagging for this group today — leave blank if nothing to report.">${escapeHtml(note)}</textarea>
             </label>
-            ${renderMachinePhotoBlock(groupId, name, proof, locked)}`
+            ${requiresPhoto ? renderMachinePhotoBlock(groupId, name, proof, locked) : ""}`
           : ""
       }
     </fieldset>`;
@@ -4143,6 +4173,7 @@ async function commandModeFlushSave() {
 // nothing left -- and that group doesn't have today's photo yet.
 function groupNeedsPhotoNow(cm, finishedTag) {
   if (!finishedTag?.equipment_group_id) return false;
+  if (finishedTag.equipment_group_requires_photo === false) return false;
   if (cm.groupPhotos[finishedTag.equipment_group_id]) return false;
   const nextTag = state.inspection.tags.find((t) => t.id === cm.order[cm.index + 1]);
   return !nextTag || nextTag.equipment_group_id !== finishedTag.equipment_group_id;
@@ -4758,7 +4789,7 @@ function missingGroupPhotoNames() {
   const groupPhotos = state.inspection?.groupPhotos || {};
   const seen = new Map();
   for (const tag of tags) {
-    if (tag.equipment_group_id && !seen.has(tag.equipment_group_id)) {
+    if (tag.equipment_group_id && tag.equipment_group_requires_photo && !seen.has(tag.equipment_group_id)) {
       seen.set(tag.equipment_group_id, tag.equipment_group_name);
     }
   }
@@ -5244,6 +5275,9 @@ function bindDashboardEvents() {
   });
   document.querySelectorAll(".checklist-group-select").forEach((checkbox) => {
     checkbox.addEventListener("change", () => handleChecklistGroupSelectToggle(checkbox));
+  });
+  document.querySelectorAll(".require-photo-checkbox").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => handleRequirePhotoToggle(checkbox));
   });
   document.querySelector("#checklist-bulk-apply")?.addEventListener("click", handleChecklistBulkApply);
   document.querySelector("#checklist-bulk-clear")?.addEventListener("click", handleChecklistBulkClear);

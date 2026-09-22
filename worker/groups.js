@@ -24,11 +24,28 @@ export async function handleListGroups(request, session, env, corsHeaders) {
   if (!(await ownsBuilding(env, session, buildingId))) return jsonError("Building not found.", 404, corsHeaders);
 
   const result = await env.DB.prepare(
-    "SELECT id, name, sort_order FROM equipment_groups WHERE building_id = ? ORDER BY sort_order, name",
+    "SELECT id, name, sort_order, requires_photo FROM equipment_groups WHERE building_id = ? ORDER BY sort_order, name",
   )
     .bind(buildingId)
     .all();
   return jsonOk({ groups: result.results }, corsHeaders);
+}
+
+// Per-machine override for the mandatory compliance-photo rule (see
+// migrations/0022_group_requires_photo.sql) -- checked at submit time in
+// worker/inspections.js, and mirrored client-side so command mode never
+// even shows the photo interstitial for a machine that doesn't need one.
+export async function handleSetGroupPhotoRequirement(request, session, env, corsHeaders) {
+  const body = await request.json().catch(() => ({}));
+  const groupId = Number.parseInt(body.groupId, 10);
+  const requiresPhoto = body.requiresPhoto ? 1 : 0;
+
+  const group = await env.DB.prepare("SELECT id, building_id FROM equipment_groups WHERE id = ?").bind(groupId).first();
+  if (!group) return jsonError("Machine not found.", 404, corsHeaders);
+  if (!(await ownsBuilding(env, session, group.building_id))) return jsonError("Machine not found.", 404, corsHeaders);
+
+  await env.DB.prepare("UPDATE equipment_groups SET requires_photo = ? WHERE id = ?").bind(requiresPhoto, groupId).run();
+  return jsonOk({ ok: true, requiresPhoto: Boolean(requiresPhoto) }, corsHeaders);
 }
 
 export async function handleCreateGroup(request, session, env, corsHeaders) {

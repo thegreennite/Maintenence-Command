@@ -13,7 +13,7 @@ import { handlePropertyInspections } from "./property.js";
 import { handleInspectionPhoto, handleCommandModePhoto } from "./vision.js";
 import { handleGroupPhotoUpload } from "./group-photos.js";
 import { handleListLocations, handleCreateLocation, handleDeleteLocation, handleAssignTagLocation } from "./locations.js";
-import { handleListGroups, handleCreateGroup, handleDeleteGroup, handleAssignTagGroup, handleAssignGroupLocation, handleRenameGroup, handleUpdateTag, handleCreateTag, handleReorderTags } from "./groups.js";
+import { handleListGroups, handleCreateGroup, handleDeleteGroup, handleAssignTagGroup, handleAssignGroupLocation, handleRenameGroup, handleUpdateTag, handleCreateTag, handleReorderTags, handleSetGroupPhotoRequirement } from "./groups.js";
 import { handleListRoms, handleBuildingSharing, handleShareBuilding, handleUnshareBuilding } from "./sharing.js";
 import { handleInspectionHistory, handleInspectionDetail } from "./inspection-history.js";
 import {
@@ -491,6 +491,13 @@ export default {
           return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
         }
         return handleReorderTags(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/manager/groups/photo-requirement" && request.method === "POST") {
+        if (session.role !== "regional_manager" && session.role !== "admin") {
+          return json({ error: "Area Manager or Administrator access required" }, 403, cors.headers);
+        }
+        return handleSetGroupPhotoRequirement(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/tags/create" && request.method === "POST") {
