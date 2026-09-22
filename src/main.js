@@ -1142,67 +1142,99 @@ function renderSuperintendentOverview(inspection) {
           }
         </div>
       </div>
-      ${renderSuperMetrics(state.buildingWorldHistory)}
+      ${renderSuperMetrics(state.buildingWorldHistory, inspection.building.inspection_days)}
     </section>`;
 }
 
-// A quick, honest visual on how this super's own inspections have gone
-// -- readings logged and readings flagged, per submitted day, over the
-// last 8 submissions. Hand-rolled SVG (a few bars), not a charting
-// library -- there's nothing here that needs one. The SVG is given
-// explicit pixel width/height matching the viewBox 1:1 (rather than
-// letting max-width:100% stretch a tiny viewBox across a wide card,
-// which blows bars and labels up to several times their size) and sits
-// in its own horizontally-scrollable strip so it never has to squash
-// or distort on a narrow phone either.
-function renderSuperMetrics(history) {
-  if (!history || !history.length) {
-    return `<p class="super-overview__empty super-metrics__empty">Submit a few inspections to see your metrics here.</p>`;
-  }
-  const recent = [...history].sort((a, b) => a.inspection_date.localeCompare(b.inspection_date)).slice(-8);
-  const totalFlagged = history.reduce((sum, r) => sum + (r.flagged_count || 0), 0);
-  const maxReadings = Math.max(...recent.map((r) => r.reading_count || 0), 1);
-  const barWidth = 34;
-  const gap = 18;
-  const chartHeight = 110;
-  const topPad = 6;
-  const width = recent.length * (barWidth + gap) - gap;
+const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-  const bars = recent
-    .map((r, i) => {
-      const h = Math.max(6, Math.round(((r.reading_count || 0) / maxReadings) * (chartHeight - topPad)));
-      const flaggedH = r.reading_count ? Math.round(((r.flagged_count || 0) / r.reading_count) * h) : 0;
-      const x = i * (barWidth + gap);
-      const d = new Date(`${r.inspection_date}T00:00:00`);
-      const label = `${d.getMonth() + 1}/${d.getDate()}`;
-      return `
-        <g class="super-metrics__bar" style="animation-delay: ${i * 60}ms">
-          <title>${escapeHtml(formatInspectionDate(r.inspection_date))}: ${r.reading_count || 0} readings, ${r.flagged_count || 0} flagged</title>
-          <rect x="${x}" y="${chartHeight - h}" width="${barWidth}" height="${h}" rx="6" fill="url(#superBarFill)" />
-          ${flaggedH ? `<rect x="${x}" y="${chartHeight - flaggedH}" width="${barWidth}" height="${flaggedH}" rx="6" fill="#e8a33d" />` : ""}
-          <text x="${x + barWidth / 2}" y="${chartHeight + 18}" text-anchor="middle" class="super-metrics__label">${escapeHtml(label)}</text>
-        </g>`;
-    })
+// Completion, not volume -- was this machine's assignment actually
+// finished on each day it was scheduled for, going back a few weeks.
+// Built from the building's own inspection_days ("Mon,Tue,Wed,Thu,Fri")
+// plus which of those days actually have a submitted inspection
+// (state.buildingWorldHistory, already loaded for every superintendent)
+// -- no extra request needed.
+function scheduledCompletionSeries(history, inspectionDays, count = 10) {
+  const scheduledSet = new Set(String(inspectionDays || "Mon,Tue,Wed,Thu,Fri").split(",").map((d) => d.trim()));
+  const submittedDates = new Set((history || []).map((h) => h.inspection_date));
+  const series = [];
+  const cursor = new Date();
+  cursor.setHours(0, 0, 0, 0);
+  // Walk backward from today (not counting today, which is still in
+  // progress) collecting scheduled days until there are `count` of them.
+  cursor.setDate(cursor.getDate() - 1);
+  while (series.length < count) {
+    const weekday = WEEKDAY_ABBR[cursor.getDay()];
+    if (scheduledSet.has(weekday)) {
+      const iso = cursor.toLocaleDateString("en-CA");
+      series.push({ date: iso, weekday, completed: submittedDates.has(iso) });
+    }
+    cursor.setDate(cursor.getDate() - 1);
+    // Bail out rather than loop forever if a building somehow has no
+    // scheduled days at all.
+    if (cursor.getTime() < Date.now() - 120 * 24 * 60 * 60 * 1000) break;
+  }
+  return series.reverse();
+}
+
+// An animated line -- up when a scheduled day was completed, down when
+// it was missed -- rather than a volume bar chart. A responsive SVG
+// this time (width="100%" as a real attribute + preserveAspectRatio,
+// not CSS max-width stretching a mismatched viewBox), and only the
+// first/last dates are labeled so nothing crowds together on a phone.
+function renderSuperMetrics(history, inspectionDays) {
+  const series = scheduledCompletionSeries(history, inspectionDays);
+  if (!series.length) {
+    return `<p class="super-overview__empty super-metrics__empty">Submit a few inspections to see your completion trend here.</p>`;
+  }
+
+  const completedCount = series.filter((s) => s.completed).length;
+  const rate = Math.round((completedCount / series.length) * 100);
+
+  const viewW = 300;
+  const viewH = 90;
+  const padX = 14;
+  const topY = 16;
+  const bottomY = viewH - 16;
+  const stepX = series.length > 1 ? (viewW - padX * 2) / (series.length - 1) : 0;
+  const points = series.map((s, i) => ({
+    ...s,
+    x: padX + i * stepX,
+    y: s.completed ? topY : bottomY,
+  }));
+  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  const dots = points
+    .map(
+      (p, i) => `
+        <circle class="super-metrics__dot" style="animation-delay: ${300 + i * 70}ms" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.5" fill="${p.completed ? "#3f9d6c" : "#d9564a"}">
+          <title>${escapeHtml(formatInspectionDate(p.date))}: ${p.completed ? "Completed" : "Missed"}</title>
+        </circle>`,
+    )
     .join("");
+  const firstLabel = `${new Date(`${series[0].date}T00:00:00`).getMonth() + 1}/${new Date(`${series[0].date}T00:00:00`).getDate()}`;
+  const lastLabel = `${new Date(`${series[series.length - 1].date}T00:00:00`).getMonth() + 1}/${new Date(`${series[series.length - 1].date}T00:00:00`).getDate()}`;
 
   return `
     <div class="super-metrics">
       <div class="super-metrics__stats">
-        <div class="super-metrics__stat"><strong>${history.length}</strong><span>Submitted inspections</span></div>
-        <div class="super-metrics__stat super-metrics__stat--${totalFlagged ? "amber" : "green"}"><strong>${totalFlagged}</strong><span>Flagged readings, all time</span></div>
+        <div class="super-metrics__stat super-metrics__stat--${rate === 100 ? "green" : rate >= 70 ? "amber" : "red"}">
+          <strong>${rate}%</strong><span>Completed on schedule, last ${series.length} days</span>
+        </div>
+        <div class="super-metrics__stat"><strong>${completedCount}/${series.length}</strong><span>Assignments finished</span></div>
       </div>
       <div class="super-metrics__chart-wrap">
-        <svg width="${width}" height="${chartHeight + 30}" viewBox="0 0 ${width} ${chartHeight + 30}" class="super-metrics__chart" role="img" aria-label="Readings and flags per recent inspection">
-          <defs>
-            <linearGradient id="superBarFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#5fc794" />
-              <stop offset="100%" stop-color="#3f9d6c" />
-            </linearGradient>
-          </defs>
-          ${bars}
+        <svg width="100%" height="${viewH}" viewBox="0 0 ${viewW} ${viewH}" preserveAspectRatio="none" class="super-metrics__chart" role="img" aria-label="Inspection completion over recent scheduled days">
+          <line x1="${padX}" y1="${topY}" x2="${viewW - padX}" y2="${topY}" class="super-metrics__gridline" />
+          <line x1="${padX}" y1="${bottomY}" x2="${viewW - padX}" y2="${bottomY}" class="super-metrics__gridline" />
+          <path d="${pathD}" class="super-metrics__line" pathLength="1000" />
+          ${dots}
         </svg>
       </div>
-      <p class="super-metrics__legend"><span class="legend-dot legend-dot--green"></span>Readings logged<span class="legend-dot legend-dot--amber"></span>Flagged</p>
+      <div class="super-metrics__axis">
+        <span>${escapeHtml(firstLabel)}</span>
+        <span>${escapeHtml(lastLabel)}</span>
+      </div>
+      <p class="super-metrics__legend"><span class="legend-dot legend-dot--green"></span>Completed<span class="legend-dot legend-dot--red"></span>Missed</p>
     </div>`;
 }
 

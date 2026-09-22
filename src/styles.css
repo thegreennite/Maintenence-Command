@@ -874,21 +874,36 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .super-metrics__stat span { font-size: 11.5px; color: var(--muted); }
 .super-metrics__stat--amber { background: #fbf0dd; }
 .super-metrics__stat--amber strong { color: #a86b12; }
-.super-metrics__chart-wrap { overflow-x: auto; padding-bottom: 2px; }
-.super-metrics__chart { display: block; }
-.super-metrics__label { font: 600 10px/1 "Avenir Next", Avenir, system-ui, sans-serif; fill: var(--muted); }
-.super-metrics__bar {
-  opacity: 0; transform: translateY(10px); animation: super-bar-rise .45s cubic-bezier(.2,.8,.2,1) forwards;
+.super-metrics__stat--red { background: #fbe9e7; }
+.super-metrics__stat--red strong { color: #a4332b; }
+.super-metrics__stat--green { background: var(--success-soft, #e6f5ec); }
+/* No horizontal scroll needed this time -- width="100%" on the <svg>
+   itself (a real attribute, not CSS) plus preserveAspectRatio="none"
+   lets the line stretch fluidly to fill the card on any screen without
+   the distortion the old fixed-viewBox bar chart had. */
+.super-metrics__chart-wrap { width: 100%; }
+.super-metrics__chart { display: block; width: 100%; }
+.super-metrics__gridline { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.super-metrics__line {
+  fill: none; stroke: var(--forest); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 1000; stroke-dashoffset: 1000;
+  animation: super-line-draw 1.1s cubic-bezier(.2,.7,.2,1) forwards;
 }
-@keyframes super-bar-rise { to { opacity: 1; transform: translateY(0); } }
-.super-metrics__legend { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; font-size: 11px; color: var(--muted); }
+@keyframes super-line-draw { to { stroke-dashoffset: 0; } }
+.super-metrics__dot { opacity: 0; transform-origin: center; transform-box: fill-box; transform: scale(0); animation: super-dot-pop .35s cubic-bezier(.34,1.56,.64,1) forwards; }
+@keyframes super-dot-pop { to { opacity: 1; transform: scale(1); } }
+.super-metrics__axis { display: flex; justify-content: space-between; margin: 6px 2px 0; font-size: 10.5px; font-weight: 600; color: var(--muted); }
+.super-metrics__legend { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; font-size: 11px; color: var(--muted); }
 .super-metrics__empty { padding: 10px 0 0; }
 .legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-left: 10px; }
 .legend-dot:first-child { margin-left: 0; }
-.legend-dot--green { background: #4caf7d; }
+.legend-dot--green { background: #3f9d6c; }
 .legend-dot--amber { background: #e8a33d; }
+.legend-dot--red { background: #d9564a; }
 @media (prefers-reduced-motion: reduce) {
-  .super-metrics__bar { animation: none; opacity: 1; transform: none; }
+  .super-metrics__line { animation: none; stroke-dashoffset: 0; }
+  .super-metrics__dot { animation: none; opacity: 1; transform: scale(1); }
   .super-note-list li:hover { transform: none; }
 }
 @media (max-width: 640px) {
