@@ -4176,6 +4176,7 @@ function startCommandMode() {
     groupPhotos,
     pendingGroupPhoto: null,
     groupPhotoUploading: false,
+    uploadJoke: null,
     lastLocationWarning: null,
     entryMode: "choose",
     manualDraft: "",
@@ -4229,6 +4230,7 @@ async function handleConfirmClearAll() {
       cm.groupPhotos = {};
       cm.pendingGroupPhoto = null;
       cm.groupPhotoUploading = false;
+      stopUploadJokeRotation();
       cm.lastLocationWarning = null;
       cm.manualDraft = "";
       cm.index = 0;
@@ -4395,11 +4397,52 @@ function commandModeSkipGroupPhoto() {
   commandModeContinueAdvance();
 }
 
+// A photo upload is a few seconds of dead time with nothing useful to
+// say beyond "uploading" -- might as well make the wait a little less
+// boring. Purely cosmetic, rotates on its own while cm.groupPhotoUploading
+// is true (see startUploadJokeRotation/stopUploadJokeRotation).
+const PHOTO_UPLOAD_JOKES = [
+  "Convincing the boiler this is a routine checkup, not an audit…",
+  "Asking the gauge to say cheese…",
+  "Uploading proof you weren't just guessing the numbers…",
+  "Politely asking the WiFi for a favor…",
+  "The machine is camera-shy. Give it a second…",
+  "Making sure this one's less blurry than the last one…",
+  "Teaching the cloud what a boiler looks like…",
+  "Filing this under \"definitely not from last Tuesday\"…",
+  "Stamping the timestamp so nobody can say you were at Tim Hortons…",
+  "Double-checking you didn't just photograph your thumb…",
+  "Sending it up before the pigeons deliver it faster…",
+  "Reminding the internet this is a boiler, not a UFO…",
+];
+
+let uploadJokeTimer = null;
+
+function startUploadJokeRotation(cm) {
+  cm.uploadJoke = PHOTO_UPLOAD_JOKES[Math.floor(Math.random() * PHOTO_UPLOAD_JOKES.length)];
+  clearInterval(uploadJokeTimer);
+  uploadJokeTimer = setInterval(() => {
+    if (!state.commandMode || !state.commandMode.groupPhotoUploading) {
+      clearInterval(uploadJokeTimer);
+      return;
+    }
+    const remaining = PHOTO_UPLOAD_JOKES.filter((j) => j !== state.commandMode.uploadJoke);
+    state.commandMode.uploadJoke = remaining[Math.floor(Math.random() * remaining.length)];
+    renderApp();
+  }, 1800);
+}
+
+function stopUploadJokeRotation() {
+  clearInterval(uploadJokeTimer);
+  uploadJokeTimer = null;
+}
+
 async function commandModeCaptureGroupPhoto(file) {
   const cm = state.commandMode;
   const groupId = cm.pendingGroupPhoto.groupId;
   cm.groupPhotoUploading = true;
   cm.error = "";
+  startUploadJokeRotation(cm);
   renderApp();
   try {
     const proof = await captureComplianceProof(file);
@@ -4422,10 +4465,12 @@ async function commandModeCaptureGroupPhoto(file) {
       : null;
     cm.pendingGroupPhoto = null;
     cm.groupPhotoUploading = false;
+    stopUploadJokeRotation();
     commandModeContinueAdvance();
     showPhotoFeedback(true, result.latitude != null ? "Timestamp and location recorded. Checklist updated." : "Checklist updated. Timestamp recorded; location unavailable.");
   } catch (error) {
     cm.groupPhotoUploading = false;
+    stopUploadJokeRotation();
     cm.error = error.message;
     renderApp();
     showPhotoFeedback(false, `${error.message} Please retake the photo.`);
@@ -4869,7 +4914,7 @@ function renderCommandModeGroupPhoto(cm) {
         ${cm.error ? `<p class="form-error">${escapeHtml(cm.error)}</p>` : ""}
         ${
           cm.groupPhotoUploading
-            ? `<div class="command-mode__busy"><span class="loading-bar"><span></span></span><p>Uploading photo…</p></div>`
+            ? `<div class="command-mode__busy"><span class="loading-bar"><span></span></span><p>${escapeHtml(cm.uploadJoke || "Uploading photo…")}</p></div>`
             : `<div class="command-mode__actions">
                 <label class="button button--primary command-mode__action" for="command-mode-group-photo">${icon("camera")} Take the photo</label>
                 <input type="file" accept="image/*" capture="environment" id="command-mode-group-photo" hidden />
