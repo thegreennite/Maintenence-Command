@@ -4105,6 +4105,10 @@ function unitTolerance(unit) {
   if (!normalized) return null;
   if (normalized === "°" || normalized.includes("deg") || /^°?[cf]$/.test(normalized)) return 3;
   if (normalized === "psi") return 5;
+  // A tank/glycol level or similar jumping more than 5 percentage
+  // points between checks is worth a confirm, same real-world-sized
+  // reasoning as the PSI tolerance above.
+  if (normalized === "%") return 5;
   return null;
 }
 
