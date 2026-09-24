@@ -1247,7 +1247,7 @@ function renderSuperMetrics(history, inspectionDays) {
         <svg width="100%" height="${viewH}" viewBox="0 0 ${viewW} ${viewH}" preserveAspectRatio="none" class="super-metrics__chart" role="img" aria-label="Inspection completion over recent scheduled days">
           <line x1="${padX}" y1="${topY}" x2="${viewW - padX}" y2="${topY}" class="super-metrics__gridline" />
           <line x1="${padX}" y1="${bottomY}" x2="${viewW - padX}" y2="${bottomY}" class="super-metrics__gridline" />
-          <path d="${pathD}" class="super-metrics__line" pathLength="1000" />
+          <path d="${pathD}" class="super-metrics__line" />
         </svg>
         <div class="super-metrics__dots">${dots}</div>
       </div>
@@ -5399,7 +5399,34 @@ function renderErrorState() {
   return `<section class="empty-state"><span>${icon("warning")}</span><h2>Dashboard unavailable</h2><p>This account does not have a configured command view.</p></section>`;
 }
 
+// Drives the completion line's draw-in using the path's own real
+// geometric length instead of a guessed constant. The old approach
+// hardcoded pathLength="1000" + stroke-dasharray:1000 as a stand-in for
+// "the whole path" -- but a zigzag line's actual length varies with the
+// data (steep diagonals are much longer than flat runs), and on this
+// data getTotalLength() came back ~448, not 1000. SVG's pathLength
+// attribute is only a hint for calibrating length-based properties, and
+// mismatched enough it left visible chunks of the line permanently
+// undrawn (confirmed live: removing pathLength/dasharray entirely fixed
+// it immediately). Measuring the real length here and driving a CSS
+// transition off of it is exact regardless of how the data shapes the
+// path, so it can never happen again.
+function initSuperMetricsLine() {
+  const path = document.querySelector(".super-metrics__line");
+  if (!path) return;
+  const length = path.getTotalLength();
+  path.style.transition = "none";
+  path.style.strokeDasharray = `${length}`;
+  path.style.strokeDashoffset = `${length}`;
+  path.getBoundingClientRect(); // force reflow so the starting state above actually paints first
+  requestAnimationFrame(() => {
+    path.style.transition = "";
+    path.style.strokeDashoffset = "0";
+  });
+}
+
 function bindDashboardEvents() {
+  initSuperMetricsLine();
   document.querySelectorAll("[data-exception-id]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedExceptionId = Number(button.dataset.exceptionId);
