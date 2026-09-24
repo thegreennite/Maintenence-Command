@@ -975,8 +975,14 @@ function startAdminStatsAutoRefresh() {
       stopAdminStatsAutoRefresh();
       return;
     }
+    // A full renderApp() mid-gesture would replace the exact chip node a
+    // machine-board drag has pointer capture on -- the drag silently
+    // stops receiving events with no visible cleanup, which is what made
+    // dragging feel like it randomly "got stuck." Skip this tick rather
+    // than fight an active drag; the next one 30s later picks it back up.
+    if (chipPointer) return;
     const fresh = await api.adminStats().catch(() => null);
-    if (!fresh || state.session?.user?.role !== "admin") return;
+    if (!fresh || state.session?.user?.role !== "admin" || chipPointer) return;
     state.adminStats = fresh;
     renderApp();
   }, ADMIN_STATS_REFRESH_MS);
@@ -2577,6 +2583,10 @@ function handleReadingChipPointerDown(event) {
     dragging: false,
     ghost: null,
     hoverZone: null,
+    placeholder: null,
+    placeholderHeight: 0,
+    currentZone: null,
+    currentIndex: -1,
   };
 
   try {
@@ -2590,11 +2600,145 @@ function handleReadingChipPointerDown(event) {
   chip.addEventListener("pointermove", handleReadingChipPointerMove);
   chip.addEventListener("pointerup", handleReadingChipPointerUp);
   chip.addEventListener("pointercancel", handleReadingChipPointerCancel);
+  // If this exact chip node ever gets replaced mid-drag (e.g. some other
+  // part of the app re-renders while a gesture is in flight), the browser
+  // implicitly drops its pointer capture and fires this -- the one signal
+  // guaranteed to still reach a listener bound to a since-detached node.
+  // Without it, the drag would silently stop receiving events: the ghost
+  // stays wherever it last was and never gets cleaned up, i.e. exactly
+  // the "let go and it's stuck, frozen" bug. Also covers a normal
+  // pointerup (capture is released right after), which is why
+  // finishChipDrag() below is safe to call twice.
+  chip.addEventListener("lostpointercapture", handleReadingChipPointerCancel);
+  // A second, window-level safety net for the same scenario -- if the
+  // chip node itself is gone, a plain physical release still needs
+  // *something* listening to end the gesture even before the
+  // lostpointercapture path above is confirmed to have run.
+  window.addEventListener("pointerup", handleReadingChipWindowPointerUp);
+  window.addEventListener("pointercancel", handleReadingChipWindowPointerCancel);
+}
+
+function handleReadingChipWindowPointerUp(event) {
+  if (!chipPointer || event.pointerId !== chipPointer.pointerId) return;
+  handleReadingChipPointerUp(event);
+}
+
+function handleReadingChipWindowPointerCancel(event) {
+  if (!chipPointer || event.pointerId !== chipPointer.pointerId) return;
+  handleReadingChipPointerCancel();
 }
 
 function positionDragGhost(ghost, x, y) {
   ghost.style.left = `${x}px`;
   ghost.style.top = `${y}px`;
+}
+
+// The chips actually in play in a zone right now -- excludes the ghost
+// (lives in document.body, never in a zone anyway), the placeholder
+// silhouette, and the original chip being dragged (hidden for the
+// duration of the gesture so it never double-counts against itself).
+function getZoneChipEls(zoneEl) {
+  return Array.from(zoneEl.children).filter(
+    (el) =>
+      el.classList.contains("reading-chip") &&
+      !el.classList.contains("reading-chip--ghost") &&
+      !el.classList.contains("reading-chip--dragging") &&
+      !el.classList.contains("reading-chip--placeholder") &&
+      !el.classList.contains("reading-chip--editing"),
+  );
+}
+
+// Whatever comes right after the real chips in a zone -- the "+ Add
+// reading" button/form, or the "nothing here yet" empty message. The
+// placeholder always has to land before this, never after it.
+function zoneTailAnchor(zoneEl) {
+  return zoneEl.querySelector(".add-reading-start, #add-tag-form, .machine-zone__empty") || null;
+}
+
+function placeholderRefEl(zoneEl, index) {
+  const chips = getZoneChipEls(zoneEl);
+  return chips[index] || zoneTailAnchor(zoneEl);
+}
+
+function computeInsertIndex(zoneEl, clientY) {
+  const chips = getZoneChipEls(zoneEl);
+  for (let i = 0; i < chips.length; i += 1) {
+    const rect = chips[i].getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) return i;
+  }
+  return chips.length;
+}
+
+function toggleZoneEmptyState(zoneEl, show) {
+  const empty = zoneEl?.querySelector(":scope > .machine-zone__empty");
+  if (empty) empty.style.display = show ? "" : "none";
+}
+
+// Classic FLIP: measure every real chip in the given zones before the
+// DOM change, apply the change, then measure again -- any chip that
+// actually moved gets a starting transform equal to its own displacement
+// and is released into a real transition on the next frame. This is
+// what makes "each value moves up or down to make space" read as fluid
+// motion instead of an instant, jarring snap every time the placeholder
+// shifts by one slot.
+function flipZoneChips(zoneEls, mutate) {
+  const before = new Map();
+  for (const zoneEl of zoneEls) {
+    for (const chipEl of getZoneChipEls(zoneEl)) before.set(chipEl, chipEl.getBoundingClientRect());
+  }
+  mutate();
+  for (const [chipEl, firstRect] of before) {
+    if (!chipEl.isConnected) continue;
+    const lastRect = chipEl.getBoundingClientRect();
+    const dx = firstRect.left - lastRect.left;
+    const dy = firstRect.top - lastRect.top;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+    chipEl.style.transition = "none";
+    chipEl.style.transform = `translate(${dx}px, ${dy}px)`;
+    chipEl.getBoundingClientRect(); // force reflow so the jump above actually lands before it's released
+    chipEl.style.transition = "transform .18s cubic-bezier(.22,.7,.3,1)";
+    chipEl.style.transform = "";
+    window.setTimeout(() => {
+      chipEl.style.transition = ""; // hand the property back to the stylesheet once settled
+    }, 200);
+  }
+}
+
+function ensurePlaceholder() {
+  if (!chipPointer.placeholder) {
+    const ph = document.createElement("div");
+    ph.className = "reading-chip reading-chip--placeholder";
+    ph.style.minHeight = `${chipPointer.placeholderHeight}px`;
+    chipPointer.placeholder = ph;
+  }
+  return chipPointer.placeholder;
+}
+
+// The live "this is where it's landing" preview -- runs on every
+// pointermove, not just at drop, so the placeholder silhouette tracks
+// the pointer continuously and every other chip in view slides out of
+// its way in real time.
+function updateChipPlaceholder(zone, clientY) {
+  const index = zone ? computeInsertIndex(zone, clientY) : -1;
+  if (zone === chipPointer.currentZone && index === chipPointer.currentIndex) return;
+
+  const affectedZones = new Set();
+  if (chipPointer.currentZone) affectedZones.add(chipPointer.currentZone);
+  if (zone) affectedZones.add(zone);
+  const prevZone = chipPointer.currentZone;
+  const ph = ensurePlaceholder();
+
+  flipZoneChips([...affectedZones], () => {
+    ph.remove();
+    if (prevZone && prevZone !== zone) toggleZoneEmptyState(prevZone, true);
+    if (zone) {
+      zone.insertBefore(ph, placeholderRefEl(zone, index));
+      toggleZoneEmptyState(zone, false);
+    }
+  });
+
+  chipPointer.currentZone = zone || null;
+  chipPointer.currentIndex = zone ? index : -1;
 }
 
 function handleReadingChipPointerMove(event) {
@@ -2609,11 +2753,16 @@ function handleReadingChipPointerMove(event) {
     // shows one for an instant.
     chipPointer.dragging = true;
     const rect = chipPointer.chip.getBoundingClientRect();
+    chipPointer.placeholderHeight = rect.height;
     const ghost = chipPointer.chip.cloneNode(true);
     ghost.classList.add("reading-chip--ghost");
     ghost.style.width = `${rect.width}px`;
     document.body.appendChild(ghost);
     chipPointer.ghost = ghost;
+    // Hidden, not just dimmed -- it comes out of the flow entirely so the
+    // zone it started in immediately closes the gap, and the ghost +
+    // placeholder become the only two things standing in for it while
+    // it's in the air.
     chipPointer.chip.classList.add("reading-chip--dragging");
   }
 
@@ -2628,25 +2777,37 @@ function handleReadingChipPointerMove(event) {
   }
   if (zone) zone.classList.add("machine-zone__body--hover");
   chipPointer.hoverZone = zone || null;
+
+  updateChipPlaceholder(zone, event.clientY);
 }
 
-function releaseChipPointer(p) {
+// All cleanup, every exit path -- normal drop, released outside any
+// zone, pointercancel, or an implicit lostpointercapture from the chip
+// node itself disappearing mid-drag. Safe to call more than once (a
+// successful drop's own pointerup releases capture, which then fires
+// lostpointercapture right after) since chipPointer is nulled first.
+function finishChipDrag(p) {
+  chipPointer = null;
   p.chip.removeEventListener("pointermove", handleReadingChipPointerMove);
   p.chip.removeEventListener("pointerup", handleReadingChipPointerUp);
   p.chip.removeEventListener("pointercancel", handleReadingChipPointerCancel);
+  p.chip.removeEventListener("lostpointercapture", handleReadingChipPointerCancel);
+  window.removeEventListener("pointerup", handleReadingChipWindowPointerUp);
+  window.removeEventListener("pointercancel", handleReadingChipWindowPointerCancel);
   try {
     p.chip.releasePointerCapture(p.pointerId);
   } catch {
     // already released (e.g. pointercancel) -- fine to ignore
   }
   p.ghost?.remove();
+  p.placeholder?.remove();
   p.chip.classList.remove("reading-chip--dragging");
   p.hoverZone?.classList.remove("machine-zone__body--hover");
-  chipPointer = null;
+  toggleZoneEmptyState(p.currentZone, true);
 }
 
 function handleReadingChipPointerCancel() {
-  if (chipPointer) releaseChipPointer(chipPointer);
+  if (chipPointer) finishChipDrag(chipPointer);
 }
 
 // Reflects a reorder in state.buildingWorld.tags immediately (rather
@@ -2668,40 +2829,33 @@ function reorderLocalTags(orderedTagIds) {
 async function handleReadingChipPointerUp(event) {
   if (!chipPointer) return;
   const p = chipPointer;
-  const dropClientY = event.clientY;
-  releaseChipPointer(p);
 
   if (!p.dragging) {
     // Never crossed the drag threshold -- a plain tap, open the editor.
+    finishChipDrag(p);
     state.buildingWorldEditingTagId = p.tagId;
     renderApp();
     document.querySelector('#edit-tag-form input[name="system_name"]')?.focus();
     return;
   }
 
-  if (!p.hoverZone) return; // released outside any zone -- treat as cancelled
-  const zoneEl = p.hoverZone;
-  const targetGroupId = zoneEl.dataset.dropzone;
+  // The target zone's exact order at the moment of release -- this is
+  // already the live preview the user was just watching (updated on
+  // every pointermove via updateChipPlaceholder), not a fresh
+  // recomputation, so the drop always matches what was on screen. Must
+  // be read BEFORE finishChipDrag() below: that call un-hides the
+  // original chip and pulls the placeholder out, and reading the DOM
+  // after that would double-count this same tag -- once from the
+  // now-visible original still sitting in its old spot, once from
+  // p.tagId being spliced back in here.
+  const targetGroupId = p.currentZone?.dataset.dropzone;
   const targetGroupIdNum = targetGroupId ? Number(targetGroupId) : null;
+  const siblingTagIds = p.currentZone ? getZoneChipEls(p.currentZone).map((el) => Number(el.dataset.tagId)) : null;
+  if (siblingTagIds) siblingTagIds.splice(p.currentIndex, 0, p.tagId);
 
-  // Where among the target zone's current chips this one should land --
-  // same math whether it's moving zones or just reordering within the
-  // one it's already in (the old code skipped this entirely for a
-  // same-zone drop, which is exactly why reordering never worked).
-  const siblingTagIds = Array.from(zoneEl.querySelectorAll(".reading-chip:not(.reading-chip--ghost)"))
-    .map((el) => Number(el.dataset.tagId))
-    .filter((id) => id !== p.tagId);
-  let insertAt = siblingTagIds.length;
-  for (let i = 0; i < siblingTagIds.length; i += 1) {
-    const chipEl = zoneEl.querySelector(`.reading-chip[data-tag-id="${siblingTagIds[i]}"]`);
-    if (!chipEl) continue;
-    const rect = chipEl.getBoundingClientRect();
-    if (dropClientY < rect.top + rect.height / 2) {
-      insertAt = i;
-      break;
-    }
-  }
-  siblingTagIds.splice(insertAt, 0, p.tagId);
+  finishChipDrag(p);
+
+  if (!p.currentZone) return; // never landed over a valid zone -- treat as cancelled
 
   const tag = state.buildingWorld.tags.find((t) => t.id === p.tagId);
   const previousGroupId = tag?.equipment_group_id ?? null;

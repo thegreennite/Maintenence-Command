@@ -644,7 +644,22 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 }
 .reading-chip:hover { border-color: var(--forest-300, #8fbfa2); }
 .reading-chip:active { cursor: grabbing; }
-.reading-chip--dragging { opacity: .35; }
+/* Taken fully out of the flow the moment a drag starts (not just
+   dimmed) -- the zone it left closes the gap immediately, and the
+   ghost (below) + the placeholder silhouette become the only two
+   stand-ins for it while it's in the air. */
+.reading-chip--dragging { display: none; }
+/* The empty slot showing exactly where the chip will land -- a real
+   flex child inserted at the live insertion index on every
+   pointermove, which is what makes surrounding chips actually slide
+   to make room for it (see flipZoneChips in main.js) rather than the
+   drop only being decided at release. */
+.reading-chip--placeholder {
+  border: 2px dashed var(--success); border-radius: 7px;
+  background: var(--sage-soft, #dcead9);
+  animation: chip-placeholder-pop .14s ease-out;
+}
+@keyframes chip-placeholder-pop { from { opacity: 0; transform: scaleY(.7); } to { opacity: 1; transform: scaleY(1); } }
 .reading-chip__grip {
   flex: 0 0 auto; width: 16px; display: grid; place-items: center;
   color: var(--muted); font-size: 14px; letter-spacing: -2px; pointer-events: none;
@@ -676,7 +691,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   to { transform: translate(-16px, -50%) scale(1.06); opacity: .97; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .machine-zone__body--dropped, .reading-chip--ghost { animation: none; }
+  .machine-zone__body--dropped, .reading-chip--ghost, .reading-chip--placeholder { animation: none; }
 }
 .reading-chip--editing {
   display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--paper);
