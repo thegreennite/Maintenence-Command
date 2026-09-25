@@ -47,4 +47,10 @@ enabled = true
 # scheduled() handler itself checks it's actually Friday in Toronto before
 # sending, rather than trying to express "Friday Toronto time" as a
 # fixed UTC cron day-of-week field.
-crons = ["0 20 * * *"]
+#
+# Second entry fires daily at 05:15 UTC, which is just after midnight in
+# Toronto in both EST (00:15) and EDT (01:15) -- always after the
+# calendar day has actually turned over locally, regardless of DST, so
+# "end of day" locking matches the same Toronto-local date the rest of
+# the app already uses (see today() in worker/inspections.js).
+crons = ["0 20 * * *", "15 5 * * *"]

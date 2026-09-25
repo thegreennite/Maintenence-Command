@@ -1162,7 +1162,12 @@ const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 // -- no extra request needed.
 function scheduledCompletionSeries(history, inspectionDays, count = 10) {
   const scheduledSet = new Set(String(inspectionDays || "Mon,Tue,Wed,Thu,Fri").split(",").map((d) => d.trim()));
-  const submittedDates = new Set((history || []).map((h) => h.inspection_date));
+  // A day can now be 'submitted' (finished) or 'partial' (locked at end
+  // of day with whatever got captured, nobody hit submit) -- anything
+  // else scheduled-but-absent is a plain miss.
+  const statusByDate = new Map(
+    (history || []).map((h) => [h.inspection_date, h.status === "submitted" ? "submitted" : "partial"]),
+  );
   const series = [];
   const todayIso = new Date().toLocaleDateString("en-CA");
   const cursor = new Date();
@@ -1172,13 +1177,14 @@ function scheduledCompletionSeries(history, inspectionDays, count = 10) {
   // move the moment a super hits submit, without ever showing today
   // as "missed" while the day is still in progress. A day that's
   // already past always joins, submitted or not, which is what turns
-  // it red starting the very next day if nothing was ever submitted.
+  // it red (or amber, if partial) starting the very next day.
   while (series.length < count) {
     const weekday = WEEKDAY_ABBR[cursor.getDay()];
     const iso = cursor.toLocaleDateString("en-CA");
     const isToday = iso === todayIso;
-    if (scheduledSet.has(weekday) && (!isToday || submittedDates.has(iso))) {
-      series.push({ date: iso, weekday, completed: submittedDates.has(iso) });
+    const status = statusByDate.get(iso) || "missed";
+    if (scheduledSet.has(weekday) && (!isToday || status === "submitted")) {
+      series.push({ date: iso, weekday, status, completed: status === "submitted" });
     }
     cursor.setDate(cursor.getDate() - 1);
     // Bail out rather than loop forever if a building somehow has no
@@ -1199,7 +1205,8 @@ function renderSuperMetrics(history, inspectionDays) {
     return `<p class="super-overview__empty super-metrics__empty">Submit a few inspections to see your completion trend here.</p>`;
   }
 
-  const completedCount = series.filter((s) => s.completed).length;
+  const completedCount = series.filter((s) => s.status === "submitted").length;
+  const partialCount = series.filter((s) => s.status === "partial").length;
   const rate = Math.round((completedCount / series.length) * 100);
 
   const viewW = 300;
@@ -1224,12 +1231,14 @@ function renderSuperMetrics(history, inspectionDays) {
   // coordinate system to distort, so it always stays round. Y is a
   // plain pixel value here because the SVG's height attribute is fixed
   // (only width stretches), so 1 viewBox Y unit is always 1 real pixel.
+  const dotColor = { submitted: "green", partial: "amber", missed: "red" };
+  const dotLabel = { submitted: "Completed", partial: "Partial — locked incomplete", missed: "Missed" };
   const dots = points
     .map(
       (p, i) => `
-        <span class="super-metrics__dot super-metrics__dot--${p.completed ? "green" : "red"}"
+        <span class="super-metrics__dot super-metrics__dot--${dotColor[p.status]}"
           style="left: ${((p.x / viewW) * 100).toFixed(2)}%; top: ${p.y.toFixed(1)}px; animation-delay: ${300 + i * 70}ms"
-          title="${escapeHtml(formatInspectionDate(p.date))}: ${p.completed ? "Completed" : "Missed"}"></span>`,
+          title="${escapeHtml(formatInspectionDate(p.date))}: ${dotLabel[p.status]}"></span>`,
     )
     .join("");
   const firstLabel = `${new Date(`${series[0].date}T00:00:00`).getMonth() + 1}/${new Date(`${series[0].date}T00:00:00`).getDate()}`;
@@ -1242,6 +1251,11 @@ function renderSuperMetrics(history, inspectionDays) {
           <strong>${rate}%</strong><span>Completed on schedule, last ${series.length} days</span>
         </div>
         <div class="super-metrics__stat"><strong>${completedCount}/${series.length}</strong><span>Assignments finished</span></div>
+        ${
+          partialCount
+            ? `<div class="super-metrics__stat super-metrics__stat--amber"><strong>${partialCount}</strong><span>Locked incomplete</span></div>`
+            : ""
+        }
       </div>
       <div class="super-metrics__chart-wrap" style="height: ${viewH}px;">
         <svg width="100%" height="${viewH}" viewBox="0 0 ${viewW} ${viewH}" preserveAspectRatio="none" class="super-metrics__chart" role="img" aria-label="Inspection completion over recent scheduled days">
@@ -1255,7 +1269,7 @@ function renderSuperMetrics(history, inspectionDays) {
         <span>${escapeHtml(firstLabel)}</span>
         <span>${escapeHtml(lastLabel)}</span>
       </div>
-      <p class="super-metrics__legend"><span class="legend-dot legend-dot--green"></span>Completed<span class="legend-dot legend-dot--red"></span>Missed</p>
+      <p class="super-metrics__legend"><span class="legend-dot legend-dot--green"></span>Completed<span class="legend-dot legend-dot--amber"></span>Partial<span class="legend-dot legend-dot--red"></span>Missed</p>
     </div>`;
 }
 
@@ -3402,12 +3416,20 @@ function renderInspectionHistory(buildingId) {
         <details class="history-week" ${index === 0 ? "open" : ""}>
           <summary>${escapeHtml(weeks[key].label)}<span class="quiet-label">${weeks[key].items.length} day${weeks[key].items.length === 1 ? "" : "s"}</span></summary>
           ${weeks[key].items
-            .map(
-              (s) => `<div class="history-day">
-                <span><strong>${escapeHtml(formatInspectionDate(s.inspection_date))}</strong> <span class="quiet-label">· ${escapeHtml(s.superintendent_name || "Unknown")} · ${s.reading_count} reading${s.reading_count === 1 ? "" : "s"}</span></span>
+            .map((s) => {
+              // A day locked incomplete at end-of-day (nobody hit
+              // submit) shows up here now too, alongside real
+              // submissions -- flagged so it doesn't read as a normal
+              // finished day, but still exportable, since whatever was
+              // captured before it locked is real data.
+              const isPartial = s.status !== "submitted";
+              return `<div class="history-day">
+                <span><strong>${escapeHtml(formatInspectionDate(s.inspection_date))}</strong> <span class="quiet-label">· ${escapeHtml(s.superintendent_name || "Unknown")} · ${s.reading_count} reading${s.reading_count === 1 ? "" : "s"}</span>
+                  ${isPartial ? `<span class="status-pill status-pill--warning" title="Locked at end of day -- nobody submitted it">${icon("clock")} Partial</span>` : ""}
+                </span>
                 <button type="button" class="button button--outline button--small download-inspection-pdf" data-building-id="${buildingId}" data-date="${s.inspection_date}">${icon("check")} Download PDF</button>
-              </div>`,
-            )
+              </div>`;
+            })
             .join("")}
         </details>`,
     )

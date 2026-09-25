@@ -236,13 +236,24 @@ export async function ensureSubmission(session, env) {
   }
 
   const existing = await env.DB.prepare(
-    `SELECT id, status FROM inspection_submissions WHERE building_id = ? AND inspection_date = ?`,
+    `SELECT id, status, locked_partial_at FROM inspection_submissions WHERE building_id = ? AND inspection_date = ?`,
   )
     .bind(buildingId, date)
     .first();
 
   if (existing?.status === "submitted") {
     const err = new Error("Today's inspection was already submitted and can't be edited.");
+    err.status = 409;
+    throw err;
+  }
+
+  // Normally unreachable -- ensureSubmission only ever looks at today's
+  // own date, and the nightly lock cron only ever touches rows strictly
+  // before today, so today's row is never locked yet. Guarded anyway:
+  // a locked partial day is meant to be frozen history, the same as a
+  // submitted one, not something a stray edit call can reopen.
+  if (existing?.locked_partial_at) {
+    const err = new Error("This day's inspection was locked as incomplete and can't be edited.");
     err.status = 409;
     throw err;
   }
@@ -256,6 +267,28 @@ export async function ensureSubmission(session, env) {
     .bind(buildingId, session.id, date)
     .run();
   return { submissionId: inserted.meta.last_row_id, buildingId, date };
+}
+
+// Runs off the nightly cron (see worker/index.js's scheduled() and
+// wrangler.toml's second cron entry). Any building's inspection that's
+// still sitting in 'draft' once its own calendar day has fully passed
+// gets stamped locked_partial_at -- whatever readings a superintendent
+// did get to stay saved and visible, it just can no longer be edited or
+// added to, the same as a real submit locks a finished day. status
+// itself is deliberately left as 'draft' rather than introduced as a
+// new value -- see the migration's own comment for why (D1 doesn't
+// honor PRAGMA foreign_keys=OFF, so a CHECK-constraint rebuild isn't
+// safe on this table while inspection_readings/group_notes/group_photos
+// reference it).
+export async function lockStaleDrafts(env) {
+  const cutoff = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  const result = await env.DB.prepare(
+    `UPDATE inspection_submissions SET locked_partial_at = CURRENT_TIMESTAMP
+     WHERE status = 'draft' AND locked_partial_at IS NULL AND inspection_date < ?`,
+  )
+    .bind(cutoff)
+    .run();
+  return { locked: result.meta.changes || 0 };
 }
 
 async function upsertDraft(session, env, { notes, readings, flags, photoKeys, groupNotes }) {

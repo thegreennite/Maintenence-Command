@@ -30,13 +30,18 @@ export async function handleInspectionHistory(request, session, env, corsHeaders
   const buildingId = Number.parseInt(new URL(request.url).searchParams.get("buildingId"), 10);
   if (!(await ownsBuilding(env, session, buildingId))) return jsonError("Building not found.", 404, corsHeaders);
 
+  // Submitted days and locked-partial days both show here -- a partial
+  // day (status still 'draft', but locked_partial_at set once its date
+  // passed with nobody finishing it) is real history worth seeing, just
+  // flagged differently on the frontend rather than treated the same as
+  // a day nobody touched at all (which has no row here regardless).
   const result = await env.DB.prepare(
-    `SELECT s.inspection_date, s.submitted_at, u.full_name AS superintendent_name,
+    `SELECT s.inspection_date, s.submitted_at, s.status, s.locked_partial_at, u.full_name AS superintendent_name,
        (SELECT COUNT(*) FROM inspection_readings r WHERE r.submission_id = s.id) AS reading_count,
        (SELECT COUNT(*) FROM inspection_readings r WHERE r.submission_id = s.id AND r.flagged = 1) AS flagged_count
      FROM inspection_submissions s
      LEFT JOIN users u ON u.id = s.superintendent_id
-     WHERE s.building_id = ? AND s.status = 'submitted'
+     WHERE s.building_id = ? AND (s.status = 'submitted' OR s.locked_partial_at IS NOT NULL)
      ORDER BY s.inspection_date DESC`,
   )
     .bind(buildingId)
@@ -53,9 +58,9 @@ export async function handleInspectionDetail(request, session, env, corsHeaders)
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
   const submission = await env.DB.prepare(
-    `SELECT s.id, s.inspection_date, s.submitted_at, s.notes, u.full_name AS superintendent_name
+    `SELECT s.id, s.inspection_date, s.submitted_at, s.status, s.locked_partial_at, s.notes, u.full_name AS superintendent_name
      FROM inspection_submissions s LEFT JOIN users u ON u.id = s.superintendent_id
-     WHERE s.building_id = ? AND s.inspection_date = ? AND s.status = 'submitted'`,
+     WHERE s.building_id = ? AND s.inspection_date = ? AND (s.status = 'submitted' OR s.locked_partial_at IS NOT NULL)`,
   )
     .bind(buildingId, date)
     .first();

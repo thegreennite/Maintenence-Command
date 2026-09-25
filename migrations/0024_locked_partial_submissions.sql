@@ -1,0 +1,21 @@
+-- Lets a day's still-open draft get locked at end of day if nobody
+-- finished it, so it reads as "started but incomplete" instead of
+-- either staying open forever or looking identical to a day nobody
+-- touched at all.
+--
+-- Deliberately a plain ADD COLUMN, not a change to the `status` CHECK
+-- constraint (which would need a table rebuild -- SQLite can't alter a
+-- CHECK constraint in place). A rebuild was tried first and reverted:
+-- Cloudflare D1 does not actually honor PRAGMA foreign_keys=OFF (setting
+-- it and reading it back in the same batch still reports 1/on), so
+-- there is no safe way on this platform to DROP a table that other
+-- tables (inspection_readings, group_notes, group_photos) reference --
+-- it cascade-deletes their rows regardless. Confirmed against a local
+-- test database before writing this version. See decisions/log-style
+-- comment in worker/inspections.js's lockStaleDrafts() for the runtime
+-- half of this.
+--
+-- A locked-but-unfinished day is status='draft' (unchanged, still valid
+-- against the existing CHECK) with this column set to when it was
+-- locked. status stays 'submitted' for a real, completed submission.
+ALTER TABLE inspection_submissions ADD COLUMN locked_partial_at TEXT;

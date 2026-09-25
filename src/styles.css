@@ -931,6 +931,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   pointer-events: auto;
 }
 .super-metrics__dot--green { background: #3f9d6c; }
+.super-metrics__dot--amber { background: #e8a33d; }
 .super-metrics__dot--red { background: #d9564a; }
 @keyframes super-dot-pop { to { opacity: 1; transform: scale(1); } }
 .super-metrics__axis { display: flex; justify-content: space-between; margin: 6px 2px 0; font-size: 10.5px; font-weight: 600; color: var(--muted); }
