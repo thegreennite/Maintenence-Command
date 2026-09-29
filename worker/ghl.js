@@ -34,3 +34,16 @@ export async function ghlSendEmail(env, { contactId, subject, html }) {
     body: { type: "Email", contactId, subject, html },
   });
 }
+
+// SMS goes out from whatever phone number is actually provisioned on
+// this location's Conversations/Phone settings inside GHL itself --
+// that part is a GHL account setting, not something an API call can
+// pick or change. This just sends through that connection once it
+// exists; GHL replies with a real error if no number is set up yet.
+export async function ghlSendSms(env, { contactId, message }) {
+  return ghlFetch(env, "/conversations/messages", {
+    method: "POST",
+    version: "2021-04-15",
+    body: { type: "SMS", contactId, message },
+  });
+}
