@@ -35,11 +35,13 @@ const state = {
   managerInspection: null,
   propertyInspections: null,
   managerBuildings: [],
+  reportWeeks: null,
   buildingWizard: { step: "closed" },
   selectedExceptionId: null,
   loading: true,
   confirmedOutOfRange: false,
   confirmedAbnormalTagIds: [],
+  confirmedNormalTagIds: [],
   pendingSubmitForm: null,
   authScreen: "login",
   registration: { role: null, step: "building", building: null, buildingResults: [], buildingSearched: false },
@@ -337,6 +339,9 @@ const api = {
   },
   assignTagGroup(payload) {
     return this.request("/manager/tags/group", { method: "POST", body: JSON.stringify(payload) });
+  },
+  reportWeeks() {
+    return this.request("/reports/weekly/list");
   },
   reorderTags(payload) {
     return this.request("/manager/tags/reorder", { method: "POST", body: JSON.stringify(payload) });
@@ -935,12 +940,16 @@ async function loadDashboard() {
   // already covers admin on the backend, this is just wiring the frontend
   // up to actually fetch and show it for that role too.
   if (isRegionalManager || isAdminViewing) {
-    const [buildingsResponse, pendingResponse, superintendentsResponse, workOrdersResponse] = await Promise.all([
+    const [buildingsResponse, pendingResponse, superintendentsResponse, workOrdersResponse, weeksResponse] = await Promise.all([
       api.managerBuildings(),
       api.managerPendingRequests(),
       api.managerSuperintendents(),
       api.managerWorkOrders(),
+      // Only an Operations Manager / admin gets the all-buildings
+      // report; anyone else just doesn't get the card.
+      api.reportWeeks().catch(() => ({ weeks: [] })),
     ]);
+    state.reportWeeks = weeksResponse.weeks;
     state.managerBuildings = buildingsResponse.buildings;
     state.pendingRequests = pendingResponse.requests;
     state.managerSuperintendents = superintendentsResponse.superintendents;
@@ -1312,6 +1321,59 @@ function renderDashboard(data) {
     ${body}`;
 }
 
+// Every week's spreadsheet, current and past -- built live from the data
+// when clicked, so there's nothing to backfill and an old week is exactly
+// as available as this one. The same file is attached to Friday's 5 PM
+// email.
+function renderWeeklySummariesCard() {
+  const weeks = state.reportWeeks;
+  if (!weeks || !weeks.length) return "";
+  const row = (w) => `<div class="history-day">
+      <span><strong>${escapeHtml(w.label)}</strong>${w.current ? ' <span class="status-pill status-pill--success">This week</span>' : ""}</span>
+      <button type="button" class="button button--outline button--small download-weekly-report" data-week="${w.weekStart}">${icon("check")} Download spreadsheet</button>
+    </div>`;
+  const recent = weeks.slice(0, 6);
+  const older = weeks.slice(6);
+  return `
+    <section class="card weekly-summaries" aria-labelledby="weekly-summaries-title">
+      <div class="card__header">
+        <div><p class="section-kicker">Weekly summaries</p><h2 id="weekly-summaries-title">Every reading, by week</h2></div>
+        <span class="quiet-label">Emailed Fridays at 5 PM</span>
+      </div>
+      <p class="parameters-intro">One spreadsheet per week: a summary across every building, then each building's readings laid out machine by day with anything outside normal in red, the week's notes, and a space for your own comments. Ready to print or send on.</p>
+      ${recent.map(row).join("")}
+      ${older.length ? `<details class="history-week"><summary>Earlier weeks<span class="quiet-label">${older.length}</span></summary>${older.map(row).join("")}</details>` : ""}
+    </section>`;
+}
+
+async function handleDownloadWeeklyReport(button) {
+  const week = button.dataset.week;
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.textContent = "Building…";
+  try {
+    const response = await fetch(`${API_BASE}/api/reports/weekly?week=${encodeURIComponent(week)}`, { credentials: "include" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || "Couldn't build that week.");
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Power-Log-Command-Weekly-${week}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    button.innerHTML = original;
+  } catch (error) {
+    button.textContent = error.message;
+    setTimeout(() => (button.innerHTML = original), 3500);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderManagerDashboard(data) {
   return `
     <section aria-labelledby="portfolio-pulse-title">
@@ -1342,6 +1404,7 @@ function renderManagerDashboard(data) {
     ${renderManagerInspectionPanel(state.managerInspection)}
     ${renderPendingRequestsPanel()}
     ${renderBuildingsPanel()}
+    ${renderWeeklySummariesCard()}
     ${renderSuperintendentSwitcherPanel()}
     ${state.managerBuildings.length ? renderPhotoLibraryCard(state.managerBuildings[0].id, state.managerBuildings.map((b) => ({ id: b.id, name: b.name }))) : ""}`;
 }
@@ -2024,6 +2087,7 @@ function renderAdminDashboard(data) {
     <div class="metric-grid metric-grid--three">${data.stats.map(renderStat).join("")}</div>
     ${renderPendingRequestsPanel()}
     ${renderBuildingsPanel()}
+    ${renderWeeklySummariesCard()}
     ${renderAdminBuildingDeletionsPanel()}
     ${renderAdminAccountsManagePanel()}
     <section class="card admin-panel">
@@ -2502,6 +2566,7 @@ async function handleEditReadingChipSave(event) {
       readingType: data.get("reading_type"),
       unit: data.get("unit"),
       valueType: data.get("value_type"),
+      monitorTrend: data.get("monitor_trend") === "on",
     });
     const tag = state.buildingWorld.tags.find((t) => t.id === tagId);
     if (tag) {
@@ -2510,6 +2575,7 @@ async function handleEditReadingChipSave(event) {
       tag.reading_type = data.get("reading_type").trim();
       tag.unit = data.get("unit").trim() || null;
       tag.value_type = result.valueType;
+      tag.monitor_trend = data.get("monitor_trend") === "on" ? 1 : 0;
     }
     state.buildingWorldEditingTagId = null;
     renderApp();
@@ -3375,6 +3441,10 @@ function renderReadingChipEditForm(tag) {
           .map(([value, { label }]) => `<option value="${value}" ${tag.value_type === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
           .join("")}
       </select>
+      <label class="require-photo-toggle" title="Flag this reading when it drifts past its normal (3° / 5 PSI / 5%). Turn off for readings that legitimately swing on their own.">
+        <input type="checkbox" name="monitor_trend" ${tag.monitor_trend === 0 ? "" : "checked"} />
+        Flag unusual changes
+      </label>
       <div class="reading-chip__edit-actions">
         <button type="submit" class="icon-button" title="Save" aria-label="Save reading">${icon("check")}</button>
         <button type="button" class="icon-button cancel-edit-tag" title="Cancel" aria-label="Cancel">${icon("close")}</button>
@@ -4263,8 +4333,24 @@ function clientFlagFor(tag, rawValue) {
 
 function findFlaggedReadings(readings) {
   return state.inspection.tags
-    .map((tag) => ({ tag, value: readings[tag.id], flag: clientFlagFor(tag, readings[tag.id]) }))
-    .filter((item) => item.flag);
+    .map((tag) => {
+      const value = readings[tag.id];
+      const paramFlag = clientFlagFor(tag, value);
+      if (paramFlag) {
+        const p = tag.parameter;
+        const detail = p?.expected ? `Expected "${p.expected}"` : p?.min != null ? `Normal range is ${p.min}–${p.max}${tag.unit ? ` ${tag.unit}` : ""}` : "";
+        return { tag, value, flag: paramFlag, detail };
+      }
+      // Same learned-baseline check command mode already did -- the
+      // regular form never ran it, which is how a heating inlet reading
+      // of 28 PSI against a steady 60 sailed through unflagged.
+      if (historyFlagFor(tag, value)) {
+        const avg = Math.round(tag.history.avg * 10) / 10;
+        return { tag, value, flag: "trend", detail: `Usually about ${avg}${tag.unit ? ` ${tag.unit}` : ""}` };
+      }
+      return null;
+    })
+    .filter(Boolean);
 }
 
 // ---------------------------------------------------------------------
@@ -4312,7 +4398,10 @@ function historyFlagFor(tag, rawValue) {
   const num = Number.parseFloat(rawValue);
   if (Number.isNaN(num)) return null;
   const statisticalThreshold = Math.max(h.stdev * 2, Math.abs(h.avg) * 0.15, 1);
-  const cap = unitTolerance(tag.unit);
+  // The server decides the tolerance (unit first, then the reading's own
+  // name for gauges with no unit) so the app, the nightly record and the
+  // weekly report all agree -- see worker/deviation.js.
+  const cap = tag.tolerance !== undefined ? tag.tolerance : unitTolerance(tag.unit);
   const threshold = cap != null ? Math.min(cap, statisticalThreshold) : statisticalThreshold;
   // >= , not > -- "50 vs 53" (exactly a 3° gap) is Lucas's own example of
   // something that should flag, and readings in this domain are usually
@@ -5238,9 +5327,11 @@ async function submitInspection(form) {
     state.inspection = await api.inspectionSubmit({
       ...collectInspectionForm(form),
       confirmedAbnormalTagIds: state.confirmedAbnormalTagIds || [],
+      confirmedNormalTagIds: state.confirmedNormalTagIds || [],
     });
     state.confirmedOutOfRange = false;
     state.confirmedAbnormalTagIds = [];
+    state.confirmedNormalTagIds = [];
     // Refresh the completion history right away so the super's own
     // line graph reflects today's submission the moment it lands,
     // rather than waiting for the next full dashboard reload. Best
@@ -5322,7 +5413,7 @@ function renderOutOfRangeModal(flagged) {
           .map(
             (item) => `
           <div class="out-of-range-item" data-tag-id="${item.tag.id}">
-            <div class="out-of-range-item__label"><strong>${escapeHtml([item.tag.tag_no, item.tag.reading_type].filter(Boolean).join(" — "))}</strong><span>You entered: ${escapeHtml(String(item.value))}${item.tag.unit ? " " + escapeHtml(item.tag.unit) : ""}</span></div>
+            <div class="out-of-range-item__label"><strong>${escapeHtml([item.tag.tag_no, item.tag.reading_type].filter(Boolean).join(" — "))}</strong><span>You entered: ${escapeHtml(String(item.value))}${item.tag.unit ? " " + escapeHtml(item.tag.unit) : ""}${item.detail ? ` · ${escapeHtml(item.detail)}` : ""}</span></div>
             <div class="out-of-range-item__actions">
               <button type="button" class="button button--small button--outline" data-choice="fix">Let me fix it</button>
               <button type="button" class="button button--small button--light" data-choice="normal">It's normal</button>
@@ -5365,6 +5456,9 @@ function renderOutOfRangeModal(flagged) {
     state.confirmedOutOfRange = true;
     state.confirmedAbnormalTagIds = Array.from(decisions.entries())
       .filter(([, choice]) => choice === "abnormal")
+      .map(([tagId]) => Number(tagId));
+    state.confirmedNormalTagIds = Array.from(decisions.entries())
+      .filter(([, choice]) => choice === "normal")
       .map(([tagId]) => Number(tagId));
     wrap.remove();
     await submitInspection(state.pendingSubmitForm);
@@ -5776,6 +5870,9 @@ function bindDashboardEvents() {
   });
   document.querySelectorAll(".download-inspection-pdf").forEach((button) => {
     button.addEventListener("click", () => handleDownloadInspectionPdf(button));
+  });
+  document.querySelectorAll(".download-weekly-report").forEach((button) => {
+    button.addEventListener("click", () => handleDownloadWeeklyReport(button));
   });
 
   // The map picker's edit form reuses the registration wizard's map IDs, so

@@ -38,19 +38,24 @@ GITHUB_REPO_URL = "https://github.com/thegreennite/Maintenence-Command"
 # GHL_API_KEY is a Worker secret, not a var. Location/base aren't secret.
 GHL_API_BASE = "https://services.leadconnectorhq.com"
 GHL_LOCATION_ID = "B3DTv8qZBapYs1m8Rcv2"
+PUBLIC_APP_URL = "https://power-log-command.pages.dev"
+# Copied on every Friday report in addition to the Operations Managers.
+# Comma-separated; remove an address here to stop its copy.
+WEEKLY_REPORT_EXTRA_EMAILS = "lucas.garcia.gla@gmail.com"
 
 [observability]
 enabled = true
 
 [triggers]
-# Fires daily at 20:00 UTC (~3-4pm Toronto depending on DST) -- the
-# scheduled() handler itself checks it's actually Friday in Toronto before
-# sending, rather than trying to express "Friday Toronto time" as a
-# fixed UTC cron day-of-week field.
+# 05:15 UTC is just after midnight in Toronto in both EST (00:15) and EDT
+# (01:15) -- always after the calendar day has actually turned over
+# locally, regardless of DST, so "end of day" locking matches the same
+# Toronto-local date the rest of the app uses (see today() in
+# worker/inspections.js).
 #
-# Second entry fires daily at 05:15 UTC, which is just after midnight in
-# Toronto in both EST (00:15) and EDT (01:15) -- always after the
-# calendar day has actually turned over locally, regardless of DST, so
-# "end of day" locking matches the same Toronto-local date the rest of
-# the app already uses (see today() in worker/inspections.js).
-crons = ["0 20 * * *", "15 5 * * *"]
+# 21:00 and 22:00 UTC both fire every day: 5 PM Toronto is 21:00 UTC in
+# summer (EDT) and 22:00 UTC in winter (EST), and a fixed UTC cron can't
+# follow daylight saving. scheduled() checks it is genuinely Friday 5 PM
+# in Toronto before sending the weekly report, so exactly one of the two
+# ever sends it.
+crons = ["15 5 * * *", "0 21 * * *", "0 22 * * *"]

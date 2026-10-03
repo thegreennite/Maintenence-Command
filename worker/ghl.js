@@ -27,11 +27,13 @@ export async function ghlUpsertContact(env, { email, name }) {
   return data.contact.id;
 }
 
-export async function ghlSendEmail(env, { contactId, subject, html }) {
+// `attachments` is a list of publicly fetchable URLs -- GHL pulls each
+// one and attaches the file to the email.
+export async function ghlSendEmail(env, { contactId, subject, html, attachments }) {
   return ghlFetch(env, "/conversations/messages", {
     method: "POST",
     version: "2021-04-15",
-    body: { type: "Email", contactId, subject, html },
+    body: { type: "Email", contactId, subject, html, ...(attachments?.length ? { attachments } : {}) },
   });
 }
 

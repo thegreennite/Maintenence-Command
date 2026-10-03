@@ -228,10 +228,15 @@ export async function handleUpdateTag(request, session, env, corsHeaders) {
   const isSprinkler = /sprinkler/i.test(`${tagNo || ""} ${readingType}`);
   const valueType = isSprinkler ? "open_closed" : requestedValueType;
 
+  // Only touched when the caller actually sends it, so any other editor
+  // of a reading can't silently reset a manager's choice. false = this
+  // reading is allowed to swing on its own (see worker/deviation.js).
+  const monitorTrend = typeof body.monitorTrend === "boolean" ? (body.monitorTrend ? 1 : 0) : null;
+
   await env.DB.prepare(
-    "UPDATE inspection_tags SET system_name = ?, tag_no = ?, reading_type = ?, unit = ?, answer_kind = ? WHERE id = ?",
+    "UPDATE inspection_tags SET system_name = ?, tag_no = ?, reading_type = ?, unit = ?, answer_kind = ?, monitor_trend = COALESCE(?, monitor_trend) WHERE id = ?",
   )
-    .bind(systemName, tagNo, readingType, unit, valueType, tagId)
+    .bind(systemName, tagNo, readingType, unit, valueType, monitorTrend, tagId)
     .run();
 
   return jsonOk({ ok: true, valueType }, corsHeaders);

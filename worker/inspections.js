@@ -3,6 +3,7 @@
 // checklist pulled from an actual Forest Hill inspection sheet.
 
 import { createReadingWorkOrder } from "./work-orders.js";
+import { loadBaselines, evaluateDeviation, inferTolerance, trendMonitored } from "./deviation.js";
 
 // Toronto time, not UTC -- an inspection "day" should turn over at
 // midnight ET, not at 8pm local when UTC quietly rolls to the next date.
@@ -10,54 +11,13 @@ function today() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 }
 
-// Cheap trend stats from the last 7 days of SUBMITTED readings for numeric
-// tags -- lets command mode (and the regular form) flag "this doesn't look
-// like what this gauge usually reads" even for tags nobody bothered to set
-// a manual min/max on. avg_sq lets us derive stdev without SQLite having a
-// native STDDEV function: variance = E[x^2] - E[x]^2.
-async function loadHistory(env, buildingId, today) {
-  const result = await env.DB.prepare(
-    `SELECT r.tag_id,
-       COUNT(*) AS sample_count,
-       AVG(CAST(r.value AS REAL)) AS avg_value,
-       AVG(CAST(r.value AS REAL) * CAST(r.value AS REAL)) AS avg_sq,
-       MIN(CAST(r.value AS REAL)) AS min_value,
-       MAX(CAST(r.value AS REAL)) AS max_value
-     FROM inspection_readings r
-     JOIN inspection_submissions s ON s.id = r.submission_id
-     JOIN inspection_tags t ON t.id = r.tag_id
-     WHERE s.building_id = ? AND s.status = 'submitted' AND s.inspection_date >= date(?, '-7 days')
-       AND s.inspection_date < ? AND t.answer_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
-     GROUP BY r.tag_id`,
-  )
-    .bind(buildingId, today, today)
-    .all();
-
-  const byTag = {};
-  for (const row of result.results) {
-    // A full work-week of real submitted readings before trend-flagging
-    // kicks in at all for a tag -- fewer than that isn't enough to know
-    // what "normal" even looks like for that specific gauge yet.
-    if (row.sample_count < 5) continue;
-    const variance = Math.max(row.avg_sq - row.avg_value * row.avg_value, 0);
-    byTag[row.tag_id] = {
-      count: row.sample_count,
-      avg: row.avg_value,
-      stdev: Math.sqrt(variance),
-      min: row.min_value,
-      max: row.max_value,
-    };
-  }
-  return byTag;
-}
-
 async function loadTags(env, buildingId) {
-  const [result, history] = await Promise.all([
+  const [result, baselines] = await Promise.all([
     env.DB.prepare(
       `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.answer_kind AS value_type, t.location_id,
          l.name AS location_name, l.sort_order AS location_sort_order,
          t.equipment_group_id, g.name AS equipment_group_name, g.requires_photo, g.sort_order AS equipment_group_sort_order,
-         p.min_value, p.max_value, p.expected_value
+         p.min_value, p.max_value, p.expected_value, t.monitor_trend
        FROM inspection_tags t
        LEFT JOIN inspection_parameters p ON p.tag_id = t.id
        LEFT JOIN building_locations l ON l.id = t.location_id
@@ -66,7 +26,7 @@ async function loadTags(env, buildingId) {
     )
       .bind(buildingId)
       .all(),
-    loadHistory(env, buildingId, today()),
+    loadBaselines(env, buildingId, today()),
   ]);
   // Included so the app can nudge "does that look right?" the moment a
   // superintendent types something outside the expected range, before it
@@ -94,7 +54,11 @@ async function loadTags(env, buildingId) {
       row.min_value != null || row.max_value != null || row.expected_value != null
         ? { min: row.min_value, max: row.max_value, expected: row.expected_value }
         : null,
-    history: history[row.id] || null,
+    monitor_trend: row.monitor_trend,
+    // Real-world drift allowed before this reading flags (null = no fixed
+    // number, statistical rule only) -- see worker/deviation.js.
+    tolerance: inferTolerance(row.unit, row.reading_type),
+    history: trendMonitored(row) ? baselines[row.id] || null : null,
   }));
 }
 
@@ -417,6 +381,39 @@ export async function handleInspectionSave(request, session, env, corsHeaders) {
   return handleInspectionToday(session, env, corsHeaders);
 }
 
+// Stamps every reading that fell outside its normal onto the reading
+// itself (inspection_readings.deviation) at submit time, along with how
+// the superintendent answered the prompt. Computed here from the saved
+// values rather than trusted from the client, so a reading can't skip
+// being recorded just because a prompt didn't show (old cached tab,
+// regular form vs command mode, etc.). Best-effort on purpose: this is
+// bookkeeping for reports, and must never be what blocks a real submit.
+async function recordDeviations(env, buildingId, submissionId, body) {
+  const abnormal = new Set((Array.isArray(body.confirmedAbnormalTagIds) ? body.confirmedAbnormalTagIds : []).map(Number));
+  const normal = new Set((Array.isArray(body.confirmedNormalTagIds) ? body.confirmedNormalTagIds : []).map(Number));
+  const [tags, saved] = await Promise.all([
+    loadTags(env, buildingId),
+    env.DB.prepare("SELECT tag_id, value FROM inspection_readings WHERE submission_id = ?").bind(submissionId).all(),
+  ]);
+  const tagById = new Map(tags.map((t) => [t.id, t]));
+  const statements = [env.DB.prepare("UPDATE inspection_readings SET deviation = NULL WHERE submission_id = ?").bind(submissionId)];
+  for (const row of saved.results) {
+    const tag = tagById.get(row.tag_id);
+    if (!tag) continue;
+    const deviation = evaluateDeviation(tag, row.value, tag.history);
+    if (!deviation) continue;
+    const ack = abnormal.has(row.tag_id) ? "abnormal" : normal.has(row.tag_id) ? "normal" : null;
+    statements.push(
+      env.DB.prepare("UPDATE inspection_readings SET deviation = ? WHERE submission_id = ? AND tag_id = ?").bind(
+        JSON.stringify({ ...deviation, tolerance: deviation.tolerance ?? tag.tolerance, ack }),
+        submissionId,
+        row.tag_id,
+      ),
+    );
+  }
+  await env.DB.batch(statements);
+}
+
 export async function handleInspectionSubmit(request, session, env, corsHeaders) {
   const body = await request.json().catch(() => ({}));
   let submissionId;
@@ -461,6 +458,12 @@ export async function handleInspectionSubmit(request, session, env, corsHeaders)
   if (missingGroupPhotos.results.length) {
     const names = missingGroupPhotos.results.map((g) => g.name).join(", ");
     return jsonError(`Take a timestamped photo of these before submitting: ${names}`, 409, corsHeaders);
+  }
+
+  try {
+    await recordDeviations(env, session.building_id, submissionId, body);
+  } catch (error) {
+    console.error("recordDeviations failed", error);
   }
 
   await env.DB.prepare(

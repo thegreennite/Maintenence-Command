@@ -59,7 +59,15 @@ import { handlePhotoDates, handlePhotoList, handlePhotoView } from "./photos.js"
 import { handleCreateNotice, handleDeleteNotice } from "./notices.js";
 import { handleUpdateProfile } from "./profile.js";
 import { needsVerification, sendVerificationCode, verifyCode } from "./two-factor.js";
-import { sendWeeklyDigest } from "./weekly-digest.js";
+import { canSeeAllBuildings } from "./access.js";
+import {
+  buildWeeklyReport,
+  listReportWeeks,
+  isValidIsoDate,
+  mondayOf,
+  verifyReportSignature,
+  sendWeeklyReportEmail,
+} from "./weekly-report.js";
 import {
   handleBuildingSearchForRegistration,
   handleSelfRegister,
@@ -115,6 +123,14 @@ export default {
       // company's first account gets created.
       if (url.pathname === "/api/business/create" && request.method === "POST") {
         return handleCreateBusiness(request, env, cors.headers);
+      }
+
+      // Public but signed: the link inside the Friday email (and the file
+      // GHL attaches from it). No login -- the HMAC in the query string is
+      // the credential, and it's only good for one company + one week
+      // until it expires. See signedReportUrl in weekly-report.js.
+      if (url.pathname.startsWith("/api/reports/weekly/file/") && request.method === "GET") {
+        return handleSignedReportDownload(url, env, cors.headers);
       }
 
       if (url.pathname === "/api/auth/logout" && request.method === "POST") {
@@ -183,8 +199,25 @@ export default {
         if (session.role !== "admin") {
           return json({ error: "Administrator access required" }, 403, cors.headers);
         }
-        const result = await sendWeeklyDigest(env);
+        const body = await readJson(request);
+        const week = isValidIsoDate(body.week) ? body.week : undefined;
+        const onlyTo = typeof body.onlyTo === "string" && body.onlyTo.includes("@") ? body.onlyTo.trim() : undefined;
+        const result = await sendWeeklyReportEmail(env, { weekStart: week, onlyTo });
         return json(result, 200, cors.headers);
+      }
+
+      // In-app weekly summaries: which weeks exist, and a download for any
+      // of them (past weeks included -- built live from the data).
+      if (url.pathname === "/api/reports/weekly/list" && request.method === "GET") {
+        if (!canSeeAllBuildings(session)) return json({ error: "Operations Manager or Administrator access required" }, 403, cors.headers);
+        return json({ weeks: await listReportWeeks(env) }, 200, cors.headers);
+      }
+      if (url.pathname === "/api/reports/weekly" && request.method === "GET") {
+        if (!canSeeAllBuildings(session)) return json({ error: "Operations Manager or Administrator access required" }, 403, cors.headers);
+        const week = url.searchParams.get("week");
+        if (!isValidIsoDate(week)) return json({ error: "A week (YYYY-MM-DD) is required." }, 400, cors.headers);
+        const report = await buildWeeklyReport(env, mondayOf(week));
+        return xlsxResponse(report, cors.headers);
       }
 
       if (url.pathname === "/api/admin/impersonate" && request.method === "POST") {
@@ -627,19 +660,44 @@ export default {
       return;
     }
 
-    // Runs every day (unlike the digest below): anything an admin
-    // soft-deleted more than 30 days ago gets permanently purged.
+    // The 21:00 and 22:00 UTC triggers both fire every day (wrangler.toml)
+    // -- one of them is 5 PM Toronto in winter, the other in summer, and
+    // a fixed UTC cron can't follow daylight saving. So each one does the
+    // daily housekeeping (idempotent: anything an admin soft-deleted more
+    // than 30 days ago is purged) and then only sends the weekly report
+    // if it's genuinely Friday 5 PM in Toronto right now.
     ctx.waitUntil(
       purgeExpiredBuildings(env).catch((error) => console.error("Building purge cron failed", error)),
     );
 
-    const todayToronto = new Date().toLocaleDateString("en-US", { timeZone: "America/Toronto", weekday: "short" });
-    if (todayToronto !== "Fri") return;
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", weekday: "short", hour: "numeric", hour12: false })
+        .formatToParts(new Date())
+        .map((p) => [p.type, p.value]),
+    );
+    if (parts.weekday !== "Fri" || Number(parts.hour) !== 17) return;
     ctx.waitUntil(
-      sendWeeklyDigest(env).catch((error) => console.error("Weekly digest cron failed", error)),
+      sendWeeklyReportEmail(env).catch((error) => console.error("Weekly report cron failed", error)),
     );
   },
 };
+
+function xlsxResponse(report, headers) {
+  const out = new Headers(headers);
+  out.set("Content-Type", report.mime);
+  out.set("Content-Disposition", `attachment; filename="${report.filename}"`);
+  out.set("Cache-Control", "private, no-store");
+  return new Response(report.bytes, { status: 200, headers: out });
+}
+
+async function handleSignedReportDownload(url, env, headers) {
+  const q = Object.fromEntries(url.searchParams);
+  if (!(await verifyReportSignature(env, q))) return json({ error: "This link has expired or isn't valid." }, 403, headers);
+  const resolved = await dbForClient(env, Number(q.c));
+  if (!resolved) return json({ error: "Not found" }, 404, headers);
+  const report = await buildWeeklyReport({ ...env, DB: resolved.db }, mondayOf(q.w));
+  return xlsxResponse(report, headers);
+}
 
 async function handleLogin(request, env, corsHeaders) {
   const body = await readJson(request);
