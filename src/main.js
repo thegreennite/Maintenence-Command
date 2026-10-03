@@ -977,6 +977,13 @@ async function loadDashboard() {
 let adminStatsRefreshTimer = null;
 const ADMIN_STATS_REFRESH_MS = 30_000;
 
+function isUserBusy() {
+  if (chipPointer) return true;
+  if (state.buildingWizard?.step && state.buildingWizard.step !== "closed") return true;
+  const active = document.activeElement;
+  return Boolean(active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName));
+}
+
 function startAdminStatsAutoRefresh() {
   stopAdminStatsAutoRefresh();
   adminStatsRefreshTimer = setInterval(async () => {
@@ -989,9 +996,12 @@ function startAdminStatsAutoRefresh() {
     // stops receiving events with no visible cleanup, which is what made
     // dragging feel like it randomly "got stuck." Skip this tick rather
     // than fight an active drag; the next one 30s later picks it back up.
-    if (chipPointer) return;
+    // Same reason for an open registration wizard or a half-typed field:
+    // renderApp() rebuilds the page, which would wipe what they've
+    // entered so far.
+    if (isUserBusy()) return;
     const fresh = await api.adminStats().catch(() => null);
-    if (!fresh || state.session?.user?.role !== "admin" || chipPointer) return;
+    if (!fresh || state.session?.user?.role !== "admin" || isUserBusy()) return;
     state.adminStats = fresh;
     renderApp();
   }, ADMIN_STATS_REFRESH_MS);
@@ -1551,12 +1561,88 @@ function renderBuildingRowPreview(building) {
     </div>`;
 }
 
+// The four checkpoints a new building goes through, in plain words --
+// shown as a connected 1 - 2 - 3 - 4 tracker above whichever step is
+// open, so someone who has never used the app can always see where they
+// are, what's already done, and what's left.
+const WIZARD_STEPS = [
+  { key: "form", label: "Details", caption: "Tell us about the building" },
+  { key: "upload", label: "Checklist", caption: "Add the paper checklist" },
+  { key: "review", label: "Review", caption: "Check the checklist" },
+  { key: "assign", label: "Assign", caption: "Choose who covers it" },
+];
+
+// Where the tracker was the last time it rendered (null = wizard was
+// closed). The whole app re-renders by rebuilding innerHTML, so a CSS
+// transition can't animate between renders -- instead, a step that just
+// became done is rendered with an "animate in" class, and anything that
+// was already done renders in its finished state without replaying.
+let lastWizardIndex = null;
+
+function renderWizardProgress(index, previousIndex) {
+  const forward = previousIndex != null && index > previousIndex;
+  const check = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const steps = WIZARD_STEPS.map((step, i) => {
+    const status = i < index ? "done" : i === index ? "current" : "todo";
+    const justDone = forward && i >= previousIndex && i < index;
+    const arriving = forward && i === index;
+    const isLast = i === WIZARD_STEPS.length - 1;
+    const delay = justDone ? (i - previousIndex) * 0.7 : 0;
+    return `
+      <li class="wizard-step is-${status} ${justDone ? "is-new" : ""} ${arriving ? "is-arriving" : ""}" ${status === "current" ? 'aria-current="step"' : ""} style="--wizard-delay: ${delay}s; --arrive-delay: ${Math.max(0.1, (index - (previousIndex ?? index)) * 0.7 - 0.05)}s">
+        <span class="wizard-step__dot">${status === "done" ? check : `<b>${i + 1}</b>`}</span>
+        <span class="wizard-step__label">${step.label}</span>
+        ${isLast ? "" : `<span class="wizard-step__bar ${status === "done" ? "is-filled" : ""} ${justDone ? "is-animating" : ""}" aria-hidden="true"><span class="wizard-step__fill"></span></span>`}
+      </li>`;
+  }).join("");
+  const caption =
+    index >= WIZARD_STEPS.length
+      ? "All done — you're set up"
+      : `Step ${index + 1} of ${WIZARD_STEPS.length} · ${WIZARD_STEPS[index].caption}`;
+  return `
+    <div class="wizard-progress">
+      <ol class="wizard-steps" aria-label="Building registration progress">${steps}</ol>
+      <p class="wizard-caption" aria-live="polite">${caption}</p>
+    </div>`;
+}
+
 function renderBuildingWizard(wizard) {
-  if (wizard.step === "form") return renderBuildingForm();
-  if (wizard.step === "upload") return renderBuildingUploadStep(wizard);
-  if (wizard.step === "review") return renderBuildingReviewStep(wizard);
-  if (wizard.step === "assign") return renderBuildingAssignStep(wizard);
-  return "";
+  const index = wizard.step === "done" ? WIZARD_STEPS.length : WIZARD_STEPS.findIndex((step) => step.key === wizard.step);
+  if (index < 0) return "";
+  const previous = lastWizardIndex;
+  lastWizardIndex = index;
+  const entering = previous !== index;
+
+  let panel = "";
+  if (wizard.step === "form") panel = renderBuildingForm();
+  else if (wizard.step === "upload") panel = renderBuildingUploadStep(wizard);
+  else if (wizard.step === "review") panel = renderBuildingReviewStep(wizard);
+  else if (wizard.step === "assign") panel = renderBuildingAssignStep(wizard);
+  else if (wizard.step === "done") panel = renderBuildingDoneStep(wizard);
+
+  return `
+    <div class="wizard" data-wizard-step="${wizard.step}">
+      ${renderWizardProgress(index, previous)}
+      <div class="wizard-stage ${entering ? "is-entering" : ""}">${panel}</div>
+    </div>`;
+}
+
+// The last checkpoint -- confirms what was set up instead of silently
+// closing, so the person knows it actually worked.
+function renderBuildingDoneStep(wizard) {
+  const built = state.managerBuildings.find((b) => b.id === wizard.building.id);
+  const readings = built?.tag_count;
+  return `
+    <div class="wizard-panel wizard-done">
+      <span class="wizard-done__badge" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <h3>${escapeHtml(wizard.building.name)} is ready</h3>
+      <p class="parameters-intro">${readings ? `${readings} reading${readings === 1 ? "" : "s"} on the checklist. ` : ""}${
+        wizard.assignedTo
+          ? `${escapeHtml(wizard.assignedTo)} will see it on their next login.`
+          : "No superintendent is assigned yet — you can add one any time from the building's page."
+      }</p>
+      <div class="inspection-actions"><button type="button" class="button button--primary" id="close-building-wizard">Done</button></div>
+    </div>`;
 }
 
 function renderBuildingForm() {
@@ -1771,6 +1857,7 @@ function renderBuildingAssignStep(wizard) {
 }
 
 function resetBuildingWizard() {
+  lastWizardIndex = null;
   state.buildingWizard = { step: "closed" };
   buildingMap = null;
   buildingMarker = null;
@@ -1888,7 +1975,8 @@ async function handleAssignSuperintendentSubmit(event) {
     state.managerBuildings = state.managerBuildings.map((b) =>
       b.id === state.buildingWizard.building.id ? { ...b, superintendent_count: b.superintendent_count + 1 } : b,
     );
-    resetBuildingWizard();
+    const assigned = state.buildingWizard.unassignedSupers?.find((u) => String(u.id) === String(userId));
+    state.buildingWizard = { ...state.buildingWizard, step: "done", assignedTo: assigned?.full_name || null };
     renderApp();
   } catch (requestError) {
     error.textContent = requestError.message;
@@ -5649,7 +5737,7 @@ function bindDashboardEvents() {
   });
   document.querySelector("#assign-superintendent-form")?.addEventListener("submit", handleAssignSuperintendentSubmit);
   document.querySelector("#skip-assign-superintendent")?.addEventListener("click", () => {
-    resetBuildingWizard();
+    state.buildingWizard = { ...state.buildingWizard, step: "done", assignedTo: null };
     renderApp();
   });
   document.querySelector("#close-building-wizard")?.addEventListener("click", () => {

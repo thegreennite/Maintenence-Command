@@ -417,6 +417,72 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .wizard-panel { padding: 20px 22px 22px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
 .wizard-panel h3 { margin: 0; font: 600 17px/1.3 "Avenir Next", Avenir, system-ui, sans-serif; }
 
+/* ---- Building registration tracker: 1 - 2 - 3 - 4 ----------------------
+   A step that just became done is rendered with .is-new / .is-animating
+   so it animates in once; anything already done renders finished. See
+   renderWizardProgress in main.js for why (the app rebuilds innerHTML on
+   every render, so transitions between renders can't run). */
+.wizard { border-top: 1px solid var(--line); background: linear-gradient(180deg, var(--canvas), var(--paper) 150px); }
+.wizard .wizard-panel { border-top: none; }
+.wizard-progress { padding: 24px 22px 6px; }
+.wizard-steps { list-style: none; margin: 0; padding: 0; display: flex; }
+.wizard-step { position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+.wizard-step__dot {
+  position: relative; z-index: 1; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--paper); border: 2px solid var(--line); color: var(--muted); font: 700 14px/1 "Avenir Next", Avenir, system-ui, sans-serif;
+}
+.wizard-step__dot b { font-weight: 700; }
+.wizard-step__dot svg { width: 18px; height: 18px; }
+.wizard-step__label { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .01em; }
+.wizard-step.is-current .wizard-step__dot { background: var(--forest); border-color: var(--forest); color: #fff; animation: wizard-pulse 2.2s ease-out infinite; }
+.wizard-step.is-current .wizard-step__label { color: var(--ink); }
+.wizard-step.is-done .wizard-step__dot { background: var(--success); border-color: var(--success); color: #fff; }
+.wizard-step.is-done .wizard-step__label { color: var(--success); }
+
+/* The connector to the next step: grey track, green fill that sweeps in. */
+.wizard-step__bar { position: absolute; top: 15px; left: calc(50% + 24px); width: calc(100% - 48px); height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.wizard-step__fill { display: block; width: 100%; height: 100%; background: linear-gradient(90deg, var(--success), var(--forest)); transform: scaleX(0); transform-origin: left center; }
+.wizard-step__bar.is-filled .wizard-step__fill, .wizard-step__bar.is-animating .wizard-step__fill { transform: scaleX(1); }
+.wizard-step__bar.is-animating .wizard-step__fill { animation: wizard-fill .45s cubic-bezier(.3, .7, .2, 1) calc(var(--wizard-delay, 0s) + .25s) both; }
+
+/* A step that just finished pops and draws its check; the step that was
+   just reached lights up after the line gets to it. */
+.wizard-step.is-new .wizard-step__dot { animation: wizard-pop .5s cubic-bezier(.34, 1.56, .64, 1) var(--wizard-delay, 0s) both; }
+.wizard-step.is-new .wizard-step__dot path { stroke-dasharray: 24; animation: wizard-check .4s ease-out calc(var(--wizard-delay, 0s) + .1s) both; }
+.wizard-step.is-arriving .wizard-step__dot { animation: wizard-arrive .6s cubic-bezier(.34, 1.56, .64, 1) var(--arrive-delay, .5s) both, wizard-pulse 2.2s ease-out calc(var(--arrive-delay, .5s) + .6s) infinite; }
+.wizard-caption { margin: 14px 0 2px; text-align: center; font-size: 13px; font-weight: 600; color: var(--ink); }
+
+.wizard-stage.is-entering { animation: wizard-enter .5s cubic-bezier(.2, .7, .2, 1) both; }
+
+.wizard-done { align-items: center; text-align: center; padding: 26px 22px 30px; }
+.wizard-done__badge {
+  width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--success); color: #fff;
+  animation: wizard-pop .6s cubic-bezier(.34, 1.56, .64, 1) both, wizard-burst 1s ease-out .2s both;
+}
+.wizard-done__badge svg { width: 34px; height: 34px; }
+.wizard-done__badge path { stroke-dasharray: 24; animation: wizard-check .5s ease-out .35s both; }
+.wizard-done .parameters-intro { margin: 0; max-width: 46ch; }
+
+@keyframes wizard-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes wizard-pop { 0% { transform: scale(.6); } 100% { transform: scale(1); } }
+@keyframes wizard-check { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+@keyframes wizard-arrive {
+  0% { background: var(--paper); border-color: var(--line); color: var(--muted); transform: scale(.85); }
+  60% { transform: scale(1.18); }
+  100% { background: var(--forest); border-color: var(--forest); color: #fff; transform: scale(1); }
+}
+@keyframes wizard-pulse { 0% { box-shadow: 0 0 0 0 rgba(23, 76, 67, .35); } 70% { box-shadow: 0 0 0 11px rgba(23, 76, 67, 0); } 100% { box-shadow: 0 0 0 0 rgba(23, 76, 67, 0); } }
+@keyframes wizard-burst { 0% { box-shadow: 0 0 0 0 rgba(43, 128, 101, .45); } 100% { box-shadow: 0 0 0 26px rgba(43, 128, 101, 0); } }
+@keyframes wizard-enter { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 480px) {
+  .wizard-progress { padding: 20px 14px 4px; }
+  .wizard-step__label { font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wizard-step__dot, .wizard-step__dot path, .wizard-step__fill, .wizard-stage, .wizard-done__badge, .wizard-done__badge path { animation: none !important; }
+}
+
 /* Admin: create an account outright */
 .add-account-pw { display: flex; gap: 8px; align-items: center; }
 .add-account-pw input { flex: 1; min-width: 0; }
