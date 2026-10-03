@@ -36,7 +36,7 @@ export function weekTitle(dates) {
 }
 
 export function reportFilename(weekStart) {
-  return `Power-Log-Command-Weekly-${weekStart}.xlsx`;
+  return weekStart === "all" ? "Power-Log-Command-All-Days.xlsx" : `Power-Log-Command-Weekly-${weekStart}.xlsx`;
 }
 
 const readingLabel = (tag) => [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ") || tag.system_name;
@@ -62,7 +62,7 @@ async function gatherBuilding(env, building, dates, today) {
        FROM inspection_submissions s LEFT JOIN users u ON u.id = s.superintendent_id
        WHERE s.building_id = ? AND s.inspection_date >= ? AND s.inspection_date <= ?`,
     )
-      .bind(building.id, dates[0], dates[6])
+      .bind(building.id, dates[0], dates[dates.length - 1])
       .all(),
     env.DB.prepare("SELECT COUNT(*) AS c FROM work_orders WHERE building_id = ? AND status = 'open'").bind(building.id).first(),
   ]);
@@ -196,8 +196,7 @@ async function gatherBuilding(env, building, dates, today) {
   };
 }
 
-export async function gatherWeek(env, weekStartIso) {
-  const dates = weekDates(weekStartIso);
+async function gatherRange(env, dates) {
   const today = todayIso();
   const buildingRows = (
     await env.DB.prepare(
@@ -207,6 +206,23 @@ export async function gatherWeek(env, weekStartIso) {
   const buildings = [];
   for (const row of buildingRows) buildings.push(await gatherBuilding(env, row, dates, today));
   return { dates, today, buildings };
+}
+
+export const gatherWeek = (env, weekStartIso) => gatherRange(env, weekDates(weekStartIso));
+
+// Every calendar day from the first recorded inspection through today.
+async function allRecordedDates(env) {
+  const first = await env.DB.prepare("SELECT MIN(inspection_date) AS d FROM inspection_submissions").first();
+  const today = todayIso();
+  const dates = [];
+  let cursor = first?.d || today;
+  while (cursor <= today && dates.length < 3700) {
+    dates.push(cursor);
+    const next = new Date(`${cursor}T12:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    cursor = next.toISOString().slice(0, 10);
+  }
+  return dates;
 }
 
 // ----- workbook -------------------------------------------------------
@@ -264,16 +280,16 @@ function writeCommentsBlock(ws, row, lastCol) {
   return row + 1;
 }
 
-function writeBuildingSheet(wb, bld, week) {
+function writeBuildingSheet(wb, bld, week, opts = {}) {
   const dayCount = bld.days.length;
   const lastCol = Math.max(2 + dayCount, 6);
-  const cols = [38, 9, 22, ...Array.from({ length: Math.max(dayCount, 4) }, () => 15)];
-  const ws = wb.addSheet(bld.name, { cols, freeze: { rows: 5, cols: 1 } });
+  const cols = [38, 9, 22, ...Array.from({ length: Math.max(dayCount, 4) }, () => opts.dayWidth ?? 15)];
+  const ws = wb.addSheet(bld.name, { cols, freeze: { rows: 5, cols: 3 } });
 
-  ws.set(0, 0, `${bld.name} — Week of ${weekTitle(week.dates)}`, S.title);
+  ws.set(0, 0, `${bld.name} — ${opts.title || `Week of ${weekTitle(week.dates)}`}`, S.title);
   ws.merge(0, 0, 0, lastCol);
   ws.height(0, 28);
-  ws.set(1, 0, "Red cells were outside normal for that reading. Columns show each scheduled inspection day and how it ended.", S.subtitle);
+  ws.set(1, 0, opts.subtitle || "Red cells were outside normal for that reading. Columns show each scheduled inspection day and how it ended.", S.subtitle);
   ws.merge(1, 0, 1, lastCol);
 
   ws.set(3, 0, "Reading", S.header).set(3, 1, "Unit", S.header).set(3, 2, "Normal", S.header);
@@ -364,13 +380,13 @@ function writeBuildingSheet(wb, bld, week) {
   writeCommentsBlock(ws, row, lastCol);
 }
 
-function writeSummarySheet(wb, week) {
+function writeSummarySheet(wb, week, opts = {}) {
   const lastCol = 9;
   const ws = wb.addSheet("Summary", { cols: [34, 11, 11, 10, 10, 13, 15, 15, 14, 28], freeze: { rows: 4, cols: 1 } });
-  ws.set(0, 0, `Power Log Command — Weekly Summary`, S.title);
+  ws.set(0, 0, opts.heading || `Power Log Command — Weekly Summary`, S.title);
   ws.merge(0, 0, 0, lastCol);
   ws.height(0, 28);
-  ws.set(1, 0, `Week of ${weekTitle(week.dates)}  ·  Generated ${new Date().toLocaleString("en-US", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" })} Toronto time`, S.subtitle);
+  ws.set(1, 0, `${opts.range || `Week of ${weekTitle(week.dates)}`}  ·  Generated ${new Date().toLocaleString("en-US", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" })} Toronto time`, S.subtitle);
   ws.merge(1, 0, 1, lastCol);
 
   const heads = ["Building", "Scheduled", "Submitted", "Partial", "Missed", "Completion", "Outside normal", "Called abnormal", "Open work orders", "Superintendent(s)"];
@@ -450,6 +466,26 @@ export async function buildWeeklyReport(env, weekStartIso) {
   return { bytes: wb.toBytes(), filename: reportFilename(weekStart), weekStart, week, mime: XLSX_MIME };
 }
 
+// Every value from every day on record, oldest to newest -- one sheet
+// per building with a column for each recorded day.
+export async function buildAllDaysReport(env) {
+  const dates = await allRecordedDates(env);
+  const week = await gatherRange(env, dates);
+  const range = `${longDate(dates[0])}, ${dates[0].slice(0, 4)} – ${longDate(dates[dates.length - 1])}, ${dates[dates.length - 1].slice(0, 4)}`;
+  const wb = new Workbook();
+  writeSummarySheet(wb, week, { heading: "Power Log Command — All Recorded Days", range: `Every day on record: ${range}` });
+  for (const b of week.buildings) {
+    writeBuildingSheet(wb, b, week, {
+      title: `All recorded days (${range})`,
+      subtitle: "Every reading from every inspection day on record, oldest on the left. Red cells were outside normal for that reading.",
+      dayWidth: 11,
+    });
+  }
+  return { bytes: wb.toBytes(), filename: reportFilename("all"), weekStart: "all", week, mime: XLSX_MIME };
+}
+
+export const buildReport = (env, weekOrAll) => (weekOrAll === "all" ? buildAllDaysReport(env) : buildWeeklyReport(env, mondayOf(weekOrAll)));
+
 // ----- which weeks exist ----------------------------------------------
 export async function listReportWeeks(env) {
   const first = await env.DB.prepare("SELECT MIN(inspection_date) AS d FROM inspection_submissions").first();
@@ -468,6 +504,7 @@ export async function listReportWeeks(env) {
 }
 
 export const isValidIsoDate = (value) => ISO_DATE.test(String(value || "")) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+export const isValidReportKey = (value) => value === "all" || isValidIsoDate(value);
 
 // ----- signed download links (for the email) --------------------------
 // The email attaches the spreadsheet and also links to it. GHL and mail
@@ -493,7 +530,7 @@ export async function signedReportUrl(env, weekStart, { clientId, days = 21 } = 
 }
 
 export async function verifyReportSignature(env, { c, w, e, sig }) {
-  if (!c || !isValidIsoDate(w) || !e || !sig || Number(e) < Math.floor(Date.now() / 1000)) return false;
+  if (!c || !isValidReportKey(w) || !e || !sig || Number(e) < Math.floor(Date.now() / 1000)) return false;
   const expected = await hmacHex(env, `${c}.${w}.${e}`);
   if (expected.length !== String(sig).length) return false;
   let diff = 0;
@@ -504,7 +541,7 @@ export async function verifyReportSignature(env, { c, w, e, sig }) {
 // ----- the email --------------------------------------------------------
 const esc = (v = "") => String(v).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
-export function renderReportEmail(week, downloadUrl, filename) {
+export function renderReportEmail(week, downloadUrl, filename, allDaysUrl) {
   const t = week.buildings.reduce(
     (a, b) => ({
       due: a.due + b.counts.due,
@@ -574,6 +611,7 @@ export function renderReportEmail(week, downloadUrl, filename) {
     </tr></table>
     <p style="margin:0 0 22px;"><a href="${esc(downloadUrl)}" style="display:inline-block;background:#174c43;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 18px;border-radius:8px;">Download the full spreadsheet</a>
       <span style="color:#677478;font-size:12px;margin-left:8px;">${esc(filename)} is also attached — every reading by day, ready to print.</span></p>
+    ${allDaysUrl ? `<p style="margin:-10px 0 22px;font-size:13px;"><a href="${esc(allDaysUrl)}" style="color:#174c43;font-weight:600;">Download every value from every day on record</a> <span style="color:#677478;">(${esc(reportFilename("all"))}, also attached)</span></p>` : ""}
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:24px;">
       <thead><tr>${th("Building", "left")}${th("Submitted")}${th("Partial")}${th("Missed")}${th("Outside normal")}${th("Open orders")}</tr></thead>
       <tbody>${rows || `<tr><td colspan="6" style="padding:14px;color:#677478;">No active buildings registered yet.</td></tr>`}</tbody>
@@ -618,7 +656,8 @@ export async function sendWeeklyReportEmail(env, { weekStart, onlyTo } = {}) {
   const start = mondayOf(weekStart || todayIso());
   const report = await buildWeeklyReport(env, start);
   const url = await signedReportUrl(env, start);
-  const html = renderReportEmail(report.week, url, report.filename);
+  const allDaysUrl = await signedReportUrl(env, "all");
+  const html = renderReportEmail(report.week, url, report.filename, allDaysUrl);
   const subject = `Power Log Command weekly summary — week of ${weekTitle(report.week.dates)}`;
 
   const recipients = onlyTo ? [{ userId: null, name: onlyTo, email: onlyTo, contactId: null }] : await reportRecipients(env);
@@ -630,12 +669,12 @@ export async function sendWeeklyReportEmail(env, { weekStart, onlyTo } = {}) {
         contactId = await ghlUpsertContact(env, { email: r.email, name: r.name });
         if (r.userId) await env.DB.prepare("UPDATE users SET ghl_contact_id = ? WHERE id = ?").bind(contactId, r.userId).run();
       }
-      const sent = await ghlSendEmail(env, { contactId, subject, html, attachments: [url] });
+      const sent = await ghlSendEmail(env, { contactId, subject, html, attachments: [url, allDaysUrl] });
       results.push({ email: r.email, ok: true, messageId: sent?.messageId || sent?.emailMessageId || null });
     } catch (error) {
       console.error("Weekly report send failed", r.email, error);
       results.push({ email: r.email, ok: false, error: String(error) });
     }
   }
-  return { weekStart: start, buildingCount: report.week.buildings.length, recipientCount: recipients.length, downloadUrl: url, results };
+  return { weekStart: start, buildingCount: report.week.buildings.length, recipientCount: recipients.length, downloadUrl: url, allDaysUrl, results };
 }

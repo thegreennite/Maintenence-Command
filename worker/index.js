@@ -64,7 +64,8 @@ import {
   buildWeeklyReport,
   listReportWeeks,
   isValidIsoDate,
-  mondayOf,
+  isValidReportKey,
+  buildReport,
   verifyReportSignature,
   sendWeeklyReportEmail,
 } from "./weekly-report.js";
@@ -215,9 +216,8 @@ export default {
       if (url.pathname === "/api/reports/weekly" && request.method === "GET") {
         if (!canSeeAllBuildings(session)) return json({ error: "Operations Manager or Administrator access required" }, 403, cors.headers);
         const week = url.searchParams.get("week");
-        if (!isValidIsoDate(week)) return json({ error: "A week (YYYY-MM-DD) is required." }, 400, cors.headers);
-        const report = await buildWeeklyReport(env, mondayOf(week));
-        return xlsxResponse(report, cors.headers);
+        if (!isValidReportKey(week)) return json({ error: "A week (YYYY-MM-DD) or \"all\" is required." }, 400, cors.headers);
+        return xlsxResponse(await buildReport(env, week), cors.headers);
       }
 
       if (url.pathname === "/api/admin/impersonate" && request.method === "POST") {
@@ -695,8 +695,7 @@ async function handleSignedReportDownload(url, env, headers) {
   if (!(await verifyReportSignature(env, q))) return json({ error: "This link has expired or isn't valid." }, 403, headers);
   const resolved = await dbForClient(env, Number(q.c));
   if (!resolved) return json({ error: "Not found" }, 404, headers);
-  const report = await buildWeeklyReport({ ...env, DB: resolved.db }, mondayOf(q.w));
-  return xlsxResponse(report, headers);
+  return xlsxResponse(await buildReport({ ...env, DB: resolved.db }, q.w), headers);
 }
 
 async function handleLogin(request, env, corsHeaders) {

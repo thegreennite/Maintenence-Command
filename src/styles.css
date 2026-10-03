@@ -869,6 +869,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .weekly-summaries .history-day { padding-left: 22px; }
 .weekly-summaries .history-day .button { flex: 0 0 auto; width: auto; white-space: nowrap; }
 .weekly-summaries .history-day > span { min-width: 0; }
+.weekly-summaries__all { background: var(--canvas); }
 .history-day { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 22px 10px 34px; border-top: 1px solid var(--line); font-size: 13px; }
 
 /* Mobile pass -- this app is run one-handed on a phone in a mechanical

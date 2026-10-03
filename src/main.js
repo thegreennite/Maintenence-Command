@@ -1351,6 +1351,10 @@ function renderWeeklySummariesCard() {
         <span class="quiet-label">Emailed Fridays at 5 PM</span>
       </div>
       <p class="parameters-intro">One spreadsheet per week: a summary across every building, then each building's readings laid out machine by day with anything outside normal in red, the week's notes, and a space for your own comments. Ready to print or send on.</p>
+      <div class="history-day weekly-summaries__all">
+        <span><strong>Every day on record</strong> <span class="quiet-label">· all values, all buildings, oldest to newest</span></span>
+        <button type="button" class="button button--primary button--small download-weekly-report" data-week="all">${icon("check")} Download everything</button>
+      </div>
       ${recent.map(row).join("")}
       ${older.length ? `<details class="history-week"><summary>Earlier weeks<span class="quiet-label">${older.length}</span></summary>${older.map(row).join("")}</details>` : ""}
     </section>`;
@@ -1370,7 +1374,7 @@ async function handleDownloadWeeklyReport(button) {
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement("a");
     link.href = url;
-    link.download = `Power-Log-Command-Weekly-${week}.xlsx`;
+    link.download = week === "all" ? "Power-Log-Command-All-Days.xlsx" : `Power-Log-Command-Weekly-${week}.xlsx`;
     document.body.appendChild(link);
     link.click();
     link.remove();
