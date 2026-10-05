@@ -1775,14 +1775,62 @@ async function runAddressSearch(q) {
   }
 }
 
+// Thumbnails of the pages picked so far. Object URLs have to be revoked
+// by hand, so they live here (not in state) and are released whenever the
+// wizard resets or the build starts.
+let sheetPreviewUrls = new Map();
+
+function sheetPreviewUrl(file) {
+  if (!file.type.startsWith("image/")) return null;
+  if (!sheetPreviewUrls.has(file)) sheetPreviewUrls.set(file, URL.createObjectURL(file));
+  return sheetPreviewUrls.get(file);
+}
+
+function clearSheetPreviews() {
+  for (const url of sheetPreviewUrls.values()) URL.revokeObjectURL(url);
+  sheetPreviewUrls = new Map();
+}
+
+// Pages are collected first and read by the AI once, on "Build" -- the
+// old version fired the AI the instant a single photo was chosen, so a
+// multi-page sheet shot with the camera (one photo per tap) could never
+// be sent as one checklist. The camera and the file picker are also
+// separate inputs now: a `capture` input on a phone skips the photo
+// library and Files app entirely, which made PDFs and existing photos
+// impossible to pick.
 function renderBuildingUploadStep(wizard) {
+  const files = wizard.sheetFiles || [];
+  const notice = wizard.sheetNotice || "";
   return `
     <div class="wizard-panel">
-      <h3>${escapeHtml(wizard.building.name)} — build the checklist</h3>
-      <p class="parameters-intro">Attach this building's paper inspection sheet — photos, scanned PDFs, or a mix, every page/section at once works fine, up to 20 files — and the AI will propose one combined digital checklist. You'll review and edit it before it goes live.</p>
-      <label class="button button--outline photo-capture__button" for="building-sheet-photo">${icon("camera")} Attach photos or PDFs of the sheet (up to 20)</label>
-      <input type="file" accept="image/*,application/pdf" capture="environment" id="building-sheet-photo" multiple hidden />
-      <p class="photo-capture__status" id="building-sheet-status"></p>
+      <h3>${escapeHtml(wizard.building.name)} — add the paper checklist</h3>
+      <p class="parameters-intro">Add every page of the inspection sheet: take a photo of each one, or pick photos and PDFs you already have. When they're all in, tap Build — the AI turns them into one digital checklist, and you'll check it before it goes live.</p>
+      <div class="sheet-picker">
+        <label class="button button--outline sheet-picker__button" for="building-sheet-camera">${icon("camera")} Take a photo</label>
+        <label class="button button--outline sheet-picker__button" for="building-sheet-files">${icon("image")} Choose photos or PDFs</label>
+      </div>
+      <input type="file" accept="image/*" capture="environment" id="building-sheet-camera" hidden />
+      <input type="file" accept="image/*,application/pdf" id="building-sheet-files" multiple hidden />
+      ${
+        files.length
+          ? `<ul class="sheet-thumbs" aria-label="Pages added">${files
+              .map((file, i) => {
+                const url = sheetPreviewUrl(file);
+                return `<li class="sheet-thumb">
+                  ${url ? `<img src="${url}" alt="Page ${i + 1}" />` : `<span class="sheet-thumb__pdf">${icon("file")}<b>PDF</b></span>`}
+                  <span class="sheet-thumb__label">Page ${i + 1}</span>
+                  <button type="button" class="icon-button sheet-thumb__remove" data-index="${i}" title="Remove this page" aria-label="Remove page ${i + 1}">${icon("close")}</button>
+                </li>`;
+              })
+              .join("")}</ul>`
+          : ""
+      }
+      <p class="photo-capture__status ${notice ? "photo-capture__status--warning" : ""}" id="building-sheet-status">${escapeHtml(notice)}</p>
+      <div class="inspection-actions">
+        <button type="button" class="button button--primary" id="build-checklist" ${files.length ? "" : "disabled"}>${
+          files.length ? `Build my checklist from ${files.length} page${files.length === 1 ? "" : "s"}` : "Add a page to continue"
+        }</button>
+      </div>
     </div>`;
 }
 
@@ -1862,6 +1910,7 @@ function renderBuildingAssignStep(wizard) {
 
 function resetBuildingWizard() {
   lastWizardIndex = null;
+  clearSheetPreviews();
   state.buildingWizard = { step: "closed" };
   buildingMap = null;
   buildingMarker = null;
@@ -1894,44 +1943,79 @@ async function handleCreateBuilding(event) {
 
 const MAX_SHEET_PHOTOS = 20;
 
-async function handleBuildingSheetPhoto(event) {
+function handleSheetFilesAdded(event) {
   const input = event.currentTarget;
-  const files = Array.from(input.files || []);
-  if (!files.length) return;
-  const status = document.querySelector("#building-sheet-status");
-  if (files.length > MAX_SHEET_PHOTOS) {
-    status.textContent = `Up to ${MAX_SHEET_PHOTOS} files at a time — you selected ${files.length}.`;
-    status.className = "photo-capture__status photo-capture__status--warning";
-    input.value = "";
-    return;
+  const added = Array.from(input.files || []);
+  input.value = "";
+  if (!added.length) return;
+  const merged = [...(state.buildingWizard.sheetFiles || []), ...added];
+  state.buildingWizard = {
+    ...state.buildingWizard,
+    sheetFiles: merged.slice(0, MAX_SHEET_PHOTOS),
+    sheetNotice: merged.length > MAX_SHEET_PHOTOS ? `Up to ${MAX_SHEET_PHOTOS} pages at a time — kept the first ${MAX_SHEET_PHOTOS}.` : "",
+  };
+  renderApp();
+}
+
+function handleSheetPageRemove(index) {
+  const files = [...(state.buildingWizard.sheetFiles || [])];
+  const [removed] = files.splice(index, 1);
+  if (removed && sheetPreviewUrls.has(removed)) {
+    URL.revokeObjectURL(sheetPreviewUrls.get(removed));
+    sheetPreviewUrls.delete(removed);
   }
+  state.buildingWizard = { ...state.buildingWizard, sheetFiles: files, sheetNotice: "" };
+  renderApp();
+}
+
+// PDFs go to the AI as-is -- the server reads them natively (all pages),
+// and the photo-compression step can't decode one at all. Before this,
+// every PDF failed here with a misleading "photo is too large" message
+// even though the picker and the on-screen text both said PDFs were fine.
+const MAX_SHEET_PDF_BYTES = 10 * 1024 * 1024;
+
+async function prepareSheetPage(file) {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  if (!isPdf) {
+    const { base64, mediaType } = await compressImageFile(file);
+    return { data: base64, mediaType };
+  }
+  if (file.size > MAX_SHEET_PDF_BYTES) {
+    throw new Error(`"${file.name}" is bigger than 10 MB — save it at a smaller size, or add fewer pages at once.`);
+  }
+  return { data: await fileToBase64(file), mediaType: "application/pdf" };
+}
+
+async function handleBuildChecklist() {
+  const files = state.buildingWizard.sheetFiles || [];
+  if (!files.length) return;
+  const button = document.querySelector("#build-checklist");
+  const status = document.querySelector("#building-sheet-status");
+  button.disabled = true;
   status.className = "photo-capture__status photo-capture__status--busy";
   const stopAnimation = startReadingAnimation(status, { estimateSeconds: 6 + files.length * 2 });
   try {
-    const images = await Promise.all(
-      files.map(async (file) => {
-        const { base64, mediaType } = await compressImageFile(file);
-        return { data: base64, mediaType };
-      }),
-    );
+    const images = await Promise.all(files.map(prepareSheetPage));
     const { proposedTags } = await api.managerGenerateTags({
       buildingId: state.buildingWizard.building.id,
       images,
     });
     stopAnimation();
     if (!proposedTags.length) {
-      status.textContent = `Couldn't confidently read ${files.length === 1 ? "that file" : "those files"} — try a clearer photo, a cleaner scan, or one section at a time.`;
+      // Keep the pages so a clearer one can be added alongside them.
+      status.textContent = `Couldn't confidently read ${files.length === 1 ? "that page" : "those pages"} — add a clearer photo or a cleaner scan, or remove a blurry page.`;
       status.className = "photo-capture__status photo-capture__status--warning";
+      button.disabled = false;
       return;
     }
-    state.buildingWizard = { ...state.buildingWizard, step: "review", proposedTags };
+    clearSheetPreviews();
+    state.buildingWizard = { ...state.buildingWizard, step: "review", proposedTags, sheetFiles: [], sheetNotice: "" };
     renderApp();
   } catch (requestError) {
     stopAnimation();
     status.textContent = requestError.message;
     status.className = "photo-capture__status photo-capture__status--warning";
-  } finally {
-    input.value = "";
+    button.disabled = false;
   }
 }
 
@@ -5703,7 +5787,12 @@ function bindDashboardEvents() {
     renderApp();
   });
   document.querySelector("#building-form")?.addEventListener("submit", handleCreateBuilding);
-  document.querySelector("#building-sheet-photo")?.addEventListener("change", handleBuildingSheetPhoto);
+  document.querySelector("#building-sheet-camera")?.addEventListener("change", handleSheetFilesAdded);
+  document.querySelector("#building-sheet-files")?.addEventListener("change", handleSheetFilesAdded);
+  document.querySelector("#build-checklist")?.addEventListener("click", handleBuildChecklist);
+  document.querySelectorAll(".sheet-thumb__remove").forEach((button) => {
+    button.addEventListener("click", () => handleSheetPageRemove(Number(button.dataset.index)));
+  });
   document.querySelector("#cancel-tags-review")?.addEventListener("click", () => {
     resetBuildingWizard();
     renderApp();

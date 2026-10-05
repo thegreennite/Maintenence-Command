@@ -417,6 +417,19 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .wizard-panel { padding: 20px 22px 22px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
 .wizard-panel h3 { margin: 0; font: 600 17px/1.3 "Avenir Next", Avenir, system-ui, sans-serif; }
 
+/* ---- Checklist upload: pick pages, see them, then build ---- */
+.sheet-picker { display: flex; gap: 10px; flex-wrap: wrap; }
+.sheet-picker__button { flex: 1 1 180px; min-height: 54px; justify-content: center; font-size: 14px; }
+.sheet-thumbs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.sheet-thumb { position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--paper); }
+.sheet-thumb img, .sheet-thumb__pdf { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: var(--canvas); }
+.sheet-thumb__pdf { display: grid; place-content: center; justify-items: center; gap: 4px; color: var(--muted); }
+.sheet-thumb__pdf svg { width: 26px; height: 26px; }
+.sheet-thumb__pdf b { font-size: 12px; }
+.sheet-thumb__label { padding: 6px 8px; font-size: 12px; font-weight: 600; color: var(--ink); }
+.sheet-thumb__remove { position: absolute; top: 5px; right: 5px; width: 26px; height: 26px; background: rgba(255, 255, 255, .92); }
+.sheet-thumb__remove .icon { width: 12px; }
+
 /* ---- Building registration tracker: 1 - 2 - 3 - 4 ----------------------
    A step that just became done is rendered with .is-new / .is-animating
    so it animates in once; anything already done renders finished. See
