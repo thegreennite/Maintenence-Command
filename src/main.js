@@ -446,6 +446,7 @@ function icon(name) {
     users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
     warning: '<path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
     close: '<path d="M18 6 6 18M6 6l12 12"/>',
+    trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6M14 11v6"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
     edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
     eye: '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/>',
@@ -1883,7 +1884,12 @@ function renderTagReviewRow(tag, index) {
           .map(([value, { label }]) => `<option value="${value}" ${tag.value_type === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
           .join("")}
       </select>
-      <button type="button" class="icon-button remove-tag-row" title="Remove this row" aria-label="Remove this row">${icon("warning")}</button>
+      <button type="button" class="icon-button remove-tag-row" title="Delete this row" aria-label="Delete this row">${icon("trash")}</button>
+      <div class="tag-delete-confirm" hidden role="group" aria-label="Confirm delete">
+        <span class="tag-delete-confirm__text">Are you sure you want to delete this reading?</span>
+        <button type="button" class="button button--small button--danger confirm-remove-tag-row">Yes, delete</button>
+        <button type="button" class="button button--small button--outline cancel-remove-tag-row">No, keep it</button>
+      </div>
     </div>`;
 }
 
@@ -5797,13 +5803,44 @@ function bindDashboardEvents() {
     resetBuildingWizard();
     renderApp();
   });
+  // Both add and delete re-render from state, so pull what's currently
+  // typed in the form into state first -- otherwise any edit made to
+  // another row is silently thrown away.
+  const syncReviewEdits = () => {
+    const form = document.querySelector("#tags-review-form");
+    if (form) state.buildingWizard.proposedTags = readTagsFromReviewForm(form);
+  };
   document.querySelector("#add-tag-row")?.addEventListener("click", () => {
+    syncReviewEdits();
     state.buildingWizard.proposedTags.push({ system_name: "", tag_no: "", reading_type: "", unit: "", value_type: "numeric" });
     renderApp();
   });
+  // Delete is a two-step: the trash can only asks "are you sure?" on that
+  // row; nothing is removed until "Yes, delete".
   document.querySelectorAll(".remove-tag-row").forEach((button) => {
     button.addEventListener("click", () => {
+      document.querySelectorAll(".tag-delete-confirm").forEach((c) => (c.hidden = true));
+      const row = button.closest("[data-row-index]");
+      const name = [row.querySelector('[data-field="tag_no"]').value, row.querySelector('[data-field="reading_type"]').value]
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .join(" — ");
+      row.querySelector(".tag-delete-confirm__text").textContent = name
+        ? `Are you sure you want to delete “${name}”?`
+        : "Are you sure you want to delete this reading?";
+      row.querySelector(".tag-delete-confirm").hidden = false;
+      row.querySelector(".cancel-remove-tag-row").focus();
+    });
+  });
+  document.querySelectorAll(".cancel-remove-tag-row").forEach((button) => {
+    button.addEventListener("click", () => {
+      button.closest(".tag-delete-confirm").hidden = true;
+    });
+  });
+  document.querySelectorAll(".confirm-remove-tag-row").forEach((button) => {
+    button.addEventListener("click", () => {
       const index = Number(button.closest("[data-row-index]").dataset.rowIndex);
+      syncReviewEdits();
       state.buildingWizard.proposedTags.splice(index, 1);
       renderApp();
     });
