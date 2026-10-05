@@ -1061,3 +1061,58 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   100% { box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
 }
 @media (prefers-reduced-motion: reduce) { .notice-attention { animation: none; } }
+
+/* ---- Admin screen: collapsible sections ------------------------------
+   The body animates open with the grid-rows trick (0fr -> 1fr), so it
+   needs no fixed height. Collapsed content is also visibility:hidden so
+   its buttons can't be tabbed to while closed. */
+.admin-sections { display: flex; flex-direction: column; gap: 14px; margin-top: 18px; }
+.admin-section { padding: 0; overflow: hidden; }
+.admin-section__h { margin: 0; font: inherit; }
+.admin-section__head {
+  width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto 22px; align-items: center; gap: 14px;
+  padding: 16px 22px; border: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; color: inherit;
+}
+.admin-section__head:hover { background: var(--canvas); }
+.admin-section__head:focus-visible { outline: 2px solid var(--forest); outline-offset: -2px; }
+.admin-section__titles { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.admin-section__title { font: 600 17px/1.25 "Avenir Next", Avenir, system-ui, sans-serif; color: var(--ink); }
+.admin-section__meta { display: flex; align-items: center; gap: 10px; min-width: 0; justify-content: flex-end; }
+.admin-section__summary { font-size: 12.5px; color: var(--muted); font-weight: 500; text-align: right; }
+.admin-section__chevron { display: grid; place-items: center; color: var(--muted); transition: transform .28s cubic-bezier(.2, .7, .2, 1); }
+.admin-section__chevron .icon { width: 16px; }
+.admin-section.is-open .admin-section__chevron { transform: rotate(90deg); color: var(--forest); }
+.admin-section.is-open > .admin-section__h .admin-section__head { border-bottom: 1px solid var(--line); }
+.admin-section__body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s cubic-bezier(.2, .7, .2, 1); }
+.admin-section.is-open > .admin-section__body { grid-template-rows: 1fr; }
+.admin-section__inner { min-height: 0; overflow: hidden; visibility: hidden; transition: visibility 0s linear .32s; }
+.admin-section.is-open > .admin-section__body > .admin-section__inner { visibility: visible; transition-delay: 0s; }
+.admin-section:has(.wizard) .admin-section__inner, .admin-section:has(.map-picker) .admin-section__inner { overflow: visible; }
+.admin-toolbar { display: flex; justify-content: flex-end; padding: 14px 22px 4px; }
+.admin-subhead { display: flex; align-items: center; gap: 8px; margin: 0; padding: 16px 22px 6px; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.admin-subhead .quiet-label { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.admin-account-grid { padding: 6px 22px 20px; }
+.admin-section .weekly-summaries__all { margin-top: 0; }
+@media (max-width: 560px) {
+  .admin-section__head { grid-template-columns: minmax(0, 1fr) 22px; row-gap: 6px; padding: 14px 16px; }
+  .admin-section__meta { grid-column: 1 / 2; grid-row: 2; justify-content: flex-start; }
+  .admin-section__summary { text-align: left; }
+  .admin-toolbar, .admin-subhead { padding-left: 16px; padding-right: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-section__body, .admin-section__chevron, .admin-section__inner { transition: none; }
+}
+
+/* Rows inside the admin sections: name on the left, actions on the right
+   at their natural size (the general .button rule stretches to full
+   width, which made every Remove / Restore span its own line). */
+.admin-section .building-row { flex-wrap: nowrap; gap: 12px; }
+.admin-section .building-row__name { flex: 1 1 auto; min-width: 0; }
+.admin-section .building-row .button, .admin-section .building-row select { flex: 0 0 auto; width: auto; }
+.admin-section .building-row .inspection-actions { flex: 0 0 auto; }
+.admin-section .building-row .inspection-actions .button { width: auto; }
+.admin-subhead .status-dot { display: inline-block; vertical-align: middle; margin: 0 8px 1px 2px; }
+@media (max-width: 560px) {
+  .admin-section .building-row { flex-wrap: wrap; }
+  .admin-section .building-row__name { flex-basis: 100%; }
+}

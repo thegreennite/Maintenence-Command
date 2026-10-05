@@ -1424,9 +1424,8 @@ function renderDashboard(data) {
 // when clicked, so there's nothing to backfill and an old week is exactly
 // as available as this one. The same file is attached to Friday's 5 PM
 // email.
-function renderWeeklySummariesCard() {
+function renderWeeklySummariesBody() {
   const weeks = state.reportWeeks;
-  if (!weeks || !weeks.length) return "";
   const row = (w) => `<div class="history-day">
       <span><strong>${escapeHtml(w.label)}</strong>${w.current ? ' <span class="status-pill status-pill--success">This week</span>' : ""}</span>
       <button type="button" class="button button--outline button--small download-weekly-report" data-week="${w.weekStart}">${icon("check")} Download spreadsheet</button>
@@ -1434,18 +1433,29 @@ function renderWeeklySummariesCard() {
   const recent = weeks.slice(0, 6);
   const older = weeks.slice(6);
   return `
-    <section class="card weekly-summaries" aria-labelledby="weekly-summaries-title">
-      <div class="card__header">
-        <div><p class="section-kicker">Weekly summaries</p><h2 id="weekly-summaries-title">Every reading, by week</h2></div>
-        <span class="quiet-label">Emailed Fridays at 5 PM</span>
-      </div>
       <p class="parameters-intro">One spreadsheet per week: a summary across every building, then each building's readings laid out machine by day with anything outside normal in red, the week's notes, and a space for your own comments. Ready to print or send on.</p>
       <div class="history-day weekly-summaries__all">
         <span><strong>Every day on record</strong> <span class="quiet-label">· all values, all buildings, oldest to newest</span></span>
         <button type="button" class="button button--primary button--small download-weekly-report" data-week="all">${icon("check")} Download everything</button>
       </div>
       ${recent.map(row).join("")}
-      ${older.length ? `<details class="history-week"><summary>Earlier weeks<span class="quiet-label">${older.length}</span></summary>${older.map(row).join("")}</details>` : ""}
+      ${older.length ? `<details class="history-week"><summary>Earlier weeks<span class="quiet-label">${older.length}</span></summary>${older.map(row).join("")}</details>` : ""}`;
+}
+
+// Every week's spreadsheet, current and past -- built live from the data
+// when clicked, so there's nothing to backfill and an old week is exactly
+// as available as this one. The same file is attached to Friday's 5 PM
+// email.
+function renderWeeklySummariesCard() {
+  const weeks = state.reportWeeks;
+  if (!weeks || !weeks.length) return "";
+  return `
+    <section class="card weekly-summaries" aria-labelledby="weekly-summaries-title">
+      <div class="card__header">
+        <div><p class="section-kicker">Weekly summaries</p><h2 id="weekly-summaries-title">Every reading, by week</h2></div>
+        <span class="quiet-label">Emailed Fridays at 5 PM</span>
+      </div>
+      ${renderWeeklySummariesBody()}
     </section>`;
 }
 
@@ -1559,6 +1569,20 @@ function renderSuperintendentSwitcherPanel() {
     </section>`;
 }
 
+function renderBuildingRows() {
+  return state.managerBuildings.map((b) => renderBuildingRow(b) + (state.deleteBuildingTarget?.id === b.id ? renderDeleteBuildingPanel(b) : "")).join("");
+}
+
+// The admin screen shows this inside a collapsible section (no card of
+// its own); managers still get the standalone card below.
+function renderBuildingsBody() {
+  const wizard = state.buildingWizard;
+  return `
+    ${wizard.step === "closed" ? `<div class="admin-toolbar"><button type="button" class="button button--outline button--small" id="register-building-toggle">+ Register a building</button></div>` : ""}
+    <div class="buildings-list">${renderBuildingRows()}</div>
+    ${wizard.step !== "closed" ? renderBuildingWizard(wizard) : ""}`;
+}
+
 function renderBuildingsPanel() {
   const wizard = state.buildingWizard;
   return `
@@ -1568,7 +1592,7 @@ function renderBuildingsPanel() {
         ${wizard.step === "closed" ? `<button type="button" class="button button--outline button--small" id="register-building-toggle">+ Register a building</button>` : ""}
       </div>
       <div class="buildings-list">
-        ${state.managerBuildings.map((b) => renderBuildingRow(b) + (state.deleteBuildingTarget?.id === b.id ? renderDeleteBuildingPanel(b) : "")).join("")}
+        ${renderBuildingRows()}
       </div>
       ${wizard.step !== "closed" ? renderBuildingWizard(wizard) : ""}
     </section>`;
@@ -2355,22 +2379,136 @@ function renderCoverage(person) {
   </div>`;
 }
 
+// ---------------------------------------------------------------------
+// Admin screen: a handful of clearly named, collapsible sections instead
+// of nine cards stacked open. Each header carries a one-line summary (and
+// a count when something is waiting) so the state of everything is
+// readable without opening anything. Open/closed is remembered, and a
+// section that's mid-task (wizard open, adding an account) stays open.
+// Toggling is done on the DOM directly rather than via a re-render, since
+// the app rebuilds innerHTML on render and a CSS transition can't run
+// across that.
+// ---------------------------------------------------------------------
+function loadAdminSections() {
+  try {
+    return JSON.parse(localStorage.getItem("plc-admin-sections")) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAdminSections() {
+  try {
+    localStorage.setItem("plc-admin-sections", JSON.stringify(state.adminSections));
+  } catch {
+    // Private mode etc. -- the choice just won't outlive the tab.
+  }
+}
+
+function renderAdminSection({ id, kicker, title, summary = "", badge = 0, defaultOpen = false, forceOpen = false, body }) {
+  if (!state.adminSections) state.adminSections = loadAdminSections();
+  const saved = state.adminSections[id];
+  const open = forceOpen || (saved === undefined ? defaultOpen : saved);
+  return `
+    <section class="card admin-section ${open ? "is-open" : ""}" data-admin-section="${id}">
+      <h2 class="admin-section__h">
+        <button type="button" class="admin-section__head" aria-expanded="${open}" aria-controls="admin-body-${id}">
+          <span class="admin-section__titles"><span class="section-kicker">${kicker}</span><span class="admin-section__title">${title}</span></span>
+          <span class="admin-section__meta">${badge ? `<span class="count-badge">${badge}</span>` : ""}<span class="admin-section__summary">${summary}</span></span>
+          <span class="admin-section__chevron" aria-hidden="true">${icon("arrow")}</span>
+        </button>
+      </h2>
+      <div class="admin-section__body" id="admin-body-${id}"><div class="admin-section__inner">${body}</div></div>
+    </section>`;
+}
+
+function handleAdminSectionToggle(head) {
+  const section = head.closest(".admin-section");
+  const open = !section.classList.contains("is-open");
+  section.classList.toggle("is-open", open);
+  head.setAttribute("aria-expanded", String(open));
+  if (!state.adminSections) state.adminSections = {};
+  state.adminSections[section.dataset.adminSection] = open;
+  saveAdminSections();
+  // Opening a long section from near the bottom: make sure its top is
+  // on screen rather than leaving it growing off the page.
+  if (open) setTimeout(() => section.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "nearest" }), 140);
+}
+
 function renderAdminDashboard(data) {
+  const signups = state.pendingRequests.length;
+  const deleteRequests = (state.adminDeleteRequests || []).length;
+  const waiting = signups + deleteRequests;
+  const deleted = (state.adminDeletedBuildings || []).length;
+  const removed = (state.adminRemovedAccounts || []).length;
+  const buildingCount = state.managerBuildings.length;
+  const registering = state.managerBuildings.filter((b) => b.status === "registering").length;
+  const weeks = state.reportWeeks || [];
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
   return `
     <div class="metric-grid metric-grid--three">${data.stats.map(renderStat).join("")}</div>
-    ${renderPendingRequestsPanel()}
-    ${renderBuildingsPanel()}
-    ${renderWeeklySummariesCard()}
-    ${renderAdminBuildingDeletionsPanel()}
-    ${renderAdminAccountsManagePanel()}
-    <section class="card admin-panel">
-      <div class="card__header"><div><p class="section-kicker">Role Preview</p><h2>Choose a command view</h2></div><span class="quiet-label">Administrator access</span></div>
-      <p class="admin-panel__intro">Open another user’s dashboard without using or changing their credentials. Your administrator session remains active.</p>
-      <div class="account-grid">
-        ${state.accounts.map(renderAccount).join("")}
-      </div>
-    </section>
-    ${renderStatsPanel()}`;
+    <div class="admin-sections">
+      ${
+        waiting
+          ? renderAdminSection({
+              id: "attention",
+              kicker: "Needs you",
+              title: "Waiting for your decision",
+              badge: waiting,
+              summary: [signups ? plural(signups, "sign-up request") : "", deleteRequests ? plural(deleteRequests, "deletion request") : ""].filter(Boolean).join(" · "),
+              defaultOpen: true,
+              body: renderAdminAttentionBody(),
+            })
+          : ""
+      }
+      ${renderAdminSection({
+        id: "buildings",
+        kicker: "Portfolio",
+        title: "Buildings",
+        summary: `${plural(buildingCount, "building")}${registering ? ` · ${registering} being set up` : ""}`,
+        defaultOpen: true,
+        forceOpen: state.buildingWizard.step !== "closed" || Boolean(state.deleteBuildingTarget),
+        body: renderBuildingsBody(),
+      })}
+      ${
+        weeks.length
+          ? renderAdminSection({
+              id: "reports",
+              kicker: "Reports",
+              title: "Weekly summaries",
+              summary: `Emailed Fridays 5 PM · ${plural(weeks.length, "week")} on record`,
+              body: renderWeeklySummariesBody(),
+            })
+          : ""
+      }
+      ${renderAdminSection({
+        id: "people",
+        kicker: "People",
+        title: "Accounts & view-as",
+        summary: plural(state.accounts.length, "account"),
+        forceOpen: state.adminAddingAccount || Boolean(state.adminNewAccountCreated),
+        body: renderAdminAccountsBody(),
+      })}
+      ${
+        deleted || removed
+          ? renderAdminSection({
+              id: "recovery",
+              kicker: "Recovery",
+              title: "Recently removed",
+              summary: [deleted ? plural(deleted, "deleted building") : "", removed ? plural(removed, "removed account") : ""].filter(Boolean).join(" · "),
+              body: renderAdminRecoveryBody(),
+            })
+          : ""
+      }
+      ${renderAdminSection({
+        id: "system",
+        kicker: "System",
+        title: "Connections & usage",
+        summary: systemSummary(),
+        body: renderSystemBody(),
+      })}
+    </div>`;
 }
 
 const CLASSIFICATION_LABELS = { standard: "Standard", beta_tester: "Beta Tester" };
@@ -2426,15 +2564,10 @@ function renderAdminAddAccountForm() {
     </form>`;
 }
 
-function renderAdminAccountsManagePanel() {
-  const removed = state.adminRemovedAccounts || [];
+function renderAdminAccountsBody() {
   const created = state.adminNewAccountCreated;
   return `
-    <section class="card">
-      <div class="card__header">
-        <div><p class="section-kicker">Accounts</p><h2>Manage profiles</h2></div>
-        ${state.adminAddingAccount ? "" : `<button type="button" class="button button--primary button--small" id="open-add-account">${icon("plus")} Add account</button>`}
-      </div>
+      ${state.adminAddingAccount ? "" : `<div class="admin-toolbar"><button type="button" class="button button--primary button--small" id="open-add-account">${icon("plus")} Add account</button></div>`}
       ${
         created
           ? `<div class="add-account-success">
@@ -2445,6 +2578,7 @@ function renderAdminAccountsManagePanel() {
           : ""
       }
       ${state.adminAddingAccount ? renderAdminAddAccountForm() : ""}
+      <p class="admin-subhead">Profiles <span class="quiet-label">· set each person's access level, or remove them</span></p>
       <div class="buildings-list">
         ${state.accounts
           .map(
@@ -2460,64 +2594,65 @@ function renderAdminAccountsManagePanel() {
           )
           .join("")}
       </div>
-      ${
-        removed.length
-          ? `<details style="margin: 10px 22px 18px;"><summary>Removed (${removed.length})</summary>
-              <div class="buildings-list">
-                ${removed
-                  .map(
-                    (a) => `<div class="building-row">
-                      <div class="building-row__name"><strong>${escapeHtml(a.full_name)}</strong><small>Removed ${formatTimestamp(a.removed_at)}</small></div>
-                      <button type="button" class="button button--outline button--small restore-account" data-user-id="${a.id}">Restore</button>
-                    </div>`,
-                  )
-                  .join("")}
-              </div>
-            </details>`
-          : ""
-      }
-    </section>`;
+      <p class="admin-subhead">View as another user <span class="quiet-label">· opens their dashboard; your admin session stays active</span></p>
+      <div class="account-grid admin-account-grid">
+        ${state.accounts.map(renderAccount).join("")}
+      </div>`;
 }
 
-function renderAdminBuildingDeletionsPanel() {
-  const requests = state.adminDeleteRequests || [];
-  const deleted = state.adminDeletedBuildings || [];
-  if (!requests.length && !deleted.length) return "";
+// What's waiting on a decision, pulled into one place at the top.
+function renderAdminAttentionBody() {
+  const signups = state.pendingRequests;
+  const deleteRequests = state.adminDeleteRequests || [];
   return `
-    <section class="card">
-      <div class="card__header"><div><p class="section-kicker">Building deletions</p><h2>Requests &amp; recently deleted</h2></div></div>
-      <div class="buildings-list">
-        ${
-          requests.length
-            ? requests
-                .map(
-                  (r) => `<div class="building-row">
+      ${signups.length ? `<p class="admin-subhead">Sign-up requests <span class="count-badge">${signups.length}</span></p><div class="buildings-list">${signups.map(renderPendingRequestRow).join("")}</div>` : ""}
+      ${
+        deleteRequests.length
+          ? `<p class="admin-subhead">Building deletion requests <span class="count-badge">${deleteRequests.length}</span></p>
+             <div class="buildings-list">${deleteRequests
+               .map(
+                 (r) => `<div class="building-row">
                     <div class="building-row__name"><strong>${escapeHtml(r.name)}</strong><small>Requested by ${escapeHtml(r.requested_by_name || "Unknown")} · ${formatTimestamp(r.delete_requested_at)}</small></div>
                     <button type="button" class="button button--outline button--small deny-delete-request" data-building-id="${r.id}">Deny</button>
                     <button type="button" class="button button--danger button--small approve-delete-request" data-building-id="${r.id}">Approve delete</button>
                   </div>`,
-                )
-                .join("")
-            : `<p class="quiet-label" style="padding: 14px 4px;">No pending delete requests.</p>`
-        }
-      </div>
+               )
+               .join("")}</div>`
+          : ""
+      }`;
+}
+
+// Anything that was deleted or removed and can still be brought back.
+function renderAdminRecoveryBody() {
+  const deleted = state.adminDeletedBuildings || [];
+  const removed = state.adminRemovedAccounts || [];
+  return `
       ${
         deleted.length
-          ? `<details style="margin: 10px 22px 18px;" open><summary>Recently deleted (${deleted.length})</summary>
-              <div class="buildings-list">
-                ${deleted
-                  .map(
-                    (b) => `<div class="building-row">
+          ? `<p class="admin-subhead">Deleted buildings <span class="quiet-label">· restorable for 30 days</span></p>
+             <div class="buildings-list">${deleted
+               .map(
+                 (b) => `<div class="building-row">
                       <div class="building-row__name"><strong>${escapeHtml(b.name)}</strong><small>Deleted by ${escapeHtml(b.deleted_by_name || "Unknown")} · ${formatTimestamp(b.deleted_at)} · ${b.daysRemaining} day${b.daysRemaining === 1 ? "" : "s"} left before it's gone for good</small></div>
                       <button type="button" class="button button--outline button--small restore-building" data-building-id="${b.id}">Restore</button>
                     </div>`,
-                  )
-                  .join("")}
-              </div>
-            </details>`
+               )
+               .join("")}</div>`
           : ""
       }
-    </section>`;
+      ${
+        removed.length
+          ? `<p class="admin-subhead">Removed accounts</p>
+             <div class="buildings-list">${removed
+               .map(
+                 (a) => `<div class="building-row">
+                      <div class="building-row__name"><strong>${escapeHtml(a.full_name)}</strong><small>Removed ${formatTimestamp(a.removed_at)}</small></div>
+                      <button type="button" class="button button--outline button--small restore-account" data-user-id="${a.id}">Restore</button>
+                    </div>`,
+               )
+               .join("")}</div>`
+          : ""
+      }`;
 }
 
 async function openBuildingWorld(buildingId) {
@@ -3833,20 +3968,13 @@ function renderBuildingWorldEditForm(building) {
     </form>`;
 }
 
-function renderStatsPanel() {
-  if (!state.adminStats) {
-    return `<section class="card"><div class="card__header"><div><p class="section-kicker">Infrastructure</p><h2>Connections &amp; usage</h2></div></div><p class="empty-state-inline">Couldn't load live usage right now.</p></section>`;
-  }
+function renderSystemBody() {
+  if (!state.adminStats) return `<p class="empty-state-inline">Couldn't load live usage right now.</p>`;
   const { connections, usage } = state.adminStats;
   return `
-    <section class="card" aria-labelledby="connections-title">
-      <div class="card__header"><div><p class="section-kicker">Infrastructure</p><h2 id="connections-title">What's connected</h2></div></div>
-      <div class="buildings-list">
-        ${connections.map(renderConnectionRow).join("")}
-      </div>
-    </section>
-    <section class="card" aria-labelledby="usage-title">
-      <div class="card__header"><div><p class="section-kicker">Live usage</p><h2 id="usage-title">Free tier vs. today</h2></div><span class="quiet-label"><span class="status-dot status-dot--success"></span> Auto-refreshing every 30s — Cloudflare only</span></div>
+      <p class="admin-subhead">What's connected</p>
+      <div class="buildings-list">${connections.map(renderConnectionRow).join("")}</div>
+      <p class="admin-subhead">Live usage vs. free tier <span class="quiet-label"><span class="status-dot status-dot--success"></span> refreshes every 30s · Cloudflare only</span></p>
       <div class="usage-bars">
         ${renderUsageBar(usage.workers)}
         ${renderUsageBar(usage.d1?.storage)}
@@ -3855,8 +3983,20 @@ function renderStatsPanel() {
         ${renderUsageBar(usage.pages)}
         ${renderUsageBar(usage.r2)}
       </div>
-      <p class="map-picker__hint">Gemini and Google Maps usage aren't pulled live here yet — check console.cloud.google.com for those.</p>
-    </section>`;
+      <p class="map-picker__hint">Gemini and Google Maps usage aren't pulled live here yet — check console.cloud.google.com for those.</p>`;
+}
+
+// One line for the section header, so the health of the system is visible
+// without opening it.
+function systemSummary() {
+  if (!state.adminStats) return "Couldn't load live usage";
+  const { connections, usage } = state.adminStats;
+  const down = connections.filter((c) => c.status !== "connected").length;
+  const percents = [usage.workers, usage.d1?.storage, usage.d1?.rowsRead, usage.d1?.rowsWritten, usage.pages, usage.r2]
+    .filter((m) => m && !m.error)
+    .map((m) => m.percent);
+  const peak = percents.length ? Math.max(...percents) : 0;
+  return `${down ? `${down} not set up` : "All connected"} · peak usage ${peak}%`;
 }
 
 function renderConnectionRow(conn) {
@@ -6183,6 +6323,9 @@ function bindDashboardEvents() {
   });
   document.querySelectorAll(".download-inspection-pdf").forEach((button) => {
     button.addEventListener("click", () => handleDownloadInspectionPdf(button));
+  });
+  document.querySelectorAll(".admin-section__head").forEach((head) => {
+    head.addEventListener("click", () => handleAdminSectionToggle(head));
   });
   document.querySelectorAll(".download-weekly-report").forEach((button) => {
     button.addEventListener("click", () => handleDownloadWeeklyReport(button));
