@@ -171,13 +171,29 @@ async function gatherBuilding(env, building, dates, today) {
     ackAbnormal: flagged.filter((f) => f.deviation.ack === "abnormal").length,
   };
 
-  const groupMap = new Map();
+  // The same order command mode walks a superintendent through, so the
+  // spreadsheet reads top to bottom the way the inspection is actually
+  // done: original scan order, with a machine sitting wherever its
+  // FIRST reading was scanned and ungrouped readings sitting individually
+  // between machines (not lumped together at the top). Deliberately not
+  // the manager's board arrangement. `tags` already comes back ordered by
+  // sort_order, so the first tag seen for a machine is its earliest.
+  const machineFirst = new Map();
   for (const tag of tags) {
-    const key = tag.equipment_group_id ?? 0;
-    if (!groupMap.has(key)) groupMap.set(key, { name: tag.group_name || "Other readings", first: tag.sort_order, tags: [] });
-    groupMap.get(key).tags.push(tag);
+    if (tag.equipment_group_id != null && !machineFirst.has(tag.equipment_group_id)) {
+      machineFirst.set(tag.equipment_group_id, tag.sort_order);
+    }
   }
-  const groups = [...groupMap.values()].sort((a, b) => a.first - b.first);
+  const stopPosition = (t) => (t.equipment_group_id == null ? t.sort_order : machineFirst.get(t.equipment_group_id));
+  const walk = [...tags].sort((a, b) => stopPosition(a) - stopPosition(b) || a.sort_order - b.sort_order);
+  const groups = [];
+  walk.forEach((tag, i) => {
+    tag.walkNumber = i + 1; // "reading 12 of 138" in command mode
+    const key = tag.equipment_group_id ?? 0;
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.tags.push(tag);
+    else groups.push({ key, name: tag.group_name || "Other readings", first: tag.sort_order, tags: [tag] });
+  });
 
   const lastBaselineDay = [...days].reverse().find((d) => baselinesByDate.has(d.date));
   const authors = [...new Set(subs.map((s) => s.author).filter(Boolean))];
@@ -292,7 +308,7 @@ function writeBuildingSheet(wb, bld, week, opts = {}) {
   ws.set(1, 0, opts.subtitle || "Red cells were outside normal for that reading. Columns show each scheduled inspection day and how it ended.", S.subtitle);
   ws.merge(1, 0, 1, lastCol);
 
-  ws.set(3, 0, "Reading", S.header).set(3, 1, "Unit", S.header).set(3, 2, "Normal", S.header);
+  ws.set(3, 0, "Reading (in walk-through order)", S.header).set(3, 1, "Unit", S.header).set(3, 2, "Normal", S.header);
   ws.set(4, 0, "Day status", S.headNeutral).set(4, 1, "", S.headNeutral).set(4, 2, "", S.headNeutral);
   ws.height(3, 24);
   ws.height(4, 34);
@@ -313,7 +329,7 @@ function writeBuildingSheet(wb, bld, week, opts = {}) {
     ws.fill(row, 0, lastCol, S.machine);
     row += 1;
     for (const tag of group.tags) {
-      ws.set(row, 0, readingLabel(tag), S.text);
+      ws.set(row, 0, `${tag.walkNumber}. ${readingLabel(tag)}`, S.text);
       ws.set(row, 1, tag.unit || "", S.center);
       ws.set(row, 2, normalText(tag, bld.endBaselines[tag.id]), S.center);
       bld.days.forEach((day, i) => {
