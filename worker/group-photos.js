@@ -12,9 +12,9 @@ const ALLOWED_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 // compliance photo's GPS position gets flagged as a heads-up -- wide
 // enough to absorb normal GPS drift and a large property/parking lot,
 // tight enough to catch "this photo wasn't actually taken here."
-const LOCATION_MISMATCH_THRESHOLD_M = 500;
+export const LOCATION_MISMATCH_THRESHOLD_M = 500;
 
-function haversineMeters(lat1, lon1, lat2, lon2) {
+export function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6_371_000;
   const toRad = (deg) => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);

@@ -136,8 +136,52 @@ export async function handlePhotoView(request, session, env, corsHeaders) {
   const buildingId = isGhlUrl
     ? Number.parseInt(url.searchParams.get("buildingId"), 10)
     : Number.parseInt(key.split("/")[0], 10);
-  const allowed = await resolveAllowedBuildingIds(session, env, buildingId);
+  // A cleaner can only ever see schedule-task photos from their own
+  // building -- never inspection proof or anything else in the library.
+  const allowed =
+    session.role === "cleaner"
+      ? session.building_id === buildingId
+        ? [buildingId]
+        : []
+      : await resolveAllowedBuildingIds(session, env, buildingId);
   if (!allowed.length) return new Response("Not found", { status: 404 });
+
+  // The key has to be a photo this building actually has. Before this,
+  // any https:// "key" with a building you could see was 302'd straight
+  // to that address -- an open redirect.
+  const indexed = await env.DB.prepare(
+    `SELECT context FROM photos WHERE building_id = ? AND location = ? LIMIT 1`,
+  )
+    .bind(buildingId, key)
+    .first();
+  let known = Boolean(indexed);
+  let isTaskPhoto = Boolean(indexed && String(indexed.context || "").startsWith("task-"));
+  if (!known) {
+    // The index write is best-effort (see storePhoto), so fall back to the
+    // tables that reference the photo directly.
+    const task = await env.DB.prepare(
+      `SELECT 1 FROM task_photos p JOIN task_completions c ON c.id = p.completion_id WHERE p.photo_key = ? AND c.building_id = ? LIMIT 1`,
+    )
+      .bind(key, buildingId)
+      .first();
+    if (task) {
+      known = true;
+      isTaskPhoto = true;
+    } else {
+      known = Boolean(
+        await env.DB.prepare(
+          `SELECT 1 FROM group_photos gp JOIN inspection_submissions s ON s.id = gp.submission_id WHERE gp.photo_key = ? AND s.building_id = ?
+           UNION ALL
+           SELECT 1 FROM inspection_readings r JOIN inspection_submissions s ON s.id = r.submission_id WHERE r.photo_key = ? AND s.building_id = ?
+           LIMIT 1`,
+        )
+          .bind(key, buildingId, key, buildingId)
+          .first(),
+      );
+    }
+  }
+  if (!known) return new Response("Not found", { status: 404 });
+  if (session.role === "cleaner" && !isTaskPhoto) return new Response("Not found", { status: 404 });
 
   if (isGhlUrl) {
     return new Response(null, { status: 302, headers: { ...corsHeaders, Location: key } });

@@ -60,6 +60,20 @@ import { handleCreateNotice, handleDeleteNotice } from "./notices.js";
 import { handleUpdateProfile } from "./profile.js";
 import { needsVerification, sendVerificationCode, verifyCode } from "./two-factor.js";
 import { canSeeAllBuildings } from "./access.js";
+import { effectiveRole } from "./roles.js";
+import {
+  handleScheduleAnalyze,
+  handleScheduleCreate,
+  handleScheduleList,
+  handleScheduleUpdate,
+  handleScheduleCompletions,
+  handleStaffList,
+  handleStaffUpdate,
+  handleMyTasksToday,
+  handleTaskPhotoUpload,
+  handleTaskPhotoRemove,
+  handleTaskComplete,
+} from "./schedules.js";
 import {
   buildWeeklyReport,
   listReportWeeks,
@@ -195,6 +209,21 @@ export default {
         }
         return handleAdminStats(env, cors.headers);
       }
+
+      // Schedules: managers build them (AI reads the uploaded document);
+      // cleaners and superintendents work through the day's checklist.
+      // Each handler enforces its own role.
+      if (url.pathname === "/api/manager/schedules/analyze" && request.method === "POST") return handleScheduleAnalyze(request, session, env, cors.headers);
+      if (url.pathname === "/api/manager/schedules/create" && request.method === "POST") return handleScheduleCreate(request, session, env, cors.headers);
+      if (url.pathname === "/api/manager/schedules" && request.method === "GET") return handleScheduleList(request, session, env, cors.headers);
+      if (url.pathname === "/api/manager/schedules/update" && request.method === "POST") return handleScheduleUpdate(request, session, env, cors.headers);
+      if (url.pathname === "/api/manager/schedules/completions" && request.method === "GET") return handleScheduleCompletions(request, session, env, cors.headers);
+      if (url.pathname === "/api/manager/staff" && request.method === "GET") return handleStaffList(request, session, env, cors.headers);
+      if (url.pathname === "/api/manager/staff/update" && request.method === "POST") return handleStaffUpdate(request, session, env, cors.headers);
+      if (url.pathname === "/api/schedule/today" && request.method === "GET") return handleMyTasksToday(session, env, cors.headers);
+      if (url.pathname === "/api/schedule/task-photo" && request.method === "POST") return handleTaskPhotoUpload(request, session, env, cors.headers);
+      if (url.pathname === "/api/schedule/task-photo/remove" && request.method === "POST") return handleTaskPhotoRemove(request, session, env, cors.headers);
+      if (url.pathname === "/api/schedule/complete" && request.method === "POST") return handleTaskComplete(request, session, env, cors.headers);
 
       if (url.pathname === "/api/admin/weekly-digest/send-now" && request.method === "POST") {
         if (session.role !== "admin") {
@@ -725,7 +754,7 @@ async function handleLogin(request, env, corsHeaders) {
   // still needs to verify its password before we say anything about status,
   // so a wrong-password guess against a real email doesn't confirm it exists.
   const user = await db.prepare(
-    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id, is_active, removed_at, classification
+    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id, is_active, removed_at, classification, staff_kind, designation
      FROM users WHERE username = ?`,
   )
     .bind(username)
@@ -786,7 +815,7 @@ async function handleVerifyCode(request, env, corsHeaders) {
   if (!result.ok) return json({ error: result.error }, 401, corsHeaders);
 
   const user = await db.prepare(
-    `SELECT id, username, full_name, job_title, role, region, building_id, building_access, status, classification FROM users WHERE id = ?`,
+    `SELECT id, username, full_name, job_title, role, region, building_id, building_access, status, classification, staff_kind, designation FROM users WHERE id = ?`,
   )
     .bind(result.userId)
     .first();
@@ -913,7 +942,7 @@ async function handleAccounts(session, env, corsHeaders) {
   }
 
   const result = await env.DB.prepare(
-    `SELECT id, username, full_name, job_title, role, region, classification
+    `SELECT id, username, full_name, job_title, role, region, classification, staff_kind, designation
      FROM users WHERE is_active = 1 AND role != 'admin'
      ORDER BY CASE role
        WHEN 'regional_manager' THEN 1
@@ -947,14 +976,14 @@ async function handleImpersonate(request, session, env, corsHeaders) {
 
   const target = isAdmin
     ? await env.DB.prepare(
-        `SELECT id, username, full_name, job_title, role, region
+        `SELECT id, username, full_name, job_title, role, region, staff_kind, designation
          FROM users WHERE id = ? AND is_active = 1 AND role != 'admin'`,
       )
         .bind(userId)
         .first()
     : await env.DB.prepare(
-        `SELECT id, username, full_name, job_title, role, region
-         FROM users WHERE id = ? AND is_active = 1 AND role = 'superintendent' AND region = ?`,
+        `SELECT id, username, full_name, job_title, role, region, staff_kind, designation
+         FROM users WHERE id = ? AND is_active = 1 AND role = 'superintendent' AND staff_kind IS NULL AND region = ?`,
       )
         .bind(userId, session.actor_region)
         .first();
@@ -1008,10 +1037,10 @@ async function requireSession(request, env) {
 
   const session = await db.prepare(
     `SELECT s.id AS session_id, s.expires_at, s.last_seen_at,
-       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification, u.client_id,
+       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification, u.client_id, u.staff_kind, u.designation,
        actor.id AS actor_id, actor.username AS actor_username,
        actor.full_name AS actor_full_name, actor.job_title AS actor_job_title,
-       actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access
+       actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access, actor.staff_kind AS actor_staff_kind
      FROM sessions s
      JOIN users u ON u.id = s.user_id AND u.is_active = 1
      JOIN users actor ON actor.id = s.actor_user_id AND actor.is_active = 1
@@ -1047,6 +1076,10 @@ async function requireSession(request, env) {
   // ids happen to coincidentally both be 1).
   session.companyId = clientId;
   session.__db = db;
+  // A Cleaner is stored as a superintendent row (see worker/roles.js);
+  // every route guard below sees it as its own role.
+  session.role = effectiveRole(session);
+  session.actor_role = effectiveRole({ role: session.actor_role, staff_kind: session.actor_staff_kind });
   return session;
 }
 
@@ -1186,14 +1219,16 @@ function displayRoleLabel(role, buildingAccess) {
 }
 
 function publicUser(user) {
+  const role = effectiveRole(user);
   return {
     id: user.id,
     username: user.username,
     fullName: user.full_name,
     jobTitle: user.job_title,
-    role: user.role,
+    designation: user.designation || null,
+    role,
     buildingAccess: user.building_access || "own",
-    roleLabel: displayRoleLabel(user.role, user.building_access),
+    roleLabel: displayRoleLabel(role, user.building_access),
     region: user.region,
     classification: user.classification || "standard",
     clientId: user.companyId ?? user.client_id ?? null,
@@ -1209,6 +1244,7 @@ function actorUser(session) {
     role: session.actor_role,
     region: session.actor_region,
     building_access: session.actor_building_access,
+    staff_kind: session.actor_staff_kind,
   });
 }
 

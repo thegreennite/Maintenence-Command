@@ -9,12 +9,14 @@
 // -- OM is distinguished by building_access = 'all' (see worker/access.js).
 
 import { hashPassword } from "./security.js";
+import { cleanDesignation } from "./roles.js";
 import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 import { getNativeClientId, recordLoginDirectory } from "./tenant-db.js";
 
-const SELF_SERVE_ROLES = new Set(["superintendent", "property_manager", "regional_manager", "operations_manager"]);
+const SELF_SERVE_ROLES = new Set(["superintendent", "cleaner", "property_manager", "regional_manager", "operations_manager"]);
 const JOB_TITLES = {
   superintendent: "Superintendent",
+  cleaner: "Cleaner",
   property_manager: "Property Manager",
   regional_manager: "Area Manager",
   operations_manager: "Operations Manager",
@@ -108,10 +110,24 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   }
 
   await env.DB.prepare(
-    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, building_id, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at, client_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP, 1)`,
+    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, building_id, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at, client_id, staff_kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP, 1, ?)`,
   )
-    .bind(email, hash, salt, fullName, JOB_TITLES[requestedRole], requestedRole, building.region, building.id, email, phone || null, profilePhoto)
+    .bind(
+      email,
+      hash,
+      salt,
+      fullName,
+      JOB_TITLES[requestedRole],
+      // A Cleaner is a superintendent-role row flagged staff_kind = 'cleaner' (see worker/roles.js).
+      requestedRole === "cleaner" ? "superintendent" : requestedRole,
+      building.region,
+      building.id,
+      email,
+      phone || null,
+      profilePhoto,
+      requestedRole === "cleaner" ? "cleaner" : null,
+    )
     .run();
   if (nativeClientId) await recordLoginDirectory(env, email, nativeClientId);
 
@@ -121,8 +137,9 @@ export async function handleSelfRegister(request, env, corsHeaders) {
   );
 }
 
-function pendingRoleLabel(role, buildingAccess) {
+function pendingRoleLabel(role, buildingAccess, staffKind) {
   if (role === "regional_manager" && buildingAccess === "all") return "Operations Manager";
+  if (role === "superintendent" && staffKind === "cleaner") return "Cleaner";
   return JOB_TITLES[role] || role;
 }
 
@@ -138,7 +155,7 @@ export async function handlePendingRequests(session, env, corsHeaders) {
          FROM users WHERE status = 'pending' AND role = 'regional_manager' ORDER BY id`,
       ).all(),
       env.DB.prepare(
-        `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.building_access, u.profile_photo, b.name AS building_name
+        `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.building_access, u.staff_kind, u.profile_photo, b.name AS building_name
          FROM users u JOIN buildings b ON b.id = u.building_id
          WHERE u.status = 'pending' ORDER BY u.id`,
       ).all(),
@@ -148,20 +165,20 @@ export async function handlePendingRequests(session, env, corsHeaders) {
       building_name: r.region,
       role_label: pendingRoleLabel(r.role, r.building_access),
     }));
-    const buildings = buildingRequests.results.map((r) => ({ ...r, role_label: pendingRoleLabel(r.role, r.building_access) }));
+    const buildings = buildingRequests.results.map((r) => ({ ...r, role_label: pendingRoleLabel(r.role, r.building_access, r.staff_kind), kind: r.staff_kind === "cleaner" ? "cleaner" : r.role }));
     return jsonOk({ requests: [...managers, ...buildings] }, corsHeaders);
   }
 
   const scoped = canSeeAllBuildings(session);
   const result = await env.DB.prepare(
-    `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.building_access, u.profile_photo, b.name AS building_name
+    `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.building_access, u.staff_kind, u.profile_photo, b.name AS building_name
      FROM users u JOIN buildings b ON b.id = u.building_id
      WHERE u.status = 'pending' ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`} ORDER BY u.id`,
   )
     .bind(...(scoped ? [] : [session.id, session.id]))
     .all();
   return jsonOk(
-    { requests: result.results.map((r) => ({ ...r, role_label: pendingRoleLabel(r.role, r.building_access) })) },
+    { requests: result.results.map((r) => ({ ...r, role_label: pendingRoleLabel(r.role, r.building_access, r.staff_kind), kind: r.staff_kind === "cleaner" ? "cleaner" : r.role })) },
     corsHeaders,
   );
 }
@@ -195,8 +212,8 @@ export async function handlePendingRequestDecision(request, session, env, corsHe
   }
   if (!pending) return jsonError("Request not found.", 404, corsHeaders);
 
-  await env.DB.prepare("UPDATE users SET status = ?, is_active = ? WHERE id = ?")
-    .bind(approve ? "active" : "denied", approve ? 1 : 0, userId)
+  await env.DB.prepare("UPDATE users SET status = ?, is_active = ?, designation = COALESCE(?, designation) WHERE id = ?")
+    .bind(approve ? "active" : "denied", approve ? 1 : 0, approve ? cleanDesignation(body.designation) : null, userId)
     .run();
 
   return jsonOk({ ok: true }, corsHeaders);

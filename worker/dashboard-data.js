@@ -10,6 +10,7 @@ export const roleLabels = {
   admin: "Administrator",
   regional_manager: "Area Manager",
   superintendent: "Superintendent",
+  cleaner: "Cleaner",
   property_manager: "Property Manager",
   // The agency account (Lucas, overseeing every company) before it's
   // selected a company to look at -- see requireAgencySession in index.js.
@@ -136,7 +137,7 @@ async function buildManagerDashboard(env, session, fullName) {
       ? env.DB.prepare(
           `SELECT u.id, u.full_name, b.id AS building_id, b.name AS building_name
            FROM users u JOIN buildings b ON b.id = u.building_id
-           WHERE u.role = 'superintendent' AND u.status = 'active' AND b.id IN (${buildingIds.map(() => "?").join(",")})
+           WHERE u.role = 'superintendent' AND u.staff_kind IS NULL AND u.status = 'active' AND b.id IN (${buildingIds.map(() => "?").join(",")})
            ORDER BY b.name, u.full_name LIMIT 12`,
         )
           .bind(...buildingIds)
@@ -226,6 +227,18 @@ async function buildSuperintendentShell(env, session) {
   };
 }
 
+async function buildCleanerShell(env, session) {
+  const building = session.building_id
+    ? await env.DB.prepare("SELECT name FROM buildings WHERE id = ?").bind(session.building_id).first()
+    : null;
+  return {
+    kind: "cleaner",
+    eyebrow: building?.name || "No building assigned",
+    title: "Your tasks for today",
+    summary: "Check off each task as you finish it — you'll be asked for photos to show the work was done.",
+  };
+}
+
 async function buildAdminDashboard(env) {
   const [accounts, roleGroups] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) AS c FROM users WHERE is_active = 1").first(),
@@ -247,6 +260,7 @@ async function buildAdminDashboard(env) {
 export async function dashboardForRole(role, fullName, env, session) {
   if (role === "regional_manager") return buildManagerDashboard(env, session, fullName);
   if (role === "superintendent") return buildSuperintendentShell(env, session);
+  if (role === "cleaner") return buildCleanerShell(env, session);
   if (role === "property_manager") return buildPropertyManagerShell(env, session);
   if (role === "admin") return buildAdminDashboard(env);
   return null;

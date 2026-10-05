@@ -2,6 +2,7 @@ import "./styles.css";
 import { installCameraCapture, liveCaptureTime, showPhotoFeedback } from "./camera.js";
 installCameraCapture();
 import { jsPDF } from "jspdf";
+import { createSchedules } from "./schedules.js";
 
 // Google Maps JS API loads as a global script, not an npm module — lazily
 // injected the first time a map is actually shown, and cached so repeat
@@ -601,6 +602,7 @@ function renderAddBusinessModal(fromAgencyView = false) {
 
 const ROLE_LABELS_FOR_REGISTRATION = {
   superintendent: "Superintendent",
+  cleaner: "Cleaner",
   property_manager: "Property Manager",
   regional_manager: "Area Manager",
   operations_manager: "Operations Manager",
@@ -656,6 +658,7 @@ function renderRegisterRoleStep() {
         <select name="role" required>
           <option value="" disabled selected>Select your role</option>
           <option value="superintendent">Superintendent</option>
+          <option value="cleaner">Cleaner</option>
           <option value="property_manager" disabled>Property Manager (coming soon)</option>
           <option value="regional_manager">Area Manager</option>
           <option value="operations_manager">Operations Manager</option>
@@ -900,6 +903,8 @@ async function handleExitAgencyClient() {
   await loadAgencyBroadView();
 }
 
+let lastScheduleUserId = null;
+
 async function loadDashboard() {
   renderLoading();
   // An agency session already inside a company (isAgency, but a real
@@ -915,6 +920,7 @@ async function loadDashboard() {
   const isAdminActor = state.session?.actor?.role === "admin";
   const isAdminViewing = state.session?.user?.role === "admin";
   const isSuperintendent = state.session?.user?.role === "superintendent";
+  const isCleaner = state.session?.user?.role === "cleaner";
   const isRegionalManager = state.session?.user?.role === "regional_manager";
   const isPropertyManager = state.session?.user?.role === "property_manager";
   const [dashboardResponse, accountsResponse, inspectionResponse, managerInspectionResponse, propertyResponse] =
@@ -925,6 +931,11 @@ async function loadDashboard() {
       isRegionalManager ? api.managerInspection() : Promise.resolve(null),
       isPropertyManager ? api.propertyInspections() : Promise.resolve(null),
     ]);
+  if (lastScheduleUserId !== state.session?.user?.id) {
+    schedules.reset();
+    lastScheduleUserId = state.session?.user?.id;
+  }
+  if (isSuperintendent || isCleaner) await schedules.loadMine();
   state.adminStats = isAdminViewing ? await api.adminStats().catch(() => null) : null;
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
@@ -981,6 +992,7 @@ const ADMIN_STATS_REFRESH_MS = 30_000;
 function isUserBusy() {
   if (chipPointer) return true;
   if (state.buildingWizard?.step && state.buildingWizard.step !== "closed") return true;
+  if (schedules.isBusy()) return true;
   const active = document.activeElement;
   return Boolean(active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName));
 }
@@ -1394,8 +1406,11 @@ function renderDashboard(data) {
       ? renderManagerDashboard(data)
       : data.kind === "admin"
         ? renderAdminDashboard(data)
-        : data.kind === "superintendent"
-          ? renderSuperintendentOverview(state.inspection) +
+        : data.kind === "cleaner"
+          ? schedules.renderMyTasks() || renderCleanerEmpty()
+          : data.kind === "superintendent"
+          ? schedules.renderMyTasks() +
+            renderSuperintendentOverview(state.inspection) +
             renderInspectionView(state.inspection) +
             renderFlagIssuePanel() +
             (state.inspection?.building
@@ -1517,6 +1532,7 @@ function renderManagerDashboard(data) {
     ${renderManagerInspectionPanel(state.managerInspection)}
     ${renderPendingRequestsPanel()}
     ${renderBuildingsPanel()}
+    ${schedules.renderManagerCard()}
     ${renderWeeklySummariesCard()}
     ${renderSuperintendentSwitcherPanel()}
     ${state.managerBuildings.length ? renderPhotoLibraryCard(state.managerBuildings[0].id, state.managerBuildings.map((b) => ({ id: b.id, name: b.name }))) : ""}`;
@@ -2471,6 +2487,7 @@ function renderAdminDashboard(data) {
         forceOpen: state.buildingWizard.step !== "closed" || Boolean(state.deleteBuildingTarget),
         body: renderBuildingsBody(),
       })}
+      ${schedules.renderManagerCard()}
       ${
         weeks.length
           ? renderAdminSection({
@@ -2515,6 +2532,7 @@ const CLASSIFICATION_LABELS = { standard: "Standard", beta_tester: "Beta Tester"
 
 const ADMIN_CREATABLE_ROLES = {
   superintendent: "Superintendent",
+  cleaner: "Cleaner",
   property_manager: "Property Manager",
   regional_manager: "Area Manager",
   operations_manager: "Operations Manager",
@@ -2523,8 +2541,9 @@ const ADMIN_CREATABLE_ROLES = {
 
 function renderAdminAddAccountForm() {
   const role = state.adminNewAccountRole;
-  const isField = role === "superintendent" || role === "property_manager";
+  const isField = role === "superintendent" || role === "cleaner" || role === "property_manager";
   const isManagerTier = role === "regional_manager" || role === "operations_manager";
+  const hasDesignation = role === "superintendent" || role === "cleaner";
   const buildings = state.managerBuildings || [];
   return `
     <form id="add-account-form" class="wizard-panel" style="border-top: 1px solid var(--line);">
@@ -2548,6 +2567,7 @@ function renderAdminAddAccountForm() {
           ${buildings.map((b) => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join("")}
         </select>
       </label>
+      <label class="inspection-field" id="add-account-designation-field" ${hasDesignation ? "" : "hidden"}><span>Variant <small>(optional — e.g. Light duty, Heavy duty, Shared superintendent, Assistant superintendent)</small></span><input name="designation" maxlength="40" placeholder="Leave blank for none" autocomplete="off" /></label>
       <label class="inspection-field" id="add-account-region-field" ${isManagerTier ? "" : "hidden"}><span>Region <small>(optional)</small></span><input name="regionName" placeholder="e.g. North York" autocomplete="off" /></label>
       <label class="inspection-field"><span>Temporary password</span>
         <span class="add-account-pw">
@@ -6173,8 +6193,9 @@ function bindDashboardEvents() {
   });
   document.querySelector("#add-account-role")?.addEventListener("change", (event) => {
     state.adminNewAccountRole = event.target.value;
-    const isField = ["superintendent", "property_manager"].includes(event.target.value);
+    const isField = ["superintendent", "cleaner", "property_manager"].includes(event.target.value);
     const isManagerTier = ["regional_manager", "operations_manager"].includes(event.target.value);
+    document.querySelector("#add-account-designation-field").hidden = !["superintendent", "cleaner"].includes(event.target.value);
     document.querySelector("#add-account-building-field").hidden = !isField;
     document.querySelector("#add-account-region-field").hidden = !isManagerTier;
   });
@@ -6621,6 +6642,7 @@ async function handleAdminAddAccountSubmit(event) {
     password: data.get("password") || "",
     buildingId: data.get("buildingId") || null,
     regionName: (data.get("regionName") || "").trim(),
+    designation: (data.get("designation") || "").trim() || undefined,
   };
   error.hidden = true;
   button.disabled = true;
@@ -6762,6 +6784,25 @@ async function bootstrap() {
     }
     renderLogin();
   }
+}
+
+const schedules = createSchedules({
+  request: (path, options) => api.request(path, options),
+  escapeHtml,
+  icon,
+  rerender: () => renderApp(),
+  getBuildings: () => state.managerBuildings,
+  photoUrl: (key, buildingId) => api.photoViewUrl(key, buildingId),
+  prepareSheetPage,
+  getGeolocation,
+  liveCaptureTime,
+  queueScroll: (target) => queueScroll(target),
+});
+schedules.install();
+
+function renderCleanerEmpty() {
+  return `<section class="card"><div class="card__header"><div><p class="section-kicker">Today's checklist</p><h2>Nothing scheduled for you today</h2></div></div>
+    <p class="parameters-intro sch-pad">When your manager assigns you a schedule, today's tasks show up here — check each one off with photos as you finish it.</p></section>`;
 }
 
 bootstrap();
