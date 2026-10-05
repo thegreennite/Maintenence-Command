@@ -454,6 +454,14 @@ function icon(name) {
     "eye-off": '<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61C3.35 8.36 1 12 1 12s4 8 11 8a9.26 9.26 0 0 0 5.39-1.61M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>',
     file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    overview: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/>',
+    calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    chart: '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
+    cog: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+    archive: '<path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/>',
+    list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    tasks: '<path d="m4 7 2 2 3-3M4 17l2 2 3-3M13 8h8M13 18h8"/>',
   };
   return `<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] || paths.command}</svg>`;
 }
@@ -1041,10 +1049,14 @@ function scrollToTop() {
   window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
 }
 
-function scrollToNotice(target, { block = "center" } = {}) {
+function scrollToNotice(target, { block = "center", pulse = true, onlyIfAbove = false } = {}) {
   const el = typeof target === "string" ? document.querySelector(target) : target;
   if (!el) return;
+  // Switching tools: only scroll back up if the page has been scrolled
+  // past the start of the tool area -- otherwise leave it exactly where it is.
+  if (onlyIfAbove && el.getBoundingClientRect().top >= 80) return;
   el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block });
+  if (!pulse) return;
   el.classList.remove("notice-attention");
   void el.offsetWidth; // restart the pulse if it's already running
   el.classList.add("notice-attention");
@@ -1109,6 +1121,7 @@ function renderApp() {
   const { user, actor, isImpersonating, isAgency } = state.session;
   const isAgencyBroadView = user.role === "agency";
   setDocumentTitle(isAgencyBroadView ? "All companies" : user.roleLabel);
+  pendingActivations = [];
   app.innerHTML = `
     <div class="app-shell">
       <header class="topbar">
@@ -1148,6 +1161,11 @@ function renderApp() {
       </main>
       <footer class="app-footer"><span>Power Log Command</span><span>Phase 5 · Secure operations workspace</span></footer>
     </div>`;
+
+  // Tools that load their own data when shown (e.g. Schedules).
+  const activations = pendingActivations;
+  pendingActivations = [];
+  if (activations.length) setTimeout(() => activations.forEach((run) => run()), 0);
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
   document.querySelector("#return-admin")?.addEventListener("click", handleReturnToAdmin);
@@ -1393,6 +1411,42 @@ function renderSuperMetrics(history, inspectionDays) {
     </div>`;
 }
 
+function renderSuperintendentTools() {
+  const tasks = schedules.taskSummary();
+  const buildingId = state.inspection?.building?.id;
+  const tools = [
+    {
+      id: "inspection",
+      label: "Inspection",
+      icon: "clipboard",
+      body: () => renderSuperintendentOverview(state.inspection) + renderInspectionView(state.inspection) + renderFlagIssuePanel(),
+    },
+  ];
+  if (tasks) {
+    tools.push({
+      id: "tasks",
+      label: "Tasks",
+      icon: "tasks",
+      badge: tasks.total - tasks.done || "",
+      force: schedules.isWorking(),
+      body: () => schedules.renderMyTasks(),
+    });
+  }
+  if (buildingId) {
+    tools.push({
+      id: "history",
+      label: "History",
+      icon: "clock",
+      body: () =>
+        `<section class="card building-world__checklist">
+           <div class="card__header"><div><p class="section-kicker">Inspection history</p><h2>Submitted, by week</h2></div></div>
+           ${renderInspectionHistory(buildingId)}
+         </section>` + renderPhotoLibraryCard(buildingId, null),
+    });
+  }
+  return renderToolShell("superintendent", tools);
+}
+
 function renderDashboard(data) {
   if (!data) return renderErrorState();
   if (state.commandMode?.active && data.kind === "superintendent") {
@@ -1409,16 +1463,7 @@ function renderDashboard(data) {
         : data.kind === "cleaner"
           ? schedules.renderMyTasks() || renderCleanerEmpty()
           : data.kind === "superintendent"
-          ? schedules.renderMyTasks() +
-            renderSuperintendentOverview(state.inspection) +
-            renderInspectionView(state.inspection) +
-            renderFlagIssuePanel() +
-            (state.inspection?.building
-              ? `<section class="card building-world__checklist">
-                   <div class="card__header"><div><p class="section-kicker">Inspection history</p><h2>Submitted, by week</h2></div></div>
-                   ${renderInspectionHistory(state.inspection.building.id)}
-                 </section>` + renderPhotoLibraryCard(state.inspection.building.id, null)
-              : "")
+            ? renderSuperintendentTools()
           : data.kind === "property_manager"
             ? renderPropertyView(state.propertyInspections)
             : renderRoleShell(data);
@@ -1502,40 +1547,88 @@ async function handleDownloadWeeklyReport(button) {
   }
 }
 
+function renderToolCard(kicker, title, body, aside = "") {
+  return `<section class="card tool-card">
+    <div class="card__header"><div><p class="section-kicker">${kicker}</p><h2>${title}</h2></div>${aside ? `<span class="quiet-label">${aside}</span>` : ""}</div>
+    <div class="tool-card__body">${body}</div>
+  </section>`;
+}
+
+function renderToolEmpty(message) {
+  return `<section class="card"><p class="empty-state-inline">${escapeHtml(message)}</p></section>`;
+}
+
+const scheduleToolBody = (buildingName) =>
+  renderToolCard("Schedules", buildingName ? `${escapeHtml(buildingName)} — cleaning &amp; duty schedules` : "Cleaning &amp; duty schedules", schedules.renderManagerCard({ embedded: true }));
+
 function renderManagerDashboard(data) {
-  return `
-    <section aria-labelledby="portfolio-pulse-title">
-      <div class="section-heading"><div><p class="section-kicker">Portfolio Pulse</p><h2 id="portfolio-pulse-title">Right now</h2></div><span>Updated moments ago</span></div>
-      <div class="metric-grid">
-        ${data.pulse.map(renderMetric).join("")}
-      </div>
-    </section>
-    <div class="operations-grid">
-      ${renderExceptionQueue()}
-      <section class="card coverage-card" aria-labelledby="coverage-title">
-        <div class="card__header"><div><p class="section-kicker">Today’s Coverage</p><h2 id="coverage-title">People on point</h2></div></div>
-        <div class="coverage-list">
-          ${data.coverage.map(renderCoverage).join("")}
-        </div>
-      </section>
-      <section class="card recurring-card" aria-labelledby="recurring-title">
-        <div class="card__header"><div><p class="section-kicker">Recurring Service</p><h2 id="recurring-title">Weekly completion</h2></div><span class="quiet-label">Week 35</span></div>
-        <div class="progress-summary">
-          <div class="progress-ring" style="--progress: ${Number(data.recurring.percentage)}%" aria-label="${Number(data.recurring.percentage)} percent complete">
-            <span><strong>${Number(data.recurring.percentage)}%</strong><small>complete</small></span>
+  const openOrders = state.workOrders.filter((w) => w.status === "open").length;
+  const pending = state.pendingRequests.length;
+  return renderToolShell("manager", [
+    {
+      id: "overview",
+      label: "Overview",
+      icon: "overview",
+      badge: openOrders || "",
+      body: () => `
+        <section aria-labelledby="portfolio-pulse-title">
+          <div class="section-heading"><div><p class="section-kicker">Portfolio Pulse</p><h2 id="portfolio-pulse-title">Right now</h2></div><span>Updated moments ago</span></div>
+          <div class="metric-grid">
+            ${data.pulse.map(renderMetric).join("")}
           </div>
-          <div><strong>${Number(data.recurring.completed)} of ${Number(data.recurring.total)}</strong><p>Scheduled services verified</p><span class="tone-text tone-text--warning">${escapeHtml(data.recurring.note)}</span></div>
-        </div>
-        <div class="progress-track"><span style="width:${Number(data.recurring.percentage)}%"></span></div>
-      </section>
-    </div>
-    ${renderManagerInspectionPanel(state.managerInspection)}
-    ${renderPendingRequestsPanel()}
-    ${renderBuildingsPanel()}
-    ${schedules.renderManagerCard()}
-    ${renderWeeklySummariesCard()}
-    ${renderSuperintendentSwitcherPanel()}
-    ${state.managerBuildings.length ? renderPhotoLibraryCard(state.managerBuildings[0].id, state.managerBuildings.map((b) => ({ id: b.id, name: b.name }))) : ""}`;
+        </section>
+        <div class="operations-grid">
+          ${renderExceptionQueue()}
+          <section class="card coverage-card" aria-labelledby="coverage-title">
+            <div class="card__header"><div><p class="section-kicker">Today’s Coverage</p><h2 id="coverage-title">People on point</h2></div></div>
+            <div class="coverage-list">
+              ${data.coverage.map(renderCoverage).join("")}
+            </div>
+          </section>
+          <section class="card recurring-card" aria-labelledby="recurring-title">
+            <div class="card__header"><div><p class="section-kicker">Recurring Service</p><h2 id="recurring-title">Weekly completion</h2></div><span class="quiet-label">Week 35</span></div>
+            <div class="progress-summary">
+              <div class="progress-ring" style="--progress: ${Number(data.recurring.percentage)}%" aria-label="${Number(data.recurring.percentage)} percent complete">
+                <span><strong>${Number(data.recurring.percentage)}%</strong><small>complete</small></span>
+              </div>
+              <div><strong>${Number(data.recurring.completed)} of ${Number(data.recurring.total)}</strong><p>Scheduled services verified</p><span class="tone-text tone-text--warning">${escapeHtml(data.recurring.note)}</span></div>
+            </div>
+            <div class="progress-track"><span style="width:${Number(data.recurring.percentage)}%"></span></div>
+          </section>
+        </div>`,
+    },
+    {
+      id: "inspection",
+      label: "Inspection",
+      icon: "clipboard",
+      body: () => renderManagerInspectionPanel(state.managerInspection) || renderToolEmpty("No inspection to show yet — register a building and activate its checklist first."),
+    },
+    {
+      id: "buildings",
+      label: "Buildings",
+      icon: "building",
+      badge: state.managerBuildings.length || "",
+      force: state.buildingWizard.step !== "closed" || Boolean(state.deleteBuildingTarget),
+      body: () => renderBuildingsPanel(),
+    },
+    { id: "schedules", label: "Schedules", icon: "calendar", activate: () => schedules.activate(null), body: () => scheduleToolBody() },
+    {
+      id: "people",
+      label: "People",
+      icon: "users",
+      badge: pending || "",
+      body: () => renderPendingRequestsPanel() + renderSuperintendentSwitcherPanel() || renderToolEmpty("No pending requests, and nobody to view as yet."),
+    },
+    {
+      id: "reports",
+      label: "Reports",
+      icon: "chart",
+      body: () =>
+        (renderWeeklySummariesCard() || "") +
+          (state.managerBuildings.length ? renderPhotoLibraryCard(state.managerBuildings[0].id, state.managerBuildings.map((b) => ({ id: b.id, name: b.name }))) : "") ||
+        renderToolEmpty("Weekly summaries and the photo library appear here once there's data."),
+    },
+  ]);
 }
 
 function renderPendingRequestsPanel() {
@@ -2421,6 +2514,78 @@ function saveAdminSections() {
   }
 }
 
+// ---------------------------------------------------------------------
+// Tool shell: every role's screen is a row of tools with ONE open at a
+// time -- tap a tool and only that tool shows. Same bar, same look for the
+// manager dashboard, admin, superintendent and each building's page; the
+// last tool you used is remembered per screen.
+// ---------------------------------------------------------------------
+const TOOL_STORE_KEY = "plc-active-tools";
+let activeTools = null;
+let pendingActivations = [];
+const lastShownTool = {};
+const lastForced = {};
+
+function loadActiveTools() {
+  try {
+    return JSON.parse(localStorage.getItem(TOOL_STORE_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function setActiveTool(shellId, toolId) {
+  if (!activeTools) activeTools = loadActiveTools();
+  activeTools[shellId] = toolId;
+  try {
+    localStorage.setItem(TOOL_STORE_KEY, JSON.stringify(activeTools));
+  } catch {
+    /* private mode -- the choice just won't be remembered */
+  }
+}
+
+// tools: [{ id, label, icon, badge?, hint?, body: () => html, activate?: () => void, force?: boolean }]
+// A tool with `force` (a form was just opened in it) is switched to once.
+function renderToolShell(shellId, tools, { bar = true } = {}) {
+  if (!activeTools) activeTools = loadActiveTools();
+  // A tool that has just become "forced" (a form was opened in it) is switched
+  // to once; after that the person can still move to any other tool.
+  for (const t of tools) {
+    const key = `${shellId}:${t.id}`;
+    if (t.force && !lastForced[key]) setActiveTool(shellId, t.id);
+    lastForced[key] = Boolean(t.force);
+  }
+  const active = tools.find((t) => t.id === activeTools[shellId]) || tools[0];
+  if (active.activate) pendingActivations.push(active.activate);
+  const changed = lastShownTool[shellId] !== active.id;
+  lastShownTool[shellId] = active.id;
+  return `
+    <div class="tool-shell" data-tool-shell="${shellId}">
+      ${
+        bar && tools.length > 1
+          ? `<nav class="tool-bar" aria-label="Tools"><div class="tool-bar__track" role="tablist">
+              ${tools
+                .map(
+                  (t) => `<button type="button" role="tab" class="tool-tab ${t.id === active.id ? "is-active" : ""}" aria-selected="${t.id === active.id}" data-tool="${t.id}" data-shell="${shellId}">
+                    ${icon(t.icon)}<span class="tool-tab__label">${escapeHtml(t.label)}</span>${t.badge ? `<span class="tool-tab__badge">${t.badge}</span>` : ""}
+                  </button>`,
+                )
+                .join("")}
+            </div></nav>`
+          : ""
+      }
+      <div class="tool-panel ${changed ? "tool-panel--enter" : ""}" role="tabpanel" data-tool-panel="${active.id}">${active.body()}</div>
+    </div>`;
+}
+
+document.addEventListener("click", (event) => {
+  const tab = event.target.closest?.(".tool-tab");
+  if (!tab || tab.classList.contains("is-active")) return;
+  setActiveTool(tab.dataset.shell, tab.dataset.tool);
+  queueScroll(".tool-shell", { block: "start", pulse: false, onlyIfAbove: true });
+  renderApp();
+});
+
 function renderAdminSection({ id, kicker, title, summary = "", badge = 0, defaultOpen = false, forceOpen = false, body }) {
   if (!state.adminSections) state.adminSections = loadAdminSections();
   const saved = state.adminSections[id];
@@ -2462,70 +2627,57 @@ function renderAdminDashboard(data) {
   const weeks = state.reportWeeks || [];
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-  return `
-    <div class="metric-grid metric-grid--three">${data.stats.map(renderStat).join("")}</div>
-    <div class="admin-sections">
-      ${
-        waiting
-          ? renderAdminSection({
-              id: "attention",
-              kicker: "Needs you",
-              title: "Waiting for your decision",
-              badge: waiting,
-              summary: [signups ? plural(signups, "sign-up request") : "", deleteRequests ? plural(deleteRequests, "deletion request") : ""].filter(Boolean).join(" · "),
-              defaultOpen: true,
-              body: renderAdminAttentionBody(),
-            })
-          : ""
-      }
-      ${renderAdminSection({
-        id: "buildings",
-        kicker: "Portfolio",
-        title: "Buildings",
-        summary: `${plural(buildingCount, "building")}${registering ? ` · ${registering} being set up` : ""}`,
-        defaultOpen: true,
-        forceOpen: state.buildingWizard.step !== "closed" || Boolean(state.deleteBuildingTarget),
-        body: renderBuildingsBody(),
-      })}
-      ${schedules.renderManagerCard()}
-      ${
-        weeks.length
-          ? renderAdminSection({
-              id: "reports",
-              kicker: "Reports",
-              title: "Weekly summaries",
-              summary: `Emailed Fridays 5 PM · ${plural(weeks.length, "week")} on record`,
-              body: renderWeeklySummariesBody(),
-            })
-          : ""
-      }
-      ${renderAdminSection({
-        id: "people",
-        kicker: "People",
-        title: "Accounts & view-as",
-        summary: plural(state.accounts.length, "account"),
-        forceOpen: state.adminAddingAccount || Boolean(state.adminNewAccountCreated),
-        body: renderAdminAccountsBody(),
-      })}
-      ${
-        deleted || removed
-          ? renderAdminSection({
-              id: "recovery",
-              kicker: "Recovery",
-              title: "Recently removed",
-              summary: [deleted ? plural(deleted, "deleted building") : "", removed ? plural(removed, "removed account") : ""].filter(Boolean).join(" · "),
-              body: renderAdminRecoveryBody(),
-            })
-          : ""
-      }
-      ${renderAdminSection({
-        id: "system",
-        kicker: "System",
-        title: "Connections & usage",
-        summary: systemSummary(),
-        body: renderSystemBody(),
-      })}
-    </div>`;
+  const tools = [
+    {
+      id: "overview",
+      label: "Overview",
+      icon: "overview",
+      badge: waiting || "",
+      body: () => `
+        <div class="metric-grid metric-grid--three">${data.stats.map(renderStat).join("")}</div>
+        ${
+          waiting
+            ? renderToolCard("Needs you", "Waiting for your decision", renderAdminAttentionBody(), [signups ? plural(signups, "sign-up request") : "", deleteRequests ? plural(deleteRequests, "deletion request") : ""].filter(Boolean).join(" · "))
+            : renderToolEmpty("Nothing is waiting for your decision.")
+        }`,
+    },
+    {
+      id: "buildings",
+      label: "Buildings",
+      icon: "building",
+      badge: registering || "",
+      force: state.buildingWizard.step !== "closed" || Boolean(state.deleteBuildingTarget),
+      body: () => renderToolCard("Portfolio", "Buildings", renderBuildingsBody(), `${plural(buildingCount, "building")}${registering ? ` · ${registering} being set up` : ""}`),
+    },
+    { id: "schedules", label: "Schedules", icon: "calendar", activate: () => schedules.activate(null), body: () => scheduleToolBody() },
+    {
+      id: "people",
+      label: "People",
+      icon: "users",
+      force: state.adminAddingAccount || Boolean(state.adminNewAccountCreated),
+      body: () => renderToolCard("People", "Accounts & view-as", renderAdminAccountsBody(), plural(state.accounts.length, "account")),
+    },
+  ];
+  if (weeks.length) {
+    tools.push({
+      id: "reports",
+      label: "Reports",
+      icon: "chart",
+      body: () => renderToolCard("Reports", "Weekly summaries", renderWeeklySummariesBody(), `Emailed Fridays 5 PM · ${plural(weeks.length, "week")} on record`),
+    });
+  }
+  if (deleted || removed) {
+    tools.push({
+      id: "recovery",
+      label: "Recovery",
+      icon: "archive",
+      badge: deleted + removed,
+      body: () =>
+        renderToolCard("Recovery", "Recently removed", renderAdminRecoveryBody(), [deleted ? plural(deleted, "deleted building") : "", removed ? plural(removed, "removed account") : ""].filter(Boolean).join(" · ")),
+    });
+  }
+  tools.push({ id: "system", label: "System", icon: "cog", body: () => renderToolCard("System", "Connections &amp; usage", renderSystemBody(), systemSummary()) });
+  return renderToolShell("admin", tools);
 }
 
 const CLASSIFICATION_LABELS = { standard: "Standard", beta_tester: "Beta Tester" };
@@ -3507,7 +3659,13 @@ function renderBuildingWorld() {
 
       ${state.buildingWorldEditing ? renderBuildingWorldEditForm(world.building) : ""}
 
-      <div class="building-world__grid">
+      ${renderToolShell("building", [
+        {
+          id: "overview",
+          label: "Overview",
+          icon: "overview",
+          badge: openOrders.length || "",
+          body: () => `<div class="building-world__grid">
         <section class="card">
           <div class="card__header"><div><p class="section-kicker">Notices</p><h2>Posted for whoever's covering this building</h2></div></div>
           <div class="notices-list">
@@ -3530,7 +3688,6 @@ function renderBuildingWorld() {
             <div class="inspection-actions"><button type="submit" class="button button--primary button--small">Post</button></div>
           </form>
         </section>
-
         <section class="card">
           <div class="card__header"><div><p class="section-kicker">Work orders</p><h2>Open (${openOrders.length})</h2></div></div>
           <div class="buildings-list">
@@ -3542,7 +3699,56 @@ function renderBuildingWorld() {
               : ""
           }
         </section>
-
+        <section class="card">
+          <div class="card__header"><div><p class="section-kicker">Recent notes</p><h2>From the daily inspection</h2></div></div>
+          <div class="buildings-list">
+            ${
+              world.recentNotes.length
+                ? world.recentNotes
+                    .map((n) => `<div class="building-row"><div class="building-row__name"><strong>${escapeHtml(formatInspectionDate(n.inspection_date))}</strong><small>${escapeHtml(n.notes)}</small></div></div>`)
+                    .join("")
+                : `<p class="quiet-label" style="padding: 14px 4px;">No comments left recently.</p>`
+            }
+          </div>
+        </section>
+      </div>`,
+        },
+        {
+          id: "checklist",
+          label: "Checklist",
+          icon: "list",
+          badge: world.tags.length || "",
+          body: () => `<div class="building-world__grid">
+        <section class="card building-world__checklist">
+          <div class="card__header">
+            <div><p class="section-kicker">Checklist</p><h2>${world.tags.length} readings</h2></div>
+            <form id="add-group-form" class="add-machine-form">
+              <input type="text" name="name" placeholder="+ New machine…" maxlength="60" autocomplete="off" />
+              <button type="submit" class="button button--outline button--small">Add</button>
+            </form>
+          </div>
+          <div class="location-manager">
+            <span class="quiet-label" style="width:100%;">Locations — where each reading physically is, so command mode can walk supers through in order</span>
+            ${(world.locations || [])
+              .map(
+                (l) => `<span class="location-chip">${escapeHtml(l.name)}<button type="button" class="remove-location" data-location-id="${l.id}" title="Delete location" aria-label="Delete location">${icon("close")}</button></span>`,
+              )
+              .join("")}
+            <form id="add-location-form" class="location-add-form">
+              <input type="text" name="name" placeholder="+ Add a location…" maxlength="60" autocomplete="off" />
+              <button type="submit" class="button button--outline button--small">Add</button>
+            </form>
+          </div>
+          ${renderChecklistBulkBar(world)}
+          ${renderMachineBoard(world)}
+        </section>
+      </div>`,
+        },
+        {
+          id: "team",
+          label: "Team",
+          icon: "users",
+          body: () => `<div class="building-world__grid">
         <section class="card">
           <div class="card__header"><div><p class="section-kicker">Coverage</p><h2>Superintendents</h2></div></div>
           <div class="buildings-list">
@@ -3571,51 +3777,28 @@ function renderBuildingWorld() {
             <div class="inspection-actions"><button type="submit" class="button button--primary button--small" ${!state.buildingWorldAssignableSupers?.length ? "disabled" : ""}>Assign</button></div>
           </form>
         </section>
-
         ${canManageSharing ? renderBuildingWorldSharing(world) : ""}
-
-        <section class="card">
-          <div class="card__header"><div><p class="section-kicker">Recent notes</p><h2>From the daily inspection</h2></div></div>
-          <div class="buildings-list">
-            ${
-              world.recentNotes.length
-                ? world.recentNotes
-                    .map((n) => `<div class="building-row"><div class="building-row__name"><strong>${escapeHtml(formatInspectionDate(n.inspection_date))}</strong><small>${escapeHtml(n.notes)}</small></div></div>`)
-                    .join("")
-                : `<p class="quiet-label" style="padding: 14px 4px;">No comments left recently.</p>`
-            }
-          </div>
-        </section>
-
-        <section class="card building-world__checklist">
-          <div class="card__header">
-            <div><p class="section-kicker">Checklist</p><h2>${world.tags.length} readings</h2></div>
-            <form id="add-group-form" class="add-machine-form">
-              <input type="text" name="name" placeholder="+ New machine…" maxlength="60" autocomplete="off" />
-              <button type="submit" class="button button--outline button--small">Add</button>
-            </form>
-          </div>
-          <div class="location-manager">
-            <span class="quiet-label" style="width:100%;">Locations — where each reading physically is, so command mode can walk supers through in order</span>
-            ${(world.locations || [])
-              .map(
-                (l) => `<span class="location-chip">${escapeHtml(l.name)}<button type="button" class="remove-location" data-location-id="${l.id}" title="Delete location" aria-label="Delete location">${icon("close")}</button></span>`,
-              )
-              .join("")}
-            <form id="add-location-form" class="location-add-form">
-              <input type="text" name="name" placeholder="+ Add a location…" maxlength="60" autocomplete="off" />
-              <button type="submit" class="button button--outline button--small">Add</button>
-            </form>
-          </div>
-          ${renderChecklistBulkBar(world)}
-          ${renderMachineBoard(world)}
-        </section>
-
+      </div>`,
+        },
+        {
+          id: "schedules",
+          label: "Schedules",
+          icon: "calendar",
+          activate: () => schedules.activate(world.buildingId),
+          body: () => scheduleToolBody(world.building.name),
+        },
+        {
+          id: "history",
+          label: "History",
+          icon: "clock",
+          body: () => `<div class="building-world__grid">
         <section class="card building-world__checklist">
           <div class="card__header"><div><p class="section-kicker">Inspection history</p><h2>Submitted, by week</h2></div></div>
           ${renderInspectionHistory(world.buildingId)}
         </section>
-      </div>
+      </div>` + renderPhotoLibraryCard(world.buildingId, null),
+        },
+      ])}
     </section>`;
 }
 

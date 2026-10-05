@@ -113,6 +113,12 @@ export async function purgeExpiredBuildings(env) {
       env.DB.prepare("DELETE FROM equipment_groups WHERE building_id = ?").bind(buildingId),
       env.DB.prepare("DELETE FROM building_locations WHERE building_id = ?").bind(buildingId),
       env.DB.prepare("DELETE FROM building_managers WHERE building_id = ?").bind(buildingId),
+      // Schedules and their proof-of-work photos, deepest first.
+      env.DB.prepare("DELETE FROM task_photos WHERE completion_id IN (SELECT id FROM task_completions WHERE building_id = ?)").bind(buildingId),
+      env.DB.prepare("DELETE FROM task_completions WHERE building_id = ?").bind(buildingId),
+      env.DB.prepare("DELETE FROM schedule_assignees WHERE schedule_id IN (SELECT id FROM schedules WHERE building_id = ?)").bind(buildingId),
+      env.DB.prepare("DELETE FROM schedule_tasks WHERE schedule_id IN (SELECT id FROM schedules WHERE building_id = ?)").bind(buildingId),
+      env.DB.prepare("DELETE FROM schedules WHERE building_id = ?").bind(buildingId),
       env.DB.prepare("DELETE FROM work_orders WHERE building_id = ?").bind(buildingId),
       env.DB.prepare("DELETE FROM building_notices WHERE building_id = ?").bind(buildingId),
       env.DB.prepare("UPDATE users SET building_id = NULL WHERE building_id = ?").bind(buildingId),
@@ -130,6 +136,46 @@ export async function purgeExpiredBuildings(env) {
   }
 
   return expired.results.length;
+}
+
+// Same 30-day window for removed accounts. After it, the person's account is
+// deleted outright; if their name is on inspection history that has to be
+// kept (an inspection can't lose who did it), the row stays but is scrubbed
+// of everything personal -- name, email, phone, photo, password -- and
+// stops appearing in "Recently removed".
+export async function purgeExpiredAccounts(env) {
+  const expired = (
+    await env.DB.prepare(
+      "SELECT id, email FROM users WHERE removed_at IS NOT NULL AND removed_at <= datetime('now', ?) AND username NOT LIKE 'purged-%'",
+    )
+      .bind(`-${RETENTION_DAYS} days`)
+      .all()
+  ).results;
+
+  const randomHex = (bytes) => Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+  for (const user of expired) {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM sessions WHERE user_id = ? OR actor_user_id = ?").bind(user.id, user.id),
+      env.DB.prepare("DELETE FROM schedule_assignees WHERE user_id = ?").bind(user.id),
+      env.DB.prepare("DELETE FROM two_factor_codes WHERE user_id = ?").bind(user.id),
+      env.DB.prepare("DELETE FROM building_managers WHERE user_id = ?").bind(user.id),
+    ]);
+    try {
+      await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
+    } catch {
+      await env.DB.prepare(
+        `UPDATE users SET username = ?, full_name = 'Removed user', email = NULL, phone = NULL, profile_photo = NULL, ghl_contact_id = NULL,
+           password_hash = ?, password_salt = ?, designation = NULL, building_id = NULL, contact_consent = 0, region = NULL
+         WHERE id = ?`,
+      )
+        .bind(`purged-${user.id}`, randomHex(32), randomHex(16), user.id)
+        .run();
+    }
+    if (user.email && env.CONTROL_DB) {
+      await env.CONTROL_DB.prepare("DELETE FROM login_directory WHERE email = ?").bind(user.email).run().catch(() => {});
+    }
+  }
+  return expired.length;
 }
 
 function jsonOk(data, headers) {

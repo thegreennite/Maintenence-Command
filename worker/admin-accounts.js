@@ -26,8 +26,7 @@ export const CLASSIFICATIONS = {
 // "own" rather than leaving it null.
 const CREATABLE_ROLES = {
   superintendent: { role: "superintendent", access: "own", title: "Superintendent" },
-  // Stored as a superintendent row with staff_kind = "cleaner" -- see worker/roles.js for why.
-  cleaner: { role: "superintendent", access: "own", title: "Cleaner", kind: "cleaner" },
+  cleaner: { role: "cleaner", access: "own", title: "Cleaner" },
   property_manager: { role: "property_manager", access: "own", title: "Property Manager" },
   regional_manager: { role: "regional_manager", access: "own", title: "Area Manager" },
   operations_manager: { role: "regional_manager", access: "all", title: "Operations Manager" },
@@ -63,7 +62,7 @@ export async function handleCreateAccount(request, session, env, corsHeaders) {
   const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ? OR username = ?").bind(email, email).first();
   if (existing) return jsonError("An account already exists for that email.", 409, corsHeaders);
 
-  const isFieldTier = spec.role === "superintendent" || spec.role === "property_manager";
+  const isFieldTier = spec.role === "superintendent" || spec.role === "cleaner" || spec.role === "property_manager";
   let building = null;
   if (isFieldTier) {
     if (!buildingId) return jsonError("Pick which building this person works at.", 400, corsHeaders);
@@ -75,8 +74,8 @@ export async function handleCreateAccount(request, session, env, corsHeaders) {
 
   const { salt, hash } = await hashPassword(password);
   await env.DB.prepare(
-    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, building_id, email, phone, status, is_active, contact_consent, contact_consent_at, client_id, staff_kind, designation)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, 1, CURRENT_TIMESTAMP, ?, ?, ?)`,
+    `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, region, building_id, email, phone, status, is_active, contact_consent, contact_consent_at, client_id, designation)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, 1, CURRENT_TIMESTAMP, ?, ?)`,
   )
     .bind(
       email,
@@ -91,9 +90,8 @@ export async function handleCreateAccount(request, session, env, corsHeaders) {
       email,
       phone || null,
       effectiveClientId(session),
-      spec.kind || null,
       // A designation only means something on the field roles.
-      isFieldTier ? designation : null,
+      spec.role === "superintendent" || spec.role === "cleaner" ? designation : null,
     )
     .run();
   // session.companyId is the control-plane id (which company, globally --
@@ -146,7 +144,7 @@ export async function handleRemovedAccountsList(session, env, corsHeaders) {
 
   const result = await env.DB.prepare(
     `SELECT id, username, full_name, job_title, role, removed_at
-     FROM users WHERE removed_at IS NOT NULL ORDER BY removed_at DESC`,
+     FROM users WHERE removed_at IS NOT NULL AND username NOT LIKE 'purged-%' ORDER BY removed_at DESC`,
   ).all();
   return jsonOk({ accounts: result.results }, corsHeaders);
 }

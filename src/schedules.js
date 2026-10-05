@@ -66,6 +66,8 @@ export function createSchedules(deps) {
 
   const S = {
     open: false,
+    lockedBuilding: null, // set while embedded on one building's page
+    lockedBuildingName: "",
     tab: "schedules",
     buildingId: null,
     loading: false,
@@ -105,8 +107,11 @@ export function createSchedules(deps) {
 
   async function loadBuilding() {
     const buildings = activeBuildings();
-    if (!buildings.length) return;
-    if (!buildings.some((b) => b.id === S.buildingId)) S.buildingId = buildings[0].id;
+    if (S.lockedBuilding != null) S.buildingId = S.lockedBuilding;
+    else {
+      if (!buildings.length) return;
+      if (!buildings.some((b) => b.id === S.buildingId)) S.buildingId = buildings[0].id;
+    }
     S.loading = true;
     S.error = "";
     rerender();
@@ -123,6 +128,7 @@ export function createSchedules(deps) {
       if (S.tab === "proof") await loadProof(false);
     } catch (error) {
       S.error = error.message;
+      S.loadedFor = S.buildingId; // show the error instead of retrying forever
     }
     S.loading = false;
     rerender();
@@ -143,15 +149,19 @@ export function createSchedules(deps) {
   }
 
   // ---------- manager: rendering ----------
-  function renderManagerCard() {
+  function renderManagerCard({ embedded = false } = {}) {
     const buildings = activeBuildings();
-    const body = !S.open
+    const locked = S.lockedBuilding != null;
+    const open = embedded || S.open;
+    const body = !open
       ? ""
-      : !buildings.length
+      : !buildings.length && !locked
         ? `<p class="empty-state sch-pad">Register and activate a building first — schedules belong to a building.</p>`
         : `<div class="sch-body">
             ${
-              buildings.length > 1
+              locked
+                ? ""
+                : buildings.length > 1
                 ? `<label class="inspection-field sch-building"><span>Building</span>
                     <select data-sch-f="building">${buildings.map((b) => `<option value="${b.id}" ${b.id === S.buildingId ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label>`
                 : `<p class="quiet-label sch-building-name">${esc(buildings[0].name)}</p>`
@@ -163,8 +173,9 @@ export function createSchedules(deps) {
             </div>
             ${S.notice ? `<p id="sch-notice" class="sch-notice sch-notice--${S.notice.type}" role="${S.notice.type === "err" ? "alert" : "status"}">${esc(S.notice.text)}</p>` : ""}
             ${S.error ? `<p class="form-error" role="alert">${esc(S.error)}</p>` : ""}
-            ${S.loading && S.loadedFor === null ? `<p class="sch-loading">Loading…</p>` : S.tab === "schedules" ? renderSchedulesTab() : S.tab === "proof" ? renderProofTab() : renderTeamTab()}
+            ${(S.loadedFor === null && !S.error) || (S.loading && S.loadedFor !== S.buildingId) ? `<p class="sch-loading">Loading…</p>` : S.tab === "schedules" ? renderSchedulesTab() : S.tab === "proof" ? renderProofTab() : renderTeamTab()}
           </div>`;
+    if (embedded) return `<section class="sch-card sch-card--embedded" id="sch-card">${body}</section>`;
     return `
       <section class="card sch-card ${S.open ? "is-open" : ""}" id="sch-card" aria-labelledby="sch-title">
         <div class="card__header">
@@ -933,5 +944,24 @@ export function createSchedules(deps) {
     // True while a half-filled editor or an upload is open: callers skip
     // background re-renders that would wipe it.
     isBusy: () => Boolean(S.draft) || S.work.busy,
+    // Today's checklist numbers for a tab badge, or null when this person has no tasks.
+    taskSummary: () => (S.mine && S.mine.tasks.length ? S.mine.summary : null),
+    // Mid-task (camera flow open) -- keep the tasks screen showing.
+    isWorking: () => S.work.taskId != null,
+    // Called after a render that shows the embedded tool: lock it to one
+    // building (or null = the manager's own picker) and load if needed.
+    activate(buildingId = null) {
+      if ((S.lockedBuilding ?? null) !== buildingId) {
+        S.lockedBuilding = buildingId;
+        S.loadedFor = null;
+        S.draft = null;
+        S.notice = null;
+        S.proof = { date: null, data: null, loading: false, error: "" };
+        if (buildingId != null) S.buildingId = buildingId;
+      }
+      if (S.loading) return;
+      if (S.loadedFor !== null && S.loadedFor === S.buildingId) return;
+      loadBuilding();
+    },
   };
 }

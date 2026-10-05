@@ -13,7 +13,7 @@
 import { storePhoto } from "./photos.js";
 import { findOwnedBuilding, VISION_MODEL } from "./buildings.js";
 import { haversineMeters, LOCATION_MISMATCH_THRESHOLD_M } from "./group-photos.js";
-import { cleanDesignation, DESIGNATION_PRESETS, STAFF_KIND_CLEANER } from "./roles.js";
+import { cleanDesignation, DESIGNATION_PRESETS } from "./roles.js";
 
 const TZ = "America/Toronto";
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -279,7 +279,7 @@ async function validateAssignees(env, buildingId, ids) {
   if (!wanted.length) return [];
   const rows = (
     await env.DB.prepare(
-      `SELECT id FROM users WHERE id IN (${wanted.map(() => "?").join(",")}) AND building_id = ? AND role = 'superintendent' AND is_active = 1`,
+      `SELECT id FROM users WHERE id IN (${wanted.map(() => "?").join(",")}) AND building_id = ? AND role IN ('superintendent', 'cleaner') AND is_active = 1`,
     )
       .bind(...wanted, buildingId)
       .all()
@@ -349,7 +349,7 @@ export async function handleScheduleList(request, session, env, corsHeaders) {
        FROM schedule_tasks WHERE schedule_id IN (${ph}) AND active = 1 ORDER BY sort_order, id`,
     ).bind(...ids).all(),
     env.DB.prepare(
-      `SELECT sa.schedule_id, u.id, u.full_name, u.staff_kind, u.designation
+      `SELECT sa.schedule_id, u.id, u.full_name, u.role, u.designation
        FROM schedule_assignees sa JOIN users u ON u.id = sa.user_id WHERE sa.schedule_id IN (${ph})`,
     ).bind(...ids).all(),
   ]);
@@ -362,7 +362,7 @@ export async function handleScheduleList(request, session, env, corsHeaders) {
         tasks: tasks.results.filter((t) => t.schedule_id === s.id).map((t) => ({ ...t, enforce_times: t.enforce_times === null ? null : t.enforce_times === 1 })),
         assignees: assignees.results
           .filter((a) => a.schedule_id === s.id)
-          .map((a) => ({ id: a.id, fullName: a.full_name, kind: a.staff_kind === STAFF_KIND_CLEANER ? "cleaner" : "superintendent", designation: a.designation })),
+          .map((a) => ({ id: a.id, fullName: a.full_name, kind: a.role, designation: a.designation })),
       })),
     },
     corsHeaders,
@@ -447,7 +447,7 @@ export async function handleScheduleCompletions(request, session, env, corsHeade
        WHERE s.building_id = ? AND s.status = 'active' AND t.active = 1 ORDER BY t.sort_order, t.id`,
     ).bind(building.id).all(),
     env.DB.prepare(
-      `SELECT c.id, c.task_id, c.status, c.started_at, c.completed_at, c.late, c.required_general, c.required_detail, u.full_name, u.staff_kind, u.designation
+      `SELECT c.id, c.task_id, c.status, c.started_at, c.completed_at, c.late, c.required_general, c.required_detail, u.full_name, u.role, u.designation
        FROM task_completions c JOIN users u ON u.id = c.user_id WHERE c.building_id = ? AND c.date = ?`,
     ).bind(building.id, date).all(),
   ]);
@@ -488,7 +488,7 @@ export async function handleScheduleCompletions(request, session, env, corsHeade
         requiredGeneral: c?.required_general ?? eff.general,
         requiredDetail: c?.required_detail ?? eff.detail,
         status,
-        completedBy: c ? { name: c.full_name, designation: c.designation, kind: c.staff_kind === STAFF_KIND_CLEANER ? "cleaner" : "superintendent" } : null,
+        completedBy: c ? { name: c.full_name, designation: c.designation, kind: c.role } : null,
         completedAt: c?.completed_at || null,
         startedAt: c?.started_at || null,
         late: c?.late === 1,
@@ -521,13 +521,13 @@ export async function handleStaffList(request, session, env, corsHeaders) {
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
   const rows = (
     await env.DB.prepare(
-      `SELECT id, full_name, job_title, staff_kind, designation, status FROM users
-       WHERE building_id = ? AND role = 'superintendent' AND is_active = 1 AND removed_at IS NULL ORDER BY staff_kind IS NOT NULL, full_name`,
+      `SELECT id, full_name, job_title, role, designation, status FROM users
+       WHERE building_id = ? AND role IN ('superintendent', 'cleaner') AND is_active = 1 AND removed_at IS NULL ORDER BY role = 'cleaner', full_name`,
     ).bind(building.id).all()
   ).results;
   return jsonOk(
     {
-      staff: rows.map((r) => ({ id: r.id, fullName: r.full_name, kind: r.staff_kind === STAFF_KIND_CLEANER ? "cleaner" : "superintendent", designation: r.designation })),
+      staff: rows.map((r) => ({ id: r.id, fullName: r.full_name, kind: r.role, designation: r.designation })),
       presets: DESIGNATION_PRESETS,
     },
     corsHeaders,
@@ -539,18 +539,18 @@ export async function handleStaffUpdate(request, session, env, corsHeaders) {
   if (deny) return deny;
   const body = await request.json().catch(() => ({}));
   const userId = Number.parseInt(body.userId, 10);
-  const target = await env.DB.prepare("SELECT id, building_id, staff_kind FROM users WHERE id = ? AND role = 'superintendent' AND is_active = 1").bind(userId).first();
+  const target = await env.DB.prepare("SELECT id, building_id, role FROM users WHERE id = ? AND role IN ('superintendent', 'cleaner') AND is_active = 1").bind(userId).first();
   if (!target?.building_id || !(await findOwnedBuilding(env, session, target.building_id, "id"))) {
     return jsonError("Person not found.", 404, corsHeaders);
   }
   // Role: a Cleaner or a Superintendent. The designation (light duty,
   // assistant superintendent, ...) is a free-text variant on top of either.
-  const kind = body.kind === "cleaner" ? STAFF_KIND_CLEANER : body.kind === "superintendent" ? null : target.staff_kind;
+  const role = body.kind === "cleaner" || body.kind === "superintendent" ? body.kind : target.role;
   const designation = body.designation !== undefined ? cleanDesignation(body.designation) : undefined;
   await env.DB.prepare(
-    `UPDATE users SET staff_kind = ?, job_title = ?, designation = ${designation === undefined ? "designation" : "?"} WHERE id = ?`,
+    `UPDATE users SET role = ?, job_title = ?, designation = ${designation === undefined ? "designation" : "?"} WHERE id = ?`,
   )
-    .bind(kind, kind === STAFF_KIND_CLEANER ? "Cleaner" : "Superintendent", ...(designation === undefined ? [] : [designation]), userId)
+    .bind(role, role === "cleaner" ? "Cleaner" : "Superintendent", ...(designation === undefined ? [] : [designation]), userId)
     .run();
   return jsonOk({ ok: true }, corsHeaders);
 }

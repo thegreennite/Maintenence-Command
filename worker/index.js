@@ -38,6 +38,7 @@ import {
   handleDeletedBuildingsList,
   handleRestoreBuilding,
   purgeExpiredBuildings,
+  purgeExpiredAccounts,
 } from "./building-deletion.js";
 import {
   handleRemoveAccount,
@@ -60,7 +61,6 @@ import { handleCreateNotice, handleDeleteNotice } from "./notices.js";
 import { handleUpdateProfile } from "./profile.js";
 import { needsVerification, sendVerificationCode, verifyCode } from "./two-factor.js";
 import { canSeeAllBuildings } from "./access.js";
-import { effectiveRole } from "./roles.js";
 import {
   handleScheduleAnalyze,
   handleScheduleCreate,
@@ -692,11 +692,14 @@ export default {
     // The 21:00 and 22:00 UTC triggers both fire every day (wrangler.toml)
     // -- one of them is 5 PM Toronto in winter, the other in summer, and
     // a fixed UTC cron can't follow daylight saving. So each one does the
-    // daily housekeeping (idempotent: anything an admin soft-deleted more
-    // than 30 days ago is purged) and then only sends the weekly report
+    // daily housekeeping (idempotent: anything an admin soft-deleted or
+    // removed more than 30 days ago is purged) and then only sends the weekly report
     // if it's genuinely Friday 5 PM in Toronto right now.
     ctx.waitUntil(
       purgeExpiredBuildings(env).catch((error) => console.error("Building purge cron failed", error)),
+    );
+    ctx.waitUntil(
+      purgeExpiredAccounts(env).catch((error) => console.error("Account purge cron failed", error)),
     );
 
     const parts = Object.fromEntries(
@@ -754,7 +757,7 @@ async function handleLogin(request, env, corsHeaders) {
   // still needs to verify its password before we say anything about status,
   // so a wrong-password guess against a real email doesn't confirm it exists.
   const user = await db.prepare(
-    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id, is_active, removed_at, classification, staff_kind, designation
+    `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id, is_active, removed_at, classification, designation
      FROM users WHERE username = ?`,
   )
     .bind(username)
@@ -815,7 +818,7 @@ async function handleVerifyCode(request, env, corsHeaders) {
   if (!result.ok) return json({ error: result.error }, 401, corsHeaders);
 
   const user = await db.prepare(
-    `SELECT id, username, full_name, job_title, role, region, building_id, building_access, status, classification, staff_kind, designation FROM users WHERE id = ?`,
+    `SELECT id, username, full_name, job_title, role, region, building_id, building_access, status, classification, designation FROM users WHERE id = ?`,
   )
     .bind(result.userId)
     .first();
@@ -942,12 +945,13 @@ async function handleAccounts(session, env, corsHeaders) {
   }
 
   const result = await env.DB.prepare(
-    `SELECT id, username, full_name, job_title, role, region, classification, staff_kind, designation
+    `SELECT id, username, full_name, job_title, role, region, classification, designation
      FROM users WHERE is_active = 1 AND role != 'admin'
      ORDER BY CASE role
        WHEN 'regional_manager' THEN 1
        WHEN 'superintendent' THEN 2
-       ELSE 3 END, full_name`,
+       WHEN 'cleaner' THEN 3
+       ELSE 4 END, full_name`,
   ).all();
 
   return json(
@@ -976,14 +980,14 @@ async function handleImpersonate(request, session, env, corsHeaders) {
 
   const target = isAdmin
     ? await env.DB.prepare(
-        `SELECT id, username, full_name, job_title, role, region, staff_kind, designation
+        `SELECT id, username, full_name, job_title, role, region, designation
          FROM users WHERE id = ? AND is_active = 1 AND role != 'admin'`,
       )
         .bind(userId)
         .first()
     : await env.DB.prepare(
-        `SELECT id, username, full_name, job_title, role, region, staff_kind, designation
-         FROM users WHERE id = ? AND is_active = 1 AND role = 'superintendent' AND staff_kind IS NULL AND region = ?`,
+        `SELECT id, username, full_name, job_title, role, region, designation
+         FROM users WHERE id = ? AND is_active = 1 AND role = 'superintendent' AND region = ?`,
       )
         .bind(userId, session.actor_region)
         .first();
@@ -1037,10 +1041,10 @@ async function requireSession(request, env) {
 
   const session = await db.prepare(
     `SELECT s.id AS session_id, s.expires_at, s.last_seen_at,
-       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification, u.client_id, u.staff_kind, u.designation,
+       u.id, u.username, u.full_name, u.job_title, u.role, u.region, u.building_id, u.building_access, u.classification, u.client_id, u.designation,
        actor.id AS actor_id, actor.username AS actor_username,
        actor.full_name AS actor_full_name, actor.job_title AS actor_job_title,
-       actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access, actor.staff_kind AS actor_staff_kind
+       actor.role AS actor_role, actor.region AS actor_region, actor.building_access AS actor_building_access
      FROM sessions s
      JOIN users u ON u.id = s.user_id AND u.is_active = 1
      JOIN users actor ON actor.id = s.actor_user_id AND actor.is_active = 1
@@ -1076,10 +1080,6 @@ async function requireSession(request, env) {
   // ids happen to coincidentally both be 1).
   session.companyId = clientId;
   session.__db = db;
-  // A Cleaner is stored as a superintendent row (see worker/roles.js);
-  // every route guard below sees it as its own role.
-  session.role = effectiveRole(session);
-  session.actor_role = effectiveRole({ role: session.actor_role, staff_kind: session.actor_staff_kind });
   return session;
 }
 
@@ -1219,7 +1219,7 @@ function displayRoleLabel(role, buildingAccess) {
 }
 
 function publicUser(user) {
-  const role = effectiveRole(user);
+  const role = user.role;
   return {
     id: user.id,
     username: user.username,
@@ -1244,7 +1244,6 @@ function actorUser(session) {
     role: session.actor_role,
     region: session.actor_region,
     building_access: session.actor_building_access,
-    staff_kind: session.actor_staff_kind,
   });
 }
 

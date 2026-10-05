@@ -74,7 +74,7 @@ export async function handleManagerSuperintendents(session, env, corsHeaders) {
   const result = await env.DB.prepare(
     `SELECT u.id, u.full_name, b.name AS building_name
      FROM users u JOIN buildings b ON b.id = u.building_id
-     WHERE u.role = 'superintendent' AND u.staff_kind IS NULL AND u.is_active = 1 AND ${clientScopeSql("b")} ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`}
+     WHERE u.role = 'superintendent' AND u.is_active = 1 AND ${clientScopeSql("b")} ${scoped ? "" : `AND ${ownedOrSharedSql("b")}`}
      ORDER BY u.full_name`,
   )
     .bind(clientId, ...(scoped ? [] : [session.id, session.id]))
