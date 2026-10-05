@@ -1047,3 +1047,17 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .super-overview__grid { grid-template-columns: 1fr; gap: 18px; }
   .super-metrics__stat { flex-basis: 100%; }
 }
+
+/* ---- Scrolled-to notices ---------------------------------------------
+   Leave room under the sticky top bar, and pulse the element so the eye
+   finds it after the scroll (green for success, red for errors). */
+.form-error, .tag-delete-confirm, .inspection-locked-note, .delete-building-panel, .wizard, .photo-capture__status { scroll-margin: 96px 0 24px; }
+.notice-attention { animation: notice-attention 1.5s ease-out 1; }
+.inspection-locked-note { --attention: rgba(43, 128, 101, .55); }
+.form-error, .tag-delete-confirm { --attention: rgba(216, 75, 62, .5); }
+@keyframes notice-attention {
+  0% { box-shadow: 0 0 0 0 var(--attention, rgba(43, 128, 101, .55)); }
+  70% { box-shadow: 0 0 0 14px rgba(0, 0, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .notice-attention { animation: none; } }

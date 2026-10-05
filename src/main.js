@@ -1013,6 +1013,86 @@ function stopAdminStatsAutoRefresh() {
   adminStatsRefreshTimer = null;
 }
 
+// ---------------------------------------------------------------------
+// Scrolling to whatever just happened. On a phone a long page means the
+// result of a button (a green "submitted" note, a red error, an "are you
+// sure?") often lands off-screen and looks like nothing happened. Anything
+// that matters is scrolled into view smoothly and pulses briefly; a button
+// that switches to a different screen takes you back to the top.
+// ---------------------------------------------------------------------
+const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+let lastPressAt = 0;
+let pendingScroll = null;
+let lastViewKey = null;
+
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+}
+
+function scrollToNotice(target, { block = "center" } = {}) {
+  const el = typeof target === "string" ? document.querySelector(target) : target;
+  if (!el) return;
+  el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block });
+  el.classList.remove("notice-attention");
+  void el.offsetWidth; // restart the pulse if it's already running
+  el.classList.add("notice-attention");
+  setTimeout(() => el.classList.remove("notice-attention"), 1600);
+}
+
+// Queued before a render, run right after it -- the element being
+// scrolled to doesn't exist until renderApp() has rebuilt the page.
+function queueScroll(target, options) {
+  pendingScroll = { target, options };
+}
+
+function flushPendingScroll() {
+  if (!pendingScroll) return;
+  const { target, options } = pendingScroll;
+  pendingScroll = null;
+  // Two frames: the first lets layout settle after innerHTML, the second
+  // lets images/fonts shift things before measuring where to go.
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => (target === "top" ? scrollToTop() : scrollToNotice(target, options))),
+  );
+}
+
+document.addEventListener(
+  "click",
+  (event) => {
+    if (event.target.closest?.("button, [type=submit], .button, summary, label.button")) lastPressAt = Date.now();
+  },
+  true,
+);
+
+// Errors and confirmation prompts are usually shown by flipping `hidden`
+// or filling in text on an element that already exists, not by a render,
+// so watch for those and bring them into view -- but only soon after a
+// button press, so nothing ever scrolls on its own.
+const FEEDBACK_SELECTOR = ".form-error:not([hidden]), .tag-delete-confirm:not([hidden]), .delete-building-panel, .photo-capture__status--warning";
+let lastFeedbackEl = null;
+let lastFeedbackAt = 0;
+new MutationObserver((records) => {
+  if (Date.now() - lastPressAt > 45000) return;
+  let hit = null;
+  for (const record of records) {
+    const nodes = record.type === "attributes" ? [record.target] : [record.target, ...record.addedNodes];
+    for (const node of nodes) {
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      if (!el) continue;
+      const found = el.matches?.(FEEDBACK_SELECTOR) ? el : el.closest?.(FEEDBACK_SELECTOR) || el.querySelector?.(FEEDBACK_SELECTOR);
+      if (found && found.textContent.trim()) {
+        hit = found;
+        break;
+      }
+    }
+    if (hit) break;
+  }
+  if (!hit || (hit === lastFeedbackEl && Date.now() - lastFeedbackAt < 1500)) return;
+  lastFeedbackEl = hit;
+  lastFeedbackAt = Date.now();
+  requestAnimationFrame(() => scrollToNotice(hit));
+}).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
+
 function renderApp() {
   const { user, actor, isImpersonating, isAgency } = state.session;
   const isAgencyBroadView = user.role === "agency";
@@ -1061,8 +1141,15 @@ function renderApp() {
   document.querySelector("#return-admin")?.addEventListener("click", handleReturnToAdmin);
   document.querySelector("#exit-agency-client")?.addEventListener("click", handleExitAgencyClient);
   document.querySelector("#open-profile-edit")?.addEventListener("click", () => renderProfileEditModal(user));
+  // A button that moves you to a different screen (open a building, start
+  // or leave command mode, switch company) starts that screen at the top.
+  const viewKey = state.commandMode?.active ? "command" : state.buildingWorld ? `world-${state.buildingWorld.buildingId}` : isAgencyBroadView ? "agency" : "dashboard";
+  if (lastViewKey !== null && viewKey !== lastViewKey && !pendingScroll && Date.now() - lastPressAt < 30000) queueScroll("top");
+  lastViewKey = viewKey;
+
   if (isAgencyBroadView) {
     bindAgencyClientsEvents();
+    flushPendingScroll();
     return;
   }
   if (state.commandMode?.active) {
@@ -1070,6 +1157,7 @@ function renderApp() {
   } else {
     bindDashboardEvents();
   }
+  flushPendingScroll();
 }
 
 function renderAgencyClients() {
@@ -1617,6 +1705,9 @@ function renderBuildingWizard(wizard) {
   const previous = lastWizardIndex;
   lastWizardIndex = index;
   const entering = previous !== index;
+  // Each step (and the final "all set") scrolls into view so the new
+  // panel is what's on screen after tapping Next, not the step below it.
+  if (entering) queueScroll(".wizard", { block: "start" });
 
   let panel = "";
   if (wizard.step === "form") panel = renderBuildingForm();
@@ -5523,6 +5614,10 @@ async function submitInspection(form) {
         await api.inspectionHistory(state.inspection.building.id).catch(() => ({ submissions: state.buildingWorldHistory }))
       ).submissions;
     }
+    // The form re-renders locked with a green "Submitted" note at its
+    // bottom -- on a phone that's well off-screen from the button just
+    // pressed, so take them to it.
+    queueScroll(".inspection-locked-note");
     renderApp();
   } catch (requestError) {
     if (error) {
