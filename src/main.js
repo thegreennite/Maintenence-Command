@@ -3,6 +3,7 @@ import { installCameraCapture, liveCaptureTime, showPhotoFeedback } from "./came
 installCameraCapture();
 import { jsPDF } from "jspdf";
 import { createSchedules } from "./schedules.js";
+import { plausibilityFlag } from "../shared/plausibility.js";
 
 // Google Maps JS API loads as a global script, not an npm module — lazily
 // injected the first time a map is actually shown, and cached so repeat
@@ -302,6 +303,9 @@ const api = {
   updateProfile(payload) {
     return this.request("/profile", { method: "POST", body: JSON.stringify(payload) });
   },
+  reverseGeocode(lat, lon) {
+    return this.request(`/geocode/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
+  },
   photoViewUrl(key, buildingId) {
     return `${API_BASE}/api/photos/view?key=${encodeURIComponent(key)}&buildingId=${buildingId}`;
   },
@@ -462,6 +466,7 @@ function icon(name) {
     archive: '<path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/>',
     list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
     tasks: '<path d="m4 7 2 2 3-3M4 17l2 2 3-3M13 8h8M13 18h8"/>',
+    pin: '<path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0Z"/><circle cx="12" cy="10" r="3"/>',
   };
   return `<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] || paths.command}</svg>`;
 }
@@ -1166,6 +1171,7 @@ function renderApp() {
   const activations = pendingActivations;
   pendingActivations = [];
   if (activations.length) setTimeout(() => activations.forEach((run) => run()), 0);
+  if (state.session.user.role === "regional_manager" || state.session.user.role === "admin") setTimeout(hydrateGeoAddresses, 0);
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
   document.querySelector("#return-admin")?.addEventListener("click", handleReturnToAdmin);
@@ -3992,7 +3998,7 @@ function renderMachineZone(group, tags, world) {
       <div class="machine-zone__meta">
         ${
           group.requires_photo
-            ? `<span class="machine-photo-badge ${todayPhoto ? "machine-photo-badge--done" : "machine-photo-badge--missing"}" title="${todayPhoto ? `Photographed ${escapeHtml(formatTimestamp(todayPhoto.captured_at))}` : "No photo yet today"}">${todayPhoto ? icon("check") : icon("camera")} ${todayPhoto ? "Photo taken today" : "No photo today"}</span>`
+            ? `<span class="machine-photo-badge ${todayPhoto ? "machine-photo-badge--done" : "machine-photo-badge--missing"}" title="${todayPhoto ? `Photographed ${escapeHtml(formatTimestamp(todayPhoto.captured_at))}` : "No photo yet today"}">${todayPhoto ? icon("check") : icon("camera")} ${todayPhoto ? `Photo taken ${escapeHtml(formatClockTime(todayPhoto.captured_at))}` : "No photo today"}</span>${todayPhoto ? photoMetaHtml({ capturedAt: todayPhoto.captured_at, latitude: todayPhoto.latitude, longitude: todayPhoto.longitude, geoOnly: true }) : ""}`
             : ""
         }
         <label class="require-photo-toggle" title="Whether this machine needs a timestamped photo before the day can be submitted">
@@ -4339,7 +4345,7 @@ function renderPhotoLibraryCard(defaultBuildingId, buildingOptions) {
                     .map((p) =>
                       p.key.toLowerCase().endsWith(".pdf")
                         ? `<a href="${api.photoViewUrl(p.key, lib.buildingId)}" target="_blank" rel="noopener" class="photo-library__thumb photo-library__thumb--file">${icon("file")}<span>PDF · ${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`
-                        : `<a href="${api.photoViewUrl(p.key, lib.buildingId)}" target="_blank" rel="noopener" class="photo-library__thumb"><img src="${api.photoViewUrl(p.key, lib.buildingId)}" alt="" loading="lazy" /><span>${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`,
+                        : `<a href="${api.photoViewUrl(p.key, lib.buildingId)}" target="_blank" rel="noopener" class="photo-library__thumb"><img src="${api.photoViewUrl(p.key, lib.buildingId)}" alt="" loading="lazy" />${photoMetaHtml(p)}</a>`,
                     )
                     .join("")
                 : lib.selectedDate
@@ -4874,6 +4880,73 @@ function formatInspectionDate(isoDate) {
   return date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 }
 
+// When a photo was taken (clock time, Toronto) -- a short form for badges.
+function formatClockTime(isoValue) {
+  if (!isoValue) return "";
+  const normalized = /[TZ]/.test(isoValue) ? isoValue : `${isoValue.replace(" ", "T")}Z`;
+  return new Date(normalized).toLocaleTimeString("en-US", { timeZone: "America/Toronto", hour: "numeric", minute: "2-digit" });
+}
+
+// ---------------------------------------------------------------------
+// Where and when a photo was taken, for the manager side: the capture time
+// and the street address of the phone's GPS fix. Addresses are looked up
+// (and cached by the server) lazily after each render -- see
+// hydrateGeoAddresses -- so a page full of photos doesn't wait on them.
+// ---------------------------------------------------------------------
+const geoAddressCache = new Map(); // "lat,lon" -> address string | "" (lookup failed)
+const geoKey = (lat, lon) => `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+
+// p: { capturedAt?, uploadedAt?, latitude?, longitude?, distanceM?, geoOnly? }
+function photoMetaHtml(p) {
+  const hasGeo = p.latitude != null && p.longitude != null;
+  let geo = "";
+  if (hasGeo) {
+    const key = geoKey(p.latitude, p.longitude);
+    const known = geoAddressCache.get(key);
+    const text = known ? known : known === "" ? formatCoords(p.latitude, p.longitude) : "Finding address…";
+    geo = `<span class="photo-meta__geo">${icon("pin")}<span data-geo-lat="${Number(p.latitude)}" data-geo-lon="${Number(p.longitude)}" ${known !== undefined ? "data-geo-done" : ""}>${escapeHtml(text)}</span>${
+      p.distanceM != null ? `<span class="photo-meta__away ${p.distanceM > 150 ? "is-far" : ""}">${p.distanceM > 150 ? `${p.distanceM} m from the building` : "at the building"}</span>` : ""
+    }</span>`;
+  } else if (p.capturedAt && !p.geoOnly) {
+    geo = `<span class="photo-meta__geo photo-meta__geo--none">No location recorded</span>`;
+  }
+  if (p.geoOnly) return `<span class="photo-meta photo-meta--inline">${geo}</span>`;
+  const time = p.capturedAt
+    ? `<span class="photo-meta__time">${icon("clock")}Taken ${escapeHtml(formatTimestamp(p.capturedAt))}</span>`
+    : p.uploadedAt
+      ? `<span class="photo-meta__time">${icon("clock")}Uploaded ${escapeHtml(formatTimestamp(p.uploadedAt))}</span>`
+      : "";
+  return `<span class="photo-meta">${time}${geo}</span>`;
+}
+
+let geoHydrating = false;
+async function hydrateGeoAddresses() {
+  if (geoHydrating) return;
+  geoHydrating = true;
+  try {
+    for (let guard = 0; guard < 60; guard++) {
+      const pending = document.querySelector("[data-geo-lat]:not([data-geo-done])");
+      if (!pending) break;
+      const lat = pending.dataset.geoLat;
+      const lon = pending.dataset.geoLon;
+      const key = geoKey(lat, lon);
+      if (!geoAddressCache.has(key)) {
+        const result = await api.reverseGeocode(lat, lon).catch(() => null);
+        geoAddressCache.set(key, result?.address || "");
+      }
+      const address = geoAddressCache.get(key);
+      // Every span for this spot -- the page may have re-rendered meanwhile.
+      document.querySelectorAll("[data-geo-lat]:not([data-geo-done])").forEach((el) => {
+        if (geoKey(el.dataset.geoLat, el.dataset.geoLon) !== key) return;
+        el.textContent = address || formatCoords(Number(lat), Number(lon));
+        el.dataset.geoDone = "1";
+      });
+    }
+  } finally {
+    geoHydrating = false;
+  }
+}
+
 function formatTimestamp(isoValue) {
   if (!isoValue) return "";
   // Every timestamp column in this app (submitted_at, created_at, etc.)
@@ -4947,6 +5020,9 @@ function clientFlagFor(tag, rawValue) {
   return num >= parameter.min - buffer && num <= parameter.max + buffer ? "yellow" : "red";
 }
 
+// A manager's own min/max already decides what's normal for this reading.
+const hasManagerRange = (tag) => tag.parameter?.min != null && tag.parameter?.max != null;
+
 function findFlaggedReadings(readings) {
   return state.inspection.tags
     .map((tag) => {
@@ -4964,6 +5040,10 @@ function findFlaggedReadings(readings) {
         const avg = Math.round(tag.history.avg * 10) / 10;
         return { tag, value, flag: "trend", detail: `Usually about ${avg}${tag.unit ? ` ${tag.unit}` : ""}` };
       }
+      // Common-sense check: runs for every numeric reading, including the
+      // ones with no range and no history -- 1000000 on an RPM gauge.
+      const odd = !hasManagerRange(tag) && plausibilityFlag(tag, value, tag.last_value);
+      if (odd) return { tag, value, flag: "check", detail: odd.detail };
       return null;
     })
     .filter(Boolean);
@@ -5431,6 +5511,13 @@ async function commandModeAcceptValue(tagId, rawValue, { photoKey } = {}) {
     renderApp();
     return;
   }
+  const odd = !hasManagerRange(tag) && plausibilityFlag(tag, rawValue, tag.last_value);
+  if (odd) {
+    cm.abnormalPrompt = { tagId, value: rawValue, basis: "plausibility", detail: odd.detail };
+    cm.entryMode = "choose";
+    renderApp();
+    return;
+  }
 
   await commandModeAfterValueSettled();
 }
@@ -5789,7 +5876,7 @@ function renderCommandModeAbnormal(prompt, tag) {
       <p class="command-mode__scan-note">${icon("warning")} ${escapeHtml(prompt.detail)}</p>
       <div class="command-mode__manual-actions">
         <button type="button" class="button button--outline" id="command-mode-abnormal-incorrect">Incorrect — re-enter</button>
-        <button type="button" class="button button--primary" id="command-mode-abnormal-confirm">Confirm as normal</button>
+        <button type="button" class="button button--primary" id="command-mode-abnormal-confirm">${prompt.basis === "plausibility" ? "Yes, that's the real reading" : "Confirm as normal"}</button>
       </div>
     </div>`;
 }
@@ -6976,6 +7063,7 @@ const schedules = createSchedules({
   rerender: () => renderApp(),
   getBuildings: () => state.managerBuildings,
   photoUrl: (key, buildingId) => api.photoViewUrl(key, buildingId),
+  photoMeta: (p) => photoMetaHtml(p),
   prepareSheetPage,
   getGeolocation,
   liveCaptureTime,

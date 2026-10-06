@@ -10,6 +10,8 @@
 // pressure, 5 points for a percentage. Manager-set min/max still win
 // when they exist, and apply from day one.
 
+import { plausibilityFlag } from "../shared/plausibility.js";
+
 export const MIN_BASELINE_DAYS = 3;
 export const BASELINE_WINDOW_DAYS = 7;
 
@@ -109,6 +111,30 @@ export async function loadBaselines(env, buildingId, date) {
   return baselines;
 }
 
+// The most recent submitted value of every numeric reading before `date`
+// (looking back two weeks) -- what the "does that number make sense?"
+// check compares against, so even a reading with no 3-day baseline yet
+// can be sanity-checked against the last time it was read.
+export async function loadLastValues(env, buildingId, date) {
+  const result = await env.DB.prepare(
+    `SELECT r.tag_id, r.value
+     FROM inspection_readings r
+     JOIN inspection_submissions s ON s.id = r.submission_id
+     JOIN inspection_tags t ON t.id = r.tag_id
+     WHERE s.building_id = ? AND s.status = 'submitted'
+       AND s.inspection_date >= date(?, '-14 days') AND s.inspection_date < ?
+       AND t.answer_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
+     ORDER BY s.inspection_date DESC`,
+  )
+    .bind(buildingId, date, date)
+    .all();
+  const last = {};
+  for (const row of result.results) {
+    if (last[row.tag_id] === undefined && Number.isFinite(Number.parseFloat(String(row.value).replace(/,/g, "")))) last[row.tag_id] = row.value;
+  }
+  return last;
+}
+
 // Returns null when the reading is fine (or can't be judged), otherwise
 // { basis, baseline, change, tolerance, detail }.
 //   tag: { unit, reading_type, value_type, monitor_trend, parameter }
@@ -137,7 +163,11 @@ export function evaluateDeviation(tag, rawValue, baseline) {
   }
 
   if (tag.value_type && tag.value_type !== "numeric") return null;
-  if (!baseline || !trendMonitored(tag)) return null;
+  const sanity = () => {
+    const odd = plausibilityFlag(tag, value, tag.last_value);
+    return odd ? { basis: "plausibility", detail: odd.detail } : null;
+  };
+  if (!baseline || !trendMonitored(tag)) return sanity();
   const num = Number.parseFloat(value);
   if (Number.isNaN(num)) return null;
 
@@ -149,7 +179,7 @@ export function evaluateDeviation(tag, rawValue, baseline) {
   // >= : "50 vs 53" is exactly a 3-degree gap and must flag; readings
   // here are mostly whole numbers, so a strict > would let the boundary
   // case straight through.
-  if (Math.abs(num - baseline.avg) < threshold) return null;
+  if (Math.abs(num - baseline.avg) < threshold) return sanity();
   return {
     basis: "trend",
     baseline: Math.round(baseline.avg * 100) / 100,

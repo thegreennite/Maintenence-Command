@@ -117,12 +117,30 @@ export async function handlePhotoList(request, session, env, corsHeaders) {
   const allowed = await resolveAllowedBuildingIds(session, env, buildingId);
   if (!allowed.length || !date) return jsonError("Not found.", 404, corsHeaders);
 
+  // Machine photos and schedule-task photos also carry when they were taken
+  // and where (GPS), recorded on the phone at the moment of capture.
   const result = await env.DB.prepare(
-    "SELECT location, context, created_at FROM photos WHERE building_id = ? AND date = ? ORDER BY created_at DESC",
+    `SELECT p.location, p.context, p.created_at,
+       COALESCE(gp.captured_at, tp.captured_at) AS captured_at,
+       COALESCE(gp.latitude, tp.latitude) AS latitude,
+       COALESCE(gp.longitude, tp.longitude) AS longitude,
+       COALESCE(gp.distance_from_building_m, tp.distance_from_building_m) AS distance_m
+     FROM photos p
+     LEFT JOIN group_photos gp ON gp.photo_key = p.location
+     LEFT JOIN task_photos tp ON tp.photo_key = p.location
+     WHERE p.building_id = ? AND p.date = ? ORDER BY p.created_at DESC`,
   )
     .bind(buildingId, date)
     .all();
-  const photos = result.results.map((r) => ({ key: r.location, uploadedAt: r.created_at, context: r.context }));
+  const photos = result.results.map((r) => ({
+    key: r.location,
+    uploadedAt: r.created_at,
+    context: r.context,
+    capturedAt: r.captured_at || null,
+    latitude: r.latitude ?? null,
+    longitude: r.longitude ?? null,
+    distanceM: r.distance_m ?? null,
+  }));
   return jsonOk({ photos }, corsHeaders);
 }
 

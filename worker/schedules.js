@@ -456,7 +456,7 @@ export async function handleScheduleCompletions(request, session, env, corsHeade
   const photoRows = completions.results.length
     ? (
         await env.DB.prepare(
-          `SELECT id, completion_id, kind, photo_key, captured_at, distance_from_building_m FROM task_photos
+          `SELECT id, completion_id, kind, photo_key, captured_at, latitude, longitude, distance_from_building_m FROM task_photos
            WHERE completion_id IN (${completions.results.map(() => "?").join(",")}) ORDER BY id`,
         ).bind(...completions.results.map((c) => c.id)).all()
       ).results
@@ -495,7 +495,7 @@ export async function handleScheduleCompletions(request, session, env, corsHeade
         photos: c
           ? photoRows
               .filter((p) => p.completion_id === c.id)
-              .map((p) => ({ id: p.id, kind: p.kind, key: p.photo_key, capturedAt: p.captured_at, distanceM: p.distance_from_building_m, offSite: p.distance_from_building_m != null && p.distance_from_building_m > LOCATION_MISMATCH_THRESHOLD_M }))
+              .map((p) => ({ id: p.id, kind: p.kind, key: p.photo_key, capturedAt: p.captured_at, latitude: p.latitude ?? null, longitude: p.longitude ?? null, distanceM: p.distance_from_building_m, offSite: p.distance_from_building_m != null && p.distance_from_building_m > LOCATION_MISMATCH_THRESHOLD_M }))
           : [],
       };
     });

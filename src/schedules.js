@@ -62,7 +62,7 @@ function taskToApi(t) {
 }
 
 export function createSchedules(deps) {
-  const { request, escapeHtml: esc, icon, rerender, getBuildings, photoUrl, prepareSheetPage, getGeolocation, liveCaptureTime, queueScroll } = deps;
+  const { request, escapeHtml: esc, icon, rerender, getBuildings, photoUrl, photoMeta, prepareSheetPage, getGeolocation, liveCaptureTime, queueScroll } = deps;
 
   const S = {
     open: false,
@@ -364,7 +364,7 @@ export function createSchedules(deps) {
     const p = S.proof;
     const data = p.data;
     const photoLink = (ph) =>
-      `<a class="sch-proof-photo ${ph.offSite ? "is-offsite" : ""}" href="${photoUrl(ph.key, S.buildingId)}" target="_blank" rel="noopener"><img src="${photoUrl(ph.key, S.buildingId)}" alt="${ph.kind} photo" loading="lazy" /><span>${ph.kind === "general" ? "General" : "Detail"}${ph.offSite ? " · away from building" : ""}</span></a>`;
+      `<figure class="sch-proof-fig"><a class="sch-proof-photo ${ph.offSite ? "is-offsite" : ""}" href="${photoUrl(ph.key, S.buildingId)}" target="_blank" rel="noopener"><img src="${photoUrl(ph.key, S.buildingId)}" alt="${ph.kind} photo" loading="lazy" /><span>${ph.kind === "general" ? "General" : "Detail"}${ph.offSite ? " · away from building" : ""}</span></a><figcaption>${photoMeta({ capturedAt: ph.capturedAt, latitude: ph.latitude, longitude: ph.longitude, distanceM: ph.distanceM })}</figcaption></figure>`;
     return `
       <div class="sch-daybar">
         <button type="button" class="icon-button" data-sch-act="proof-prev" aria-label="Previous day">${icon("arrow").replace("<svg", '<svg style="transform:rotate(180deg)"')}</button>

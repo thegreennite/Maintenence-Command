@@ -1314,3 +1314,19 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .tool-card .building-row .inspection-actions .button { width: auto; }
 .tool-shell .card__header { gap: 14px; }
 .tool-shell .card__header .button { flex: 0 0 auto; width: auto; }
+
+/* When and where a photo was taken (manager side) */
+.photo-meta { display: flex; flex-direction: column; gap: 3px; padding: 6px 7px 8px; color: var(--muted); font-size: 11px; line-height: 1.35; text-align: left; }
+.photo-meta .icon { width: 12px; height: 12px; margin-right: 4px; vertical-align: -2px; color: var(--forest); }
+.photo-meta__time { color: var(--ink); font-weight: 700; }
+.photo-meta__geo { overflow-wrap: anywhere; }
+.photo-meta__geo--none { font-style: italic; }
+.photo-meta__away { display: block; margin-top: 1px; font-weight: 700; color: var(--success); }
+.photo-meta__away.is-far { color: var(--danger); }
+.photo-meta--inline { display: inline-flex; padding: 4px 0 0; flex: 1 0 100%; }
+.photo-library__thumb .photo-meta { padding-top: 6px; }
+.photo-library__grid { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); align-items: start; }
+.sch-proof__photos { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); align-items: start; }
+.sch-proof-fig { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.sch-proof-fig figcaption { padding: 0; }
+.sch-proof-fig .photo-meta { padding: 4px 2px 2px; }

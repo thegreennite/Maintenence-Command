@@ -3,7 +3,7 @@
 // checklist pulled from an actual Forest Hill inspection sheet.
 
 import { createReadingWorkOrder } from "./work-orders.js";
-import { loadBaselines, evaluateDeviation, inferTolerance, trendMonitored } from "./deviation.js";
+import { loadBaselines, loadLastValues, evaluateDeviation, inferTolerance, trendMonitored } from "./deviation.js";
 
 // Toronto time, not UTC -- an inspection "day" should turn over at
 // midnight ET, not at 8pm local when UTC quietly rolls to the next date.
@@ -12,7 +12,7 @@ function today() {
 }
 
 async function loadTags(env, buildingId) {
-  const [result, baselines] = await Promise.all([
+  const [result, baselines, lastValues] = await Promise.all([
     env.DB.prepare(
       `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.answer_kind AS value_type, t.location_id,
          l.name AS location_name, l.sort_order AS location_sort_order,
@@ -27,6 +27,7 @@ async function loadTags(env, buildingId) {
       .bind(buildingId)
       .all(),
     loadBaselines(env, buildingId, today()),
+    loadLastValues(env, buildingId, today()),
   ]);
   // Included so the app can nudge "does that look right?" the moment a
   // superintendent types something outside the expected range, before it
@@ -59,6 +60,8 @@ async function loadTags(env, buildingId) {
     // number, statistical rule only) -- see worker/deviation.js.
     tolerance: inferTolerance(row.unit, row.reading_type),
     history: trendMonitored(row) ? baselines[row.id] || null : null,
+    // Last submitted value, for the "does that number make sense?" check.
+    last_value: lastValues[row.id] ?? null,
   }));
 }
 

@@ -47,7 +47,7 @@ import {
   handleSetClassification,
   handleCreateAccount,
 } from "./admin-accounts.js";
-import { handleGeocodeSearch } from "./geocode.js";
+import { handleGeocodeSearch, handleReverseGeocode } from "./geocode.js";
 import {
   handleFlagIssue,
   handleManagerWorkOrders,
@@ -193,6 +193,9 @@ export default {
       }
       if (url.pathname === "/api/photos/view" && request.method === "GET") {
         return handlePhotoView(request, session, env, cors.headers);
+      }
+      if (url.pathname === "/api/geocode/reverse" && request.method === "GET") {
+        return handleReverseGeocode(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/profile" && request.method === "POST") {
