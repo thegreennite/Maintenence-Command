@@ -140,7 +140,7 @@ async function pagesUsage(env) {
   // builds/month is the free-tier ceiling this bar is measuring against;
   // a project regularly exceeding 25 deploys needs pagination added.
   const response = await fetch(
-    `${CF_API}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/fhg-command/deployments?per_page=25`,
+    `${CF_API}/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/power-log-command/deployments?per_page=25`,
     { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } },
   ).then((r) => r.json());
   if (!response.success) throw new Error(response.errors?.[0]?.message || "Pages deployment lookup failed.");

@@ -37,8 +37,8 @@ export async function sendVerificationCode(env, db, user) {
 
   await ghlSendEmail(env, {
     contactId,
-    subject: "Your FHG Command verification code",
-    html: `<p>Hi ${user.full_name},</p><p>Your FHG Command verification code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p><p>This code expires in ${CODE_TTL_MINUTES} minutes. If you didn't request this, you can ignore it.</p>`,
+    subject: "Your Power Log Command verification code",
+    html: `<p>Hi ${user.full_name},</p><p>Your Power Log Command verification code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p><p>This code expires in ${CODE_TTL_MINUTES} minutes. If you didn't request this, you can ignore it.</p>`,
   });
 
   return pendingToken;

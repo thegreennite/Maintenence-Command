@@ -1,4 +1,4 @@
-# FHG Command
+# Power Log Command
 
 Role-based property operations command center — Phase 1: four-role auth skeleton.
 
@@ -12,7 +12,7 @@ Not built yet (later phases, on purpose): real inspection entry, parameters/red-
 
 ## Live deployment
 
-- **App:** https://fhg-command.pages.dev
+- **App:** https://power-log-command.pages.dev
 - **API:** https://fhg-command-api.douglasmrgarcia.workers.dev
 
 Both live on Cloudflare (Pages + Workers + D1) under account `Douglasmrgarcia@gmail.com`. Log in at the app URL with any seed account below.
