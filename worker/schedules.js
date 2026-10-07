@@ -13,6 +13,7 @@
 import { storePhoto } from "./photos.js";
 import { findOwnedBuilding, VISION_MODEL } from "./buildings.js";
 import { haversineMeters, LOCATION_MISMATCH_THRESHOLD_M } from "./group-photos.js";
+import { mergeDuplicateTasks } from "../shared/task-dedupe.js";
 import { cleanDesignation, DESIGNATION_PRESETS } from "./roles.js";
 
 const TZ = "America/Toronto";
@@ -113,7 +114,7 @@ function denyManagerOnly(session, headers) {
 }
 
 // ----- AI: schedule document -> proposed tasks ------------------------------
-const SCHEDULE_PROMPT = `These attachments are pages of a work schedule for a building's cleaning or maintenance staff. It might be a weekly grid with a column per day, a daily checklist, a shift sheet, a table of tasks, or typed text. Extract every distinct RECURRING TASK and when it gets done. Combine every attachment into ONE list and don't repeat a task that appears more than once.
+const SCHEDULE_PROMPT = `These attachments are pages of a work schedule for a building's cleaning or maintenance staff. It might be a weekly grid with a column per day, a daily checklist, a shift sheet, a table of tasks, or typed text. Extract every distinct RECURRING TASK and when it gets done. Combine every attachment into ONE list. List each distinct task ONCE, with every day it applies to in its days array -- never repeat the same task once per day, and never repeat a task that appears on more than one page.
 
 For each task give:
 - title: a short imperative phrase, like "Mop main lobby floor" or "Empty garbage bins, floors 1-3"
@@ -205,7 +206,7 @@ export async function handleScheduleAnalyze(request, session, env, corsHeaders) 
     return jsonError("Couldn't understand the AI's response. Try again.", 502, corsHeaders);
   }
 
-  const tasks = (Array.isArray(parsed.tasks) ? parsed.tasks : [])
+  const allTasks = (Array.isArray(parsed.tasks) ? parsed.tasks : [])
     .map((t) => ({
       title: String(t.title || "").trim().slice(0, 120),
       details: String(t.details || "").trim().slice(0, 500) || null,
@@ -215,8 +216,8 @@ export async function handleScheduleAnalyze(request, session, env, corsHeaders) 
       startTime: normTime(t.start_time),
       endTime: normTime(t.end_time),
     }))
-    .filter((t) => t.title)
-    .slice(0, MAX_TASKS);
+    .filter((t) => t.title);
+  const { tasks, merged } = mergeDuplicateTasks(allTasks);
 
   // Keep the original pages with the building's photos, same as checklist setup.
   await Promise.all(
@@ -227,28 +228,41 @@ export async function handleScheduleAnalyze(request, session, env, corsHeaders) 
     ),
   );
 
-  return jsonOk({ name: String(parsed.schedule_name || "").trim().slice(0, 80) || "Schedule", tasks }, corsHeaders);
+  return jsonOk({ name: String(parsed.schedule_name || "").trim().slice(0, 80) || "Schedule", tasks: tasks.slice(0, MAX_TASKS), merged }, corsHeaders);
 }
 
 // ----- manager: create / list / update ----------------------------------------
 function normalizeTasks(rawTasks, scheduleDefaults) {
-  if (!Array.isArray(rawTasks) || !rawTasks.length) return { error: "Add at least one task." };
-  if (rawTasks.length > MAX_TASKS) return { error: `Up to ${MAX_TASKS} tasks per schedule.` };
+  // Untouched blank rows (an "Add a task" that was never filled in) are ignored, not errors.
+  const filled = (Array.isArray(rawTasks) ? rawTasks : []).filter((raw) => String(raw?.title || "").trim() || String(raw?.details || "").trim() || String(raw?.location || "").trim());
+  if (!filled.length) return { error: "Add at least one task." };
+  // One task, one row: the same task at the same place and time is merged into one, days combined.
+  const { tasks: unique } = mergeDuplicateTasks(
+    filled.map((raw) => ({
+      ...raw,
+      title: String(raw.title || "").trim(),
+      location: String(raw.location || "").trim(),
+      startTime: normTime(raw.startTime ?? raw.start_time),
+      endTime: normTime(raw.endTime ?? raw.end_time),
+      days: normDays(raw.days).split(",").filter(Boolean),
+    })),
+  );
+  if (unique.length > MAX_TASKS) return { error: `Up to ${MAX_TASKS} tasks per schedule.` };
   const tasks = [];
-  for (const raw of rawTasks) {
-    const title = String(raw.title || "").trim().slice(0, 120);
+  for (const raw of unique) {
+    const title = raw.title.slice(0, 120);
     if (!title) return { error: "Every task needs a name." };
-    const days = normDays(raw.days);
+    const days = raw.days.join(",");
     if (!days) return { error: `“${title}” needs at least one day.` };
     const enforce = raw.enforceTimes === true ? 1 : raw.enforceTimes === false ? 0 : null;
     const task = {
       id: Number.parseInt(raw.id, 10) || null,
       title,
       details: String(raw.details || "").trim().slice(0, 500) || null,
-      location: String(raw.location || "").trim().slice(0, 120) || null,
+      location: raw.location.slice(0, 120) || null,
       days,
-      start_time: normTime(raw.startTime ?? raw.start_time),
-      end_time: normTime(raw.endTime ?? raw.end_time),
+      start_time: raw.startTime,
+      end_time: raw.endTime,
       enforce_times: enforce,
       general_photos: clampCount(raw.generalPhotos),
       detail_photos: clampCount(raw.detailPhotos),
@@ -287,6 +301,13 @@ async function validateAssignees(env, buildingId, ids) {
   return rows.map((r) => r.id);
 }
 
+async function scheduleNameTaken(env, buildingId, name, exceptId = null) {
+  const row = await env.DB.prepare("SELECT id FROM schedules WHERE building_id = ? AND status = 'active' AND LOWER(name) = LOWER(?) AND id != ?")
+    .bind(buildingId, name, exceptId ?? 0)
+    .first();
+  return Boolean(row);
+}
+
 const TASK_INSERT_SQL = `INSERT INTO schedule_tasks (schedule_id, title, details, location, days, start_time, end_time, enforce_times, general_photos, detail_photos, sort_order)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
@@ -303,6 +324,9 @@ export async function handleScheduleCreate(request, session, env, corsHeaders) {
   const defaults = normalizeDefaults(body);
   const { tasks, error } = normalizeTasks(body.tasks, defaults);
   if (error) return jsonError(error, 400, corsHeaders);
+  if (await scheduleNameTaken(env, building.id, name)) {
+    return jsonError(`There's already an active schedule called “${name}” in this building — edit that one, archive it, or give this one a different name.`, 409, corsHeaders);
+  }
   const assignees = await validateAssignees(env, building.id, body.assigneeIds);
 
   const inserted = await env.DB.prepare(
@@ -390,6 +414,9 @@ export async function handleScheduleUpdate(request, session, env, corsHeaders) {
     : { default_general_photos: schedule.default_general_photos, default_detail_photos: schedule.default_detail_photos, enforce_times: schedule.enforce_times };
   const name = body.name !== undefined ? String(body.name).trim().slice(0, 80) : schedule.name;
   if (!name) return jsonError("Give the schedule a name.", 400, corsHeaders);
+  if (name.toLowerCase() !== String(schedule.name).toLowerCase() && (await scheduleNameTaken(env, schedule.building_id, name, scheduleId))) {
+    return jsonError(`There's already an active schedule called “${name}” in this building.`, 409, corsHeaders);
+  }
   const status = body.status === "archived" ? "archived" : body.status === "active" ? "active" : null;
 
   if (body.tasks !== undefined) {

@@ -5,6 +5,8 @@
 // /api/manager/staff* and /api/schedule/*; main.js only hands it a few
 // helpers (see createSchedules) and calls the render / load functions.
 
+import { duplicateCount, mergeDuplicateTasks } from "../shared/task-dedupe.js";
+
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const MAX_FILES = 10;
@@ -29,10 +31,12 @@ function daysText(days) {
 const roleName = (kind) => (kind === "cleaner" ? "Cleaner" : "Superintendent");
 const personLabel = (p) => `${p.fullName}${p.designation ? ` · ${p.designation}` : ""}`;
 
-const blankTask = () => ({ title: "", details: "", location: "", days: [...WEEKDAYS], startTime: "", endTime: "", enforce: "default", general: "", detail: "" });
+let uidCounter = 0;
+const blankTask = () => ({ uid: ++uidCounter, title: "", details: "", location: "", days: [...WEEKDAYS], startTime: "", endTime: "", enforce: "default", general: "", detail: "" });
 
 function taskFromApi(t) {
   return {
+    uid: ++uidCounter,
     id: t.id,
     title: t.title || "",
     details: t.details || "",
@@ -308,11 +312,7 @@ export function createSchedules(deps) {
           ${renderStaffCheckboxes(d)}
         </fieldset>
 
-        <div class="sch-tasks">
-          <p class="admin-subhead">Tasks <span class="quiet-label">· ${d.tasks.length}</span></p>
-          ${d.tasks.map((t, i) => renderTaskEditor(t, i, d)).join("")}
-        </div>
-        <button type="button" class="button button--outline button--small sch-add-task" data-sch-act="add-task">${icon("plus")} Add a task</button>
+        ${renderTasksSheet(d)}
 
         <p class="form-error" id="sch-form-error" ${d.error ? "" : "hidden"} role="alert">${esc(d.error || "")}</p>
         <div class="inspection-actions">
@@ -322,40 +322,155 @@ export function createSchedules(deps) {
       </form>`;
   }
 
-  function renderTaskEditor(t, i, d) {
-    const confirming = d.confirmRemove === i;
+  const DOW = ["M", "T", "W", "T", "F", "S", "S"];
+
+  // What's wrong, if anything, before this can be activated.
+  function draftIssues(d) {
+    const filled = d.tasks.filter((t) => t.title.trim());
+    const dupes = duplicateCount(filled);
+    const noDays = filled.filter((t) => !t.days.length).length;
+    const needTimes = filled.filter((t) => (t.enforce === "yes" || (t.enforce === "default" && d.defaults.enforce)) && !t.startTime && !t.endTime).length;
+    return { dupes, noDays, needTimes, any: dupes + noDays + needTimes > 0 };
+  }
+
+  function renderIssuesBanner(d) {
+    const issues = draftIssues(d);
+    return `${
+      issues.any
+        ? `<div class="sch-issues" role="status">
+            ${issues.dupes ? `<p>${icon("warning")} ${issues.dupes} task${issues.dupes === 1 ? " looks" : "s look"} like a duplicate. <button type="button" class="link-button" data-sch-act="merge-dupes">Merge ${issues.dupes === 1 ? "it" : "them"}</button></p>` : ""}
+            ${issues.noDays ? `<p>${icon("warning")} ${issues.noDays} task${issues.noDays === 1 ? " has" : "s have"} no days ticked.</p>` : ""}
+            ${issues.needTimes ? `<p>${icon("warning")} ${issues.needTimes} enforced task${issues.needTimes === 1 ? " has" : "s have"} no start or end time.</p>` : ""}
+          </div>`
+        : d.tasks.length
+          ? `<p class="sch-allgood">${icon("check")} Nothing to fix — check the grid against your paper schedule, then activate.</p>`
+          : ""
+    }`;
+  }
+
+  // Edits that don't redraw the page (typing, ticking a day) still keep the warnings honest.
+  // Only touches the page when the warnings actually changed -- redrawing a
+  // button between mouse-down and mouse-up (typing, then clicking "Merge")
+  // would swallow the click.
+  let bannerHtml = "";
+  function refreshIssues() {
+    const slot = document.querySelector("#sch-issues-slot");
+    if (!slot || !S.draft) return;
+    const html = renderIssuesBanner(S.draft);
+    if (html === bannerHtml) return;
+    bannerHtml = html;
+    slot.innerHTML = html;
+  }
+
+  function renderTasksSheet(d) {
+    const allSelected = d.tasks.length > 0 && d.selected.length === d.tasks.length;
     return `
-      <div class="sch-task-edit" data-i="${i}">
-        <div class="sch-task-edit__head">
-          <span class="sch-task-edit__n">${i + 1}</span>
-          <input type="text" data-sch-f="t-title" data-i="${i}" value="${esc(t.title)}" placeholder="Task name, e.g. Mop lobby floors" maxlength="120" aria-label="Task ${i + 1} name" />
+      <div class="sch-tasks">
+        <p class="admin-subhead">Tasks <span class="quiet-label">· ${d.tasks.length} — tick the boxes on the left to change several at once</span></p>
+        <div id="sch-issues-slot">${(bannerHtml = renderIssuesBanner(d))}</div>
+        ${d.selected.length ? renderBulkBar(d) : ""}
+        <div class="sch-sheet" role="table" aria-label="Tasks by day">
+          <div class="sch-sheet__head" role="row">
+            <label class="sch-sel" title="Select all"><input type="checkbox" data-sch-act="select-all" ${allSelected ? "checked" : ""} aria-label="Select all tasks" /></label>
+            <span class="sch-sheet__task">Task</span>
+            <span class="sch-sheet__days">${DOW.map((l, i) => `<b title="${DAYS[i]}">${l}</b>`).join("")}</span>
+            <span class="sch-sheet__times">Start – End</span>
+            <span></span>
+          </div>
+          ${d.tasks.map((t, i) => renderTaskRow(t, i, d)).join("")}
+        </div>
+        <button type="button" class="button button--outline button--small sch-add-task" data-sch-act="add-task">${icon("plus")} Add a task</button>
+      </div>`;
+  }
+
+  function renderBulkBar(d) {
+    const n = d.selected.length;
+    return `
+      <div class="sch-bulk" role="region" aria-label="Change the selected tasks">
+        <div class="sch-bulk__top">
+          <strong>${n} selected</strong>
+          <button type="button" class="link-button" data-sch-act="bulk-clear">Clear</button>
+        </div>
+        <div class="sch-bulk__group"><span>Days</span>
+          <button type="button" class="sch-day sch-day--preset" data-sch-act="bulk-days" data-preset="weekdays">Mon–Fri</button>
+          <button type="button" class="sch-day sch-day--preset" data-sch-act="bulk-days" data-preset="all">Every day</button>
+          <button type="button" class="sch-day sch-day--preset" data-sch-act="bulk-days" data-preset="weekend">Weekends</button>
+        </div>
+        <div class="sch-bulk__group"><span>Times</span>
+          <input type="time" data-sch-f="bulk-start" value="${esc(d.bulk.start)}" aria-label="Start time for selected" /> –
+          <input type="time" data-sch-f="bulk-end" value="${esc(d.bulk.end)}" aria-label="End time for selected" />
+          <button type="button" class="button button--outline button--small" data-sch-act="bulk-times">Apply</button>
+        </div>
+        <div class="sch-bulk__group"><span>Enforce</span>
+          <select data-sch-f="bulk-enforce" aria-label="Enforce times for selected">
+            <option value="">Choose…</option><option value="default">Use schedule setting</option><option value="yes">Enforce</option><option value="no">Don’t enforce</option>
+          </select>
+        </div>
+        <div class="sch-bulk__group"><span>Photos</span>
+          <input type="number" min="0" max="10" inputmode="numeric" placeholder="General" data-sch-f="bulk-general" value="${esc(d.bulk.general)}" aria-label="General photos for selected" />
+          <input type="number" min="0" max="10" inputmode="numeric" placeholder="Detail" data-sch-f="bulk-detail" value="${esc(d.bulk.detail)}" aria-label="Detail photos for selected" />
+          <button type="button" class="button button--outline button--small" data-sch-act="bulk-photos">Apply</button>
+        </div>
+        <div class="sch-bulk__group">
           ${
-            confirming
-              ? `<span class="tag-delete-confirm"><span>Remove this task?</span>
-                  <button type="button" class="button button--danger button--small" data-sch-act="remove-task-yes" data-i="${i}">Yes, remove</button>
-                  <button type="button" class="button button--outline button--small" data-sch-act="remove-task-no">No</button></span>`
-              : `<button type="button" class="icon-button" data-sch-act="remove-task" data-i="${i}" title="Remove this task" aria-label="Remove task ${i + 1}">${icon("trash")}</button>`
+            d.confirmBulkRemove
+              ? `<span class="tag-delete-confirm"><span>Remove ${n} task${n === 1 ? "" : "s"}?</span>
+                  <button type="button" class="button button--danger button--small" data-sch-act="bulk-remove-yes">Yes, remove</button>
+                  <button type="button" class="button button--outline button--small" data-sch-act="bulk-remove-no">No</button></span>`
+              : `<button type="button" class="button button--outline button--small" data-sch-act="bulk-remove">${icon("trash")} Remove selected</button>`
           }
         </div>
-        <div class="sch-days" role="group" aria-label="Days">
-          ${DAYS.map((day) => `<button type="button" class="sch-day ${t.days.includes(day) ? "is-on" : ""}" aria-pressed="${t.days.includes(day)}" data-sch-act="toggle-day" data-i="${i}" data-day="${day}">${day}</button>`).join("")}
-          <button type="button" class="sch-day sch-day--preset" data-sch-act="days-preset" data-i="${i}" data-preset="weekdays">Mon–Fri</button>
-          <button type="button" class="sch-day sch-day--preset" data-sch-act="days-preset" data-i="${i}" data-preset="all">Every day</button>
+      </div>`;
+  }
+
+  function renderTaskRow(t, i, d) {
+    const open = d.expanded.includes(t.uid);
+    const confirming = d.confirmRemove === i;
+    const noDays = t.title.trim() && !t.days.length;
+    return `
+      <div class="sch-row ${open ? "is-open" : ""} ${d.selected.includes(t.uid) ? "is-selected" : ""} ${noDays ? "has-issue" : ""}" data-i="${i}" data-uid="${t.uid}">
+        <label class="sch-sel"><input type="checkbox" data-sch-f="t-sel" data-i="${i}" ${d.selected.includes(t.uid) ? "checked" : ""} aria-label="Select task ${i + 1}" /></label>
+        <div class="sch-row__title">
+          <input type="text" data-sch-f="t-title" data-i="${i}" value="${esc(t.title)}" placeholder="Task name, e.g. Mop lobby floors" maxlength="120" aria-label="Task ${i + 1} name" />
+          ${t.location && !open ? `<small>${esc(t.location)}</small>` : ""}
         </div>
-        <div class="sch-grid">
-          <label class="inspection-field"><span>Start <small>optional</small></span><input type="time" data-sch-f="t-start" data-i="${i}" value="${esc(t.startTime)}" /></label>
-          <label class="inspection-field"><span>End <small>optional</small></span><input type="time" data-sch-f="t-end" data-i="${i}" value="${esc(t.endTime)}" /></label>
-          <label class="inspection-field"><span>Times</span>
-            <select data-sch-f="t-enforce" data-i="${i}">
-              <option value="default" ${t.enforce === "default" ? "selected" : ""}>Use schedule setting</option>
-              <option value="yes" ${t.enforce === "yes" ? "selected" : ""}>Enforce</option>
-              <option value="no" ${t.enforce === "no" ? "selected" : ""}>Don’t enforce</option>
-            </select></label>
-          <label class="inspection-field"><span>Where <small>optional</small></span><input type="text" data-sch-f="t-location" data-i="${i}" value="${esc(t.location)}" maxlength="120" /></label>
-          <label class="inspection-field"><span>General photos</span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="t-general" data-i="${i}" value="${esc(String(t.general))}" placeholder="${d.defaults.general || 0}" /></label>
-          <label class="inspection-field"><span>Detail photos</span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="t-detail" data-i="${i}" value="${esc(String(t.detail))}" placeholder="${d.defaults.detail || 0}" /></label>
+        <div class="sch-row__days" role="group" aria-label="Days">
+          ${DAYS.map((day, k) => `<button type="button" class="sch-dow ${t.days.includes(day) ? "is-on" : ""}" aria-pressed="${t.days.includes(day)}" aria-label="${day}" title="${day}" data-sch-act="toggle-day" data-i="${i}" data-day="${day}">${DOW[k]}</button>`).join("")}
         </div>
-        <label class="inspection-field"><span>Notes <small>optional</small></span><input type="text" data-sch-f="t-details" data-i="${i}" value="${esc(t.details)}" maxlength="500" /></label>
+        <div class="sch-row__times">
+          <input type="time" data-sch-f="t-start" data-i="${i}" value="${esc(t.startTime)}" aria-label="Start time" />
+          <span>–</span>
+          <input type="time" data-sch-f="t-end" data-i="${i}" value="${esc(t.endTime)}" aria-label="End time" />
+        </div>
+        <button type="button" class="icon-button sch-row__more" data-sch-act="toggle-expand" data-i="${i}" aria-expanded="${open}" title="${open ? "Hide" : "More"} settings" aria-label="${open ? "Hide" : "More"} settings for task ${i + 1}">${icon(open ? "close" : "edit")}</button>
+        ${
+          open
+            ? `<div class="sch-row__extra">
+                <div class="sch-grid">
+                  <label class="inspection-field"><span>Where <small>optional</small></span><input type="text" data-sch-f="t-location" data-i="${i}" value="${esc(t.location)}" maxlength="120" /></label>
+                  <label class="inspection-field"><span>Times</span>
+                    <select data-sch-f="t-enforce" data-i="${i}">
+                      <option value="default" ${t.enforce === "default" ? "selected" : ""}>Use schedule setting</option>
+                      <option value="yes" ${t.enforce === "yes" ? "selected" : ""}>Enforce</option>
+                      <option value="no" ${t.enforce === "no" ? "selected" : ""}>Don’t enforce</option>
+                    </select></label>
+                  <span></span>
+                  <label class="inspection-field"><span>General photos</span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="t-general" data-i="${i}" value="${esc(String(t.general))}" placeholder="${d.defaults.general || 0}" /></label>
+                  <label class="inspection-field"><span>Detail photos</span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="t-detail" data-i="${i}" value="${esc(String(t.detail))}" placeholder="${d.defaults.detail || 0}" /></label>
+                </div>
+                <label class="inspection-field"><span>Notes <small>optional</small></span><input type="text" data-sch-f="t-details" data-i="${i}" value="${esc(t.details)}" maxlength="500" /></label>
+                <div class="sch-row__remove">
+                  ${
+                    confirming
+                      ? `<span class="tag-delete-confirm"><span>Remove this task?</span>
+                          <button type="button" class="button button--danger button--small" data-sch-act="remove-task-yes" data-i="${i}">Yes, remove</button>
+                          <button type="button" class="button button--outline button--small" data-sch-act="remove-task-no">No</button></span>`
+                      : `<button type="button" class="button button--outline button--small" data-sch-act="remove-task" data-i="${i}">${icon("trash")} Remove this task</button>`
+                  }
+                </div>
+              </div>`
+            : ""
+        }
       </div>`;
   }
 
@@ -434,6 +549,10 @@ export function createSchedules(deps) {
     busy: false,
     error: "",
     confirmRemove: null,
+    selected: [], // task uids ticked for a bulk edit
+    expanded: [], // task uids showing their extra settings
+    bulk: { start: "", end: "", general: "", detail: "" },
+    confirmBulkRemove: false,
     ...extra,
   });
 
@@ -467,7 +586,7 @@ export function createSchedules(deps) {
       d.step = "review";
       d.name = result.name;
       d.tasks = result.tasks.map(taskFromApi);
-      d.aiNote = `The AI found ${result.tasks.length} task${result.tasks.length === 1 ? "" : "s"}. Check the days and times, then choose who it's for.`;
+      d.aiNote = `The AI found ${result.tasks.length} task${result.tasks.length === 1 ? "" : "s"}${result.merged ? ` (merged ${result.merged} duplicate${result.merged === 1 ? "" : "s"})` : ""}. Check the grid against your paper schedule, then choose who it's for.`;
       queueScroll("#sch-wizard");
       rerender();
     } catch (error) {
@@ -559,10 +678,74 @@ export function createSchedules(deps) {
         d.aiNote = "";
         rerender();
         return;
-      case "add-task":
-        d.tasks.push(blankTask());
+      case "add-task": {
+        const fresh = blankTask();
+        d.tasks.push(fresh);
+        d.expanded.push(fresh.uid);
+        queueScroll(`.sch-row[data-uid="${fresh.uid}"]`);
         rerender();
         return;
+      }
+      case "toggle-expand": {
+        const uid = d.tasks[i].uid;
+        d.expanded = d.expanded.includes(uid) ? d.expanded.filter((x) => x !== uid) : [...d.expanded, uid];
+        rerender();
+        return;
+      }
+      case "select-all":
+        d.selected = d.selected.length === d.tasks.length ? [] : d.tasks.map((t) => t.uid);
+        d.confirmBulkRemove = false;
+        rerender();
+        return;
+      case "bulk-clear":
+        d.selected = [];
+        d.confirmBulkRemove = false;
+        rerender();
+        return;
+      case "bulk-days": {
+        const days = el.dataset.preset === "all" ? [...DAYS] : el.dataset.preset === "weekend" ? ["Sat", "Sun"] : [...WEEKDAYS];
+        for (const t of d.tasks) if (d.selected.includes(t.uid)) t.days = [...days];
+        rerender();
+        return;
+      }
+      case "bulk-times":
+        for (const t of d.tasks) {
+          if (!d.selected.includes(t.uid)) continue;
+          t.startTime = d.bulk.start;
+          t.endTime = d.bulk.end;
+        }
+        rerender();
+        return;
+      case "bulk-photos":
+        for (const t of d.tasks) {
+          if (!d.selected.includes(t.uid)) continue;
+          t.general = d.bulk.general;
+          t.detail = d.bulk.detail;
+        }
+        rerender();
+        return;
+      case "bulk-remove":
+        d.confirmBulkRemove = true;
+        rerender();
+        return;
+      case "bulk-remove-no":
+        d.confirmBulkRemove = false;
+        rerender();
+        return;
+      case "bulk-remove-yes":
+        d.tasks = d.tasks.filter((t) => !d.selected.includes(t.uid));
+        d.selected = [];
+        d.confirmBulkRemove = false;
+        rerender();
+        return;
+      case "merge-dupes": {
+        const { tasks } = mergeDuplicateTasks(d.tasks.filter((t) => t.title.trim()).concat([]));
+        const blanks = d.tasks.filter((t) => !t.title.trim());
+        d.tasks = [...tasks, ...blanks];
+        d.selected = d.selected.filter((uid) => d.tasks.some((t) => t.uid === uid));
+        rerender();
+        return;
+      }
       case "remove-task":
         d.confirmRemove = i;
         rerender();
@@ -571,16 +754,20 @@ export function createSchedules(deps) {
         d.confirmRemove = null;
         rerender();
         return;
-      case "remove-task-yes":
-        d.tasks.splice(i, 1);
+      case "remove-task-yes": {
+        const [gone] = d.tasks.splice(i, 1);
+        d.selected = d.selected.filter((x) => x !== gone.uid);
+        d.expanded = d.expanded.filter((x) => x !== gone.uid);
         d.confirmRemove = null;
         rerender();
         return;
+      }
       case "toggle-day": {
         const t = d.tasks[i];
         t.days = t.days.includes(el.dataset.day) ? t.days.filter((x) => x !== el.dataset.day) : DAYS.filter((x) => t.days.includes(x) || x === el.dataset.day);
         el.classList.toggle("is-on", t.days.includes(el.dataset.day));
         el.setAttribute("aria-pressed", String(t.days.includes(el.dataset.day)));
+        refreshIssues();
         return;
       }
       case "days-preset":
@@ -657,6 +844,8 @@ export function createSchedules(deps) {
     const f = el.dataset.schF;
     const d = S.draft;
     const i = el.dataset.i !== undefined ? Number(el.dataset.i) : null;
+    // A late edit event from a row that was just merged or removed.
+    if (i !== null && d && f?.startsWith("t-") && !d.tasks[i]) return;
     switch (f) {
       case "building":
         if (!isChange) return;
@@ -681,18 +870,35 @@ export function createSchedules(deps) {
         return;
       case "def-enforce":
         d.defaults.enforce = el.checked;
+        refreshIssues();
         return;
       case "assignee": {
         const id = Number(el.value);
         d.assigneeIds = el.checked ? [...new Set([...d.assigneeIds, id])] : d.assigneeIds.filter((x) => x !== id);
         return;
       }
-      case "t-title": d.tasks[i].title = el.value; return;
+      case "t-sel": {
+        const uid = d.tasks[i].uid;
+        d.selected = el.checked ? [...new Set([...d.selected, uid])] : d.selected.filter((x) => x !== uid);
+        d.confirmBulkRemove = false;
+        rerender();
+        return;
+      }
+      case "bulk-start": d.bulk.start = el.value; return;
+      case "bulk-end": d.bulk.end = el.value; return;
+      case "bulk-general": d.bulk.general = el.value; return;
+      case "bulk-detail": d.bulk.detail = el.value; return;
+      case "bulk-enforce":
+        if (!isChange || !el.value) return;
+        for (const t of d.tasks) if (d.selected.includes(t.uid)) t.enforce = el.value;
+        rerender();
+        return;
+      case "t-title": d.tasks[i].title = el.value; refreshIssues(); return;
       case "t-details": d.tasks[i].details = el.value; return;
-      case "t-location": d.tasks[i].location = el.value; return;
-      case "t-start": d.tasks[i].startTime = el.value; return;
-      case "t-end": d.tasks[i].endTime = el.value; return;
-      case "t-enforce": d.tasks[i].enforce = el.value; return;
+      case "t-location": d.tasks[i].location = el.value; refreshIssues(); return;
+      case "t-start": d.tasks[i].startTime = el.value; refreshIssues(); return;
+      case "t-end": d.tasks[i].endTime = el.value; refreshIssues(); return;
+      case "t-enforce": d.tasks[i].enforce = el.value; refreshIssues(); return;
       case "t-general": d.tasks[i].general = el.value; return;
       case "t-detail": d.tasks[i].detail = el.value; return;
       case "proof-date":
