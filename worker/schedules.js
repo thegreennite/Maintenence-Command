@@ -268,8 +268,8 @@ function normalizeTasks(rawTasks, scheduleDefaults) {
 function normalizeDefaults(body) {
   const d = body.defaults || {};
   return {
-    default_general_photos: clampCount(d.generalPhotos) ?? 1,
-    default_detail_photos: clampCount(d.detailPhotos) ?? 3,
+    default_general_photos: clampCount(d.generalPhotos) ?? 0,
+    default_detail_photos: clampCount(d.detailPhotos) ?? 0,
     enforce_times: d.enforceTimes === true ? 1 : 0,
   };
 }

@@ -295,9 +295,10 @@ export function createSchedules(deps) {
         <fieldset class="sch-fieldset">
           <legend>Photo proof &amp; times</legend>
           <div class="sch-defaults">
-            <label class="inspection-field"><span>General photos <small>per task</small></span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="def-general" value="${d.defaults.general}" /></label>
-            <label class="inspection-field"><span>Detail photos <small>per task</small></span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="def-detail" value="${d.defaults.detail}" /></label>
+            <label class="inspection-field"><span>General photos <small>per task</small></span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="def-general" value="${d.defaults.general}" placeholder="e.g. 1" /></label>
+            <label class="inspection-field"><span>Detail photos <small>per task</small></span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="def-detail" value="${d.defaults.detail}" placeholder="e.g. 3" /></label>
           </div>
+          <p class="quiet-label">Photos each person must take to prove a task is done. Leave blank for none — for example, 1 general photo of the whole area and 3 close-ups.</p>
           <label class="sch-switch"><input type="checkbox" data-sch-f="def-enforce" ${d.defaults.enforce ? "checked" : ""} />
             <span><strong>Enforce times</strong><small>On: a task can only be checked off inside its time window. Off: the times are a guide, and finishing late is recorded as late. Each task can override this.</small></span></label>
         </fieldset>
@@ -351,8 +352,8 @@ export function createSchedules(deps) {
               <option value="no" ${t.enforce === "no" ? "selected" : ""}>Don’t enforce</option>
             </select></label>
           <label class="inspection-field"><span>Where <small>optional</small></span><input type="text" data-sch-f="t-location" data-i="${i}" value="${esc(t.location)}" maxlength="120" /></label>
-          <label class="inspection-field"><span>General photos</span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="t-general" data-i="${i}" value="${esc(String(t.general))}" placeholder="${d.defaults.general}" /></label>
-          <label class="inspection-field"><span>Detail photos</span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="t-detail" data-i="${i}" value="${esc(String(t.detail))}" placeholder="${d.defaults.detail}" /></label>
+          <label class="inspection-field"><span>General photos</span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="t-general" data-i="${i}" value="${esc(String(t.general))}" placeholder="${d.defaults.general || 0}" /></label>
+          <label class="inspection-field"><span>Detail photos</span><input type="number" min="0" max="10" inputmode="numeric" data-sch-f="t-detail" data-i="${i}" value="${esc(String(t.detail))}" placeholder="${d.defaults.detail || 0}" /></label>
         </div>
         <label class="inspection-field"><span>Notes <small>optional</small></span><input type="text" data-sch-f="t-details" data-i="${i}" value="${esc(t.details)}" maxlength="500" /></label>
       </div>`;
@@ -427,7 +428,7 @@ export function createSchedules(deps) {
     text: "",
     notice: "",
     name: "",
-    defaults: { general: 1, detail: 3, enforce: false },
+    defaults: { general: "", detail: "", enforce: false },
     assigneeIds: [],
     tasks: [],
     busy: false,
@@ -594,7 +595,7 @@ export function createSchedules(deps) {
           step: "review",
           scheduleId: s.id,
           name: s.name,
-          defaults: { general: s.default_general_photos, detail: s.default_detail_photos, enforce: s.enforce_times },
+          defaults: { general: s.default_general_photos || "", detail: s.default_detail_photos || "", enforce: s.enforce_times },
           assigneeIds: s.assignees.map((a) => a.id),
           tasks: s.tasks.map(taskFromApi),
         });
@@ -798,7 +799,9 @@ export function createSchedules(deps) {
     const bid = S.mine.buildingId;
     const stage = ready ? 3 : gDone ? 2 : 1;
     const prompt = ready
-      ? "All photos are in. Mark the task complete."
+      ? needG + needD === 0
+        ? "No photos needed for this one. Mark the task complete."
+        : "All photos are in. Mark the task complete."
       : kind === "general"
         ? needG > 1
           ? `General photo ${g.length + 1} of ${needG} — show the whole area.`
