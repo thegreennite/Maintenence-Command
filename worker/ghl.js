@@ -1,5 +1,5 @@
 // Thin GoHighLevel client -- reused from Revinetic's own GHL account per
-// explicit instruction, not a separate Inspect N Snap integration. Used only
+// explicit instruction, not a separate Inspect Funnel integration. Used only
 // to email the weekly 2FA verification code.
 
 async function ghlFetch(env, path, { method = "GET", body, version = "2021-07-28" } = {}) {
@@ -22,7 +22,7 @@ async function ghlFetch(env, path, { method = "GET", body, version = "2021-07-28
 export async function ghlUpsertContact(env, { email, name }) {
   const data = await ghlFetch(env, "/contacts/upsert", {
     method: "POST",
-    body: { locationId: env.GHL_LOCATION_ID, email, name, source: "Inspect N Snap" },
+    body: { locationId: env.GHL_LOCATION_ID, email, name, source: "Inspect Funnel" },
   });
   return data.contact.id;
 }

@@ -1,6 +1,6 @@
-# Inspect N Snap — marketing site (dev page)
+# Inspect Funnel — marketing site (dev page)
 
-The 3D, scroll-animated website for **inspectnsnap.com**. This is a *dev preview*: it is
+The 3D, scroll-animated website for **inspectfunnel.com**. This is a *dev preview*: it is
 `noindex`, shows a "DEV PREVIEW" bar, and its demo form does not send anything yet.
 
 ## Run it
@@ -9,7 +9,7 @@ cd marketing
 npm install
 npm run dev        # http://localhost:5180
 npm run build      # -> dist/
-npm run deploy:dev # builds and publishes to the inspectnsnap-dev Cloudflare Pages project
+npm run deploy:dev # builds and publishes to the inspectfunnel-dev Cloudflare Pages project
 ```
 The dev bar (bottom-left) always shows FPS, current chapter and scroll %.
 
@@ -26,7 +26,7 @@ The dev bar (bottom-left) always shows FPS, current chapter and scroll %.
 Respects `prefers-reduced-motion` (no smooth scroll, no pinning, static 3D) and falls back to a flat
 gradient if WebGL is unavailable.
 
-## Before it goes live on inspectnsnap.com
+## Before it goes live on inspectfunnel.com
 - [ ] Buy/point the domain (it was unregistered when this was built) and attach it to a Pages project.
 - [ ] Hide or remove the `.devbar` in `index.html`; remove the `noindex` meta and `public/_headers` rule.
 - [ ] Connect the demo form (`#ctaForm`) to something real (email, GoHighLevel form, Cal.com…).

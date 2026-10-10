@@ -8,7 +8,7 @@ Deployed Pages `7ed707aa` and Worker `26ad89ed-81a2-42fe-a59f-a8a8458b182f`. Six
 
 ## Follow-up: Live-only capture and animated feedback
 
-Deployed https://8a6d2f15.power-log-command.pages.dev to the main Inspect N Snap domain. Repeated `QA_LIVE=1 python3 scripts/photo-browser-qa.py` successfully against the public domain (QA building 9, archived afterward).
+Deployed https://8a6d2f15.power-log-command.pages.dev to the main Inspect Funnel domain. Repeated `QA_LIVE=1 python3 scripts/photo-browser-qa.py` successfully against the public domain (QA building 9, archived afterward).
 
 - Command Mode live capture immediately updates the regular checklist's green proof block, without a reload.
 - Successful GHL save shows an animated green check; deliberately injected HTTP 503 shows an animated red error and retry message, never a success indicator.

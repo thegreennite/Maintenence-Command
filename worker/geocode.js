@@ -82,7 +82,7 @@ export async function handleReverseGeocode(request, session, env, corsHeaders) {
   let address = "";
   try {
     const response = await fetch(`${REVERSE_URL}?format=jsonv2&zoom=18&addressdetails=1&lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}`, {
-      headers: { "User-Agent": "InspectNSnap/1.0 (lucas.garcia.gla@gmail.com)", Accept: "application/json" },
+      headers: { "User-Agent": "InspectFunnel/1.0 (lucas.garcia.gla@gmail.com)", Accept: "application/json" },
     });
     if (response.ok) {
       const data = await response.json();

@@ -1,4 +1,4 @@
-# Inspect N Snap
+# Inspect Funnel
 
 Role-based property operations command center — Phase 1: four-role auth skeleton.
 

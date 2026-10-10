@@ -37,8 +37,8 @@ export async function sendVerificationCode(env, db, user) {
 
   await ghlSendEmail(env, {
     contactId,
-    subject: "Your Inspect N Snap verification code",
-    html: `<p>Hi ${user.full_name},</p><p>Your Inspect N Snap verification code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p><p>This code expires in ${CODE_TTL_MINUTES} minutes. If you didn't request this, you can ignore it.</p>`,
+    subject: "Your Inspect Funnel verification code",
+    html: `<p>Hi ${user.full_name},</p><p>Your Inspect Funnel verification code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px;">${code}</p><p>This code expires in ${CODE_TTL_MINUTES} minutes. If you didn't request this, you can ignore it.</p>`,
   });
 
   return pendingToken;
