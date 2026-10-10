@@ -199,12 +199,24 @@ export function createScene(canvas) {
   camera.add(polaroid);
   const card = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.25, 0.025), new THREE.MeshStandardMaterial({ color: 0xf6f7f2, roughness: 0.8 }));
   polaroid.add(card);
-  const photoMat = new THREE.MeshBasicMaterial({ color: 0x244e46 });
-  const photo = new THREE.Mesh(new THREE.PlaneGeometry(0.88, 0.88), photoMat);
-  photo.position.set(0, 0.1, 0.016);
+  // The photo and the caption strip must not overlap (two flat surfaces at the same depth
+  // flicker against each other), so there is a clear gap between them, and a small
+  // polygon offset keeps both stable in front of the card.
+  const PHOTO_W = 0.88;
+  const PHOTO_H = 0.84;
+  const photoMat = new THREE.MeshBasicMaterial({ color: 0x244e46, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  const photo = new THREE.Mesh(new THREE.PlaneGeometry(PHOTO_W, PHOTO_H), photoMat);
+  photo.position.set(0, 0.13, 0.016);
   polaroid.add(photo);
   new THREE.TextureLoader().load("./shots/photo-boiler.jpg", (tex) => {
     tex.colorSpace = THREE.SRGBColorSpace;
+    // Crop (don't stretch): show the middle of the picture at the frame's own proportions.
+    const frameAspect = PHOTO_W / PHOTO_H;
+    const imageAspect = tex.image.width / tex.image.height;
+    if (imageAspect > frameAspect) {
+      tex.repeat.x = frameAspect / imageAspect;
+      tex.offset.x = (1 - tex.repeat.x) / 2;
+    }
     photoMat.map = tex;
     photoMat.color.set(0xffffff);
     photoMat.needsUpdate = true;
@@ -223,8 +235,8 @@ export function createScene(canvas) {
   cctx.fillText("43.6426° N, 79.3871° W · 18 m away", 24, 112);
   const capTex = new THREE.CanvasTexture(cap);
   capTex.colorSpace = THREE.SRGBColorSpace;
-  const caption = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.264), new THREE.MeshBasicMaterial({ map: capTex }));
-  caption.position.set(0, -0.46, 0.016);
+  const caption = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.264), new THREE.MeshBasicMaterial({ map: capTex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+  caption.position.set(0, -0.455, 0.016);
   polaroid.add(caption);
   polaroid.visible = false;
 
