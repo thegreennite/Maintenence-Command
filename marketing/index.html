@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#07110f" />
+    <title>Inspect N Snap — Maintenance operations, with proof</title>
+    <meta name="description" content="Inspect N Snap is the inspection app for building maintenance teams. Walk the rounds, snap time-stamped, geo-located proof, and let the AI notice what changed." />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+    <script type="module" src="/src/main.js"></script>
+  </head>
+  <body>
+    <!-- DEV PREVIEW BAR: remove (or hide) before this goes on inspectnsnap.com -->
+    <div class="devbar" id="devbar" role="note">
+      <span><b>DEV PREVIEW</b> · not the live site · noindex</span>
+      <span class="devbar__stats" id="devstats">–</span>
+    </div>
+
+    <div class="loader" id="loader" aria-hidden="true">
+      <div class="loader__frame">
+        <i></i><i></i><i></i><i></i>
+        <div class="loader__word">Inspect <b>N</b> Snap</div>
+        <div class="loader__count"><span id="loadnum">0</span>%</div>
+      </div>
+    </div>
+    <div class="flash" id="flash" aria-hidden="true"></div>
+    <div class="cursor" id="cursor" aria-hidden="true"><span id="cursorlabel"></span></div>
+    <canvas id="gl" aria-hidden="true"></canvas>
+
+    <header class="nav" id="nav">
+      <a class="logo" href="#top" aria-label="Inspect N Snap — home">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M14 24V14h10M40 14h10v10M50 40v10H40M24 50H14V40" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="32" r="7" fill="currentColor"/></svg>
+        <span>Inspect <b>N</b> Snap</span>
+      </a>
+      <nav class="nav__links" aria-label="Sections">
+        <a href="#walk" data-cursor="Walk">Walk</a>
+        <a href="#snap" data-cursor="Snap">Snap</a>
+        <a href="#learn" data-cursor="Learn">Learn</a>
+        <a href="#read" data-cursor="Read">Read</a>
+        <a href="#prove" data-cursor="Prove">Prove</a>
+      </nav>
+      <a class="btn btn--small magnetic" href="#cta" data-cursor="Book">Book a demo</a>
+    </header>
+
+    <div class="progress" aria-hidden="true"><span id="progressbar"></span></div>
+    <ol class="dots" id="dots" aria-label="Chapters"></ol>
+
+    <main id="top">
+      <!-- HERO -->
+      <section class="hero" data-chapter="hero">
+        <div class="hero__inner">
+          <p class="eyebrow hero__eyebrow">Maintenance operations, with proof</p>
+          <h1 class="hero__title" aria-label="Inspect. Snap. Proven.">
+            <span class="line"><span class="line__in">Inspect.</span></span>
+            <span class="line"><span class="line__in">Snap.</span></span>
+            <span class="line"><span class="line__in"><em>Proven.</em></span></span>
+          </h1>
+          <p class="hero__lede">The inspection app for building maintenance teams. Walk the rounds, snap time-stamped proof, and let the AI notice what changed — before anyone has to ask.</p>
+          <div class="hero__cta">
+            <a class="btn magnetic" href="#cta" data-cursor="Book">Book a demo</a>
+            <a class="btn btn--ghost magnetic" href="#walk" data-cursor="Scroll">See how it works</a>
+          </div>
+        </div>
+        <div class="hero__meta" aria-hidden="true">
+          <span>43.653° N · 79.383° W</span>
+          <span class="hero__scroll"><i></i> Scroll</span>
+        </div>
+      </section>
+
+      <div class="marquee" aria-hidden="true">
+        <div class="marquee__row" data-dir="-1"><span>Boilers · Pumps · Elevators · Lobbies · Garbage rooms · Mechanical rooms · Stairwells · Parking garages · </span><span>Boilers · Pumps · Elevators · Lobbies · Garbage rooms · Mechanical rooms · Stairwells · Parking garages · </span></div>
+        <div class="marquee__row marquee__row--outline" data-dir="1"><span>Time-stamped · Geo-located · AI-checked · Photo proof · Weekly reports · Time-stamped · Geo-located · AI-checked · </span><span>Time-stamped · Geo-located · AI-checked · Photo proof · Weekly reports · Time-stamped · Geo-located · AI-checked · </span></div>
+      </div>
+
+      <!-- 01 WALK (pinned phone) -->
+      <section class="chapter chapter--pin" id="walk" data-chapter="walk">
+        <div class="chapter__grid">
+          <div class="chapter__copy">
+            <p class="num" data-num="01"><span>01</span> Walk</p>
+            <h2 class="reveal">One reading, <em>one tap</em>, at a time.</h2>
+            <p class="lede reveal-p">Command mode walks your superintendent through the building in the order they really walk it. One value, one tap — and a small buzz in the hand when it lands, so they never have to look twice.</p>
+            <ul class="ticks reveal-p">
+              <li>Follows the building floor by floor, machine by machine</li>
+              <li>Add a reading and see exactly where it will appear</li>
+              <li>Works with a photo of the gauge or a typed value</li>
+            </ul>
+          </div>
+          <div class="chapter__visual">
+            <div class="phone" id="phone">
+              <div class="phone__notch"></div>
+              <img class="phone__screen is-on" src="./shots/command-entry.png" width="1170" height="2532" alt="Command mode: a reading to enter" />
+              <img class="phone__screen" src="./shots/command-flag.png" width="1170" height="2532" alt="Command mode asking 'did you mistype it?'" />
+              <div class="phone__buzz" aria-hidden="true"><i></i><i></i><i></i></div>
+            </div>
+            <div class="phone__caption" id="phoneCaption"><b>Step 1</b> Enter the reading</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 02 SNAP -->
+      <section class="chapter" id="snap" data-chapter="snap">
+        <div class="chapter__grid chapter__grid--flip">
+          <div class="chapter__copy">
+            <p class="num" data-num="02"><span>02</span> Snap</p>
+            <h2 class="reveal">Every photo carries its <em>time and place.</em></h2>
+            <p class="lede reveal-p">No gallery uploads, no “I did it yesterday.” Each photo is taken live, stamped with the moment and the GPS fix, and checked against the building it belongs to.</p>
+            <div class="chips reveal-p">
+              <span>Time-stamped at capture</span><span>Street address</span><span>Distance from the building</span><span>Flagged when it’s far away</span>
+            </div>
+            <figure class="frame tilt frame--inline" data-tilt>
+              <img src="./shots/proof-ok.png" width="2380" height="658" alt="Proof of work: general and detail photos, each with time and address" />
+            </figure>
+          </div>
+          <div class="chapter__visual chapter__visual--space"></div>
+        </div>
+      </section>
+
+      <!-- 03 LEARN -->
+      <section class="chapter" id="learn" data-chapter="learn">
+        <div class="chapter__grid">
+          <div class="chapter__copy">
+            <p class="num" data-num="03"><span>03</span> Learn</p>
+            <h2 class="reveal">It learns what <em>normal</em> looks like.</h2>
+            <p class="lede reveal-p">After three days it knows each gauge. A reading that drifts — 3° on a temperature, 5 PSI, 5% on a level — is questioned on the spot. And a typo like 1,000,000 never makes it into the record.</p>
+            <div class="stat-row reveal-p">
+              <div><b data-count="3">3</b><span>days to learn normal</span></div>
+              <div><b data-count="5">5</b><span>PSI drift is flagged</span></div>
+              <div><b data-count="3">3</b><span>degree drift is flagged</span></div>
+            </div>
+            <p class="gauge-status" id="gaugeStatus" aria-live="polite">Learning the baseline…</p>
+          </div>
+          <div class="chapter__visual chapter__visual--space"></div>
+        </div>
+      </section>
+
+      <!-- 04 READ -->
+      <section class="chapter chapter--wide" id="read" data-chapter="read">
+        <div class="chapter__head">
+          <p class="num" data-num="04"><span>04</span> Read</p>
+          <h2 class="reveal">Snap the paper schedule. <em>The AI builds the rest.</em></h2>
+          <p class="lede reveal-p">Photo, PDF or pasted text in. A week grid out — one row per task, the way the paper looked. Duplicates are merged, so you check a clean sheet, not a mess.</p>
+        </div>
+        <figure class="browser parallax-y" data-parallax="40">
+          <div class="browser__bar"><i></i><i></i><i></i><span>inspectnsnap.com · Schedules</span></div>
+          <img src="./shots/schedule-grid.png" width="2380" height="796" alt="The AI-built week grid: tasks as rows, days as boxes" />
+        </figure>
+        <div class="trio">
+          <article class="mini reveal-card"><b>01</b><h3>Upload</h3><p>A photo of the clipboard, a PDF, or text.</p></article>
+          <article class="mini reveal-card"><b>02</b><h3>Check one grid</h3><p>Days ticked like the paper. Tick several tasks to change them all at once.</p></article>
+          <article class="mini reveal-card"><b>03</b><h3>Assign</h3><p>Cleaners and superintendents see today’s checklist on their phone.</p></article>
+        </div>
+      </section>
+
+      <!-- 05 PROVE -->
+      <section class="chapter" id="prove" data-chapter="prove">
+        <div class="chapter__grid chapter__grid--flip">
+          <div class="chapter__copy">
+            <p class="num" data-num="05"><span>05</span> Prove</p>
+            <h2 class="reveal">A task isn’t done until <em>the photos are in.</em></h2>
+            <p class="lede reveal-p">Cleaners check a task off, take one wide shot and the close-ups you require — and only then can they finish it. You see who did it, when, and where they stood.</p>
+            <ul class="ticks reveal-p">
+              <li>You choose the photo count — per schedule or per task</li>
+              <li>Enforce the time window, or leave it as a guide</li>
+              <li>Late finishes are recorded as late, not hidden</li>
+            </ul>
+          </div>
+          <div class="chapter__visual chapter__visual--duo">
+            <div class="phone phone--small tilt" data-tilt><img class="phone__screen is-on" src="./shots/cleaner-list.png" width="1170" height="2532" alt="A cleaner's checklist for today" /></div>
+            <div class="phone phone--small phone--offset tilt" data-tilt><img class="phone__screen is-on" src="./shots/cleaner-task.png" width="1170" height="2532" alt="Taking the general photo for a task" /></div>
+          </div>
+        </div>
+        <figure class="frame frame--wide parallax-y" data-parallax="-30">
+          <img src="./shots/proof-far.png" width="2380" height="656" alt="A photo flagged 9000 m from the building, with address and time" />
+          <figcaption>When a photo is taken somewhere else, you see it — with the address.</figcaption>
+        </figure>
+      </section>
+
+      <!-- 06 REPORT -->
+      <section class="chapter chapter--center" id="report" data-chapter="report">
+        <p class="num" data-num="06"><span>06</span> Report</p>
+        <h2 class="reveal">Friday, 5 PM. <em>The whole week</em> in your inbox.</h2>
+        <p class="lede reveal-p">A spreadsheet per week, every reading laid out machine by machine, anything off-normal in red — plus every day on record, any time you want it.</p>
+        <div class="sheet" aria-label="Sample weekly report (illustration)">
+          <div class="sheet__head"><span>Reading</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span></div>
+          <div class="sheet__row"><span>Boiler H1A — Inlet temp (°F)</span><i>182</i><i>181</i><i>183</i><i>182</i><i>181</i></div>
+          <div class="sheet__row"><span>Boiler H1A — Inlet pressure (PSI)</span><i>60</i><i>61</i><i>60</i><i class="bad">28</i><i>60</i></div>
+          <div class="sheet__row"><span>Pump P9A — Pressure (PSI)</span><i>42</i><i>42</i><i>43</i><i>42</i><i>42</i></div>
+          <div class="sheet__row"><span>Water meter — Reading</span><i>13,700</i><i>13,722</i><i>13,751</i><i>13,780</i><i>13,806</i></div>
+          <div class="sheet__row"><span>Comments</span><i class="wide">Space for your notes, ready to print or send on.</i></div>
+        </div>
+        <p class="fine">Illustration — values are sample data.</p>
+      </section>
+
+      <!-- CREW -->
+      <section class="chapter chapter--center" id="crew" data-chapter="crew">
+        <p class="num" data-num="07"><span>07</span> Crew</p>
+        <h2 class="reveal">Built for <em>everyone</em> on the rounds.</h2>
+        <div class="cards3">
+          <article class="role tilt reveal-card" data-tilt>
+            <span class="role__tag">Managers</span>
+            <h3>See every building.</h3>
+            <p>One tool at a time: inspections, schedules, proof, people and reports. Know where each reading lands before you add it.</p>
+          </article>
+          <article class="role tilt reveal-card" data-tilt>
+            <span class="role__tag">Superintendents</span>
+            <h3>Walk it. Prove it.</h3>
+            <p>Command mode for the rounds, the day’s tasks, and a history of everything submitted — locked in at the end of the day.</p>
+          </article>
+          <article class="role tilt reveal-card" data-tilt>
+            <span class="role__tag">Cleaners</span>
+            <h3>Check. Snap. Done.</h3>
+            <p>A simple checklist for today, a camera that asks for exactly the photos you set, and nothing else in the way.</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- CTA -->
+      <section class="cta" id="cta" data-chapter="cta">
+        <p class="eyebrow">Ready when you are</p>
+        <h2 class="cta__title">See your buildings the way <em>they actually are.</em></h2>
+        <form class="cta__form" id="ctaForm" novalidate>
+          <label class="sr" for="email">Work email</label>
+          <input id="email" type="email" placeholder="Your work email" autocomplete="email" required />
+          <button class="btn magnetic" type="submit" data-cursor="Snap">Book a demo</button>
+        </form>
+        <p class="cta__note" id="ctaNote">We’ll show you a real inspection, start to finish.</p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer__big" aria-hidden="true">Inspect <b>N</b> Snap</div>
+      <div class="footer__row">
+        <span>© 2026 Inspect N Snap</span>
+        <span>inspectnsnap.com</span>
+        <a href="#top" data-cursor="Top">Back to top ↑</a>
+      </div>
+    </footer>
+  </body>
+</html>
