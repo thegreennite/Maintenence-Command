@@ -29,7 +29,7 @@ h1, h2, h3, p { margin: 0; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--lime); letter-spacing: -0.01em; }
 
-#gl { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; display: block; }
+#gl { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100lvh; z-index: 0; display: block; }
 main, .footer { position: relative; z-index: 2; }
 
 /* ---------------- dev bar, loader, flash, cursor ---------------- */
@@ -259,3 +259,29 @@ h2 { font-size: clamp(40px, 5.8vw, 98px); font-weight: 700; line-height: 0.97; l
 .machine__tag { margin-top: auto; align-self: flex-start; padding: 6px 12px; border-radius: 999px; background: rgba(220, 235, 97, 0.14); border: 1px solid rgba(220, 235, 97, 0.4); color: var(--lime); font: 700 12px var(--sans); letter-spacing: 0.04em; }
 .machines__fine { text-align: center; margin-top: 5vh; }
 @media (max-width: 900px) and (min-width: 600px) { .machines__grid.cards3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---------------- phones ---------------- */
+html { -webkit-tap-highlight-color: transparent; }
+.logo { min-height: 44px; }
+.btn--small { min-height: 44px; }
+.footer__row a { display: inline-flex; align-items: center; min-height: 44px; }
+@media (max-width: 900px) {
+  /* Blur is the most expensive thing a phone GPU is asked to do; the panels are opaque enough without it. */
+  *, *::before, *::after { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+  .nav.is-solid { background: rgba(7, 17, 15, 0.94); }
+  .marquee, .mini, .role, .chips span, .cta__form { background-color: rgba(7, 17, 15, 0.86); }
+
+  /* The 3D lives in the top part of the screen (the "stage"); each chapter's text is an opaque
+     panel that slides up over it, like a bottom sheet. */
+  .hero { min-height: 100svh; }
+  .chapter { min-height: 0; padding: 40svh var(--pad) 7vh; justify-content: flex-start; }
+  .chapter--pin { padding-top: 40svh; padding-bottom: 6vh; }
+  .chapter--wide, .chapter--center { padding-top: 12vh; }
+  .chapter::before, .chapter:has(.chapter__grid--flip)::before { display: none; }
+  .chapter--wide::before, .chapter--center::before { display: block; background: rgba(7, 17, 15, 0.9); }
+  .chapter__copy, .chapter__head { padding: 28px 22px 32px; border: 1px solid var(--line); border-radius: 26px; background: rgba(7, 17, 15, 0.95); }
+  .chapter--wide .chapter__head { background: transparent; border: 0; padding: 0; }
+  .chapter__visual { min-height: 0; }
+  .machines { padding-top: 10vh; }
+  .cta { min-height: 100svh; }
+}

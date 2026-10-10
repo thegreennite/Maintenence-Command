@@ -21,7 +21,12 @@ export const state = {
   shift: -0.16,
 };
 
+// Phones get a lighter scene: fewer particles, a lower pixel ratio, no per-window twinkle.
+const isSmallScreen = () => window.innerWidth <= 900 || window.matchMedia("(pointer: coarse)").matches;
+const MOBILE_STAGE_Y = 0.17; // on narrow screens the 3D sits in the upper part, with the text below it
+
 export function createScene(canvas) {
+  const small = isSmallScreen();
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
   renderer.setClearColor(0x000000, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -135,8 +140,9 @@ export function createScene(canvas) {
 
   // dust in the air
   const dustGeo = new THREE.BufferGeometry();
-  const dust = new Float32Array(420 * 3);
-  for (let i = 0; i < 420; i++) {
+  const DUST = small ? 150 : 420;
+  const dust = new Float32Array(DUST * 3);
+  for (let i = 0; i < DUST; i++) {
     const r = 3 + Math.random() * 11;
     const a = Math.random() * Math.PI * 2;
     dust[i * 3] = Math.cos(a) * r;
@@ -243,11 +249,18 @@ export function createScene(canvas) {
   // ---- sizing ------------------------------------------------------------------------
   let width = 1;
   let height = 1;
+  let dprScale = 1; // lowered automatically if the device can't keep up
+  const dprCap = () => Math.min(window.devicePixelRatio || 1, window.innerWidth < 700 ? 1.25 : 1.75) * dprScale;
   function resize() {
-    width = window.innerWidth;
-    height = window.innerHeight;
-    const dpr = Math.min(window.devicePixelRatio || 1, width < 700 ? 1.5 : 1.75);
-    renderer.setPixelRatio(dpr);
+    // A phone's address bar sliding in and out changes the height by ~50-100px; re-sizing the
+    // canvas for that makes the 3D jump and re-measures every scroll trigger, so ignore it.
+    // The canvas is sized in CSS (100lvh), which doesn't change when the bar moves, so just read it.
+    const nextW = window.innerWidth;
+    const nextH = canvas.clientHeight || window.innerHeight;
+    if (width > 1 && nextW === width && Math.abs(nextH - height) < 4) return;
+    width = nextW;
+    height = nextH;
+    renderer.setPixelRatio(dprCap());
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
     camera.fov = width / height < 0.8 ? 46 : 34;
@@ -267,7 +280,10 @@ export function createScene(canvas) {
   const startedAt = performance.now();
   let reduced = false;
   let running = true;
-  const stats = { fps: 0, frames: 0, last: performance.now() };
+  let lastLit = -1;
+  let firstWindows = true;
+  let slowChecks = 0;
+  const stats = { fps: 0, frames: 0, last: performance.now(), quality: 1 };
 
   function frame() {
     const t = reduced ? 0 : (performance.now() - startedAt) / 1000;
@@ -278,7 +294,7 @@ export function createScene(canvas) {
     camera.position.set(state.cx + pointer.sx * 0.5, state.cy - pointer.sy * 0.3, state.cz);
     camera.lookAt(state.tx, state.ty, state.tz);
     const shift = width > 760 ? state.shift : state.shift * 0.35;
-    camera.setViewOffset(width, height, shift * width, 0, width, height);
+    camera.setViewOffset(width, height, shift * width, width <= 760 ? MOBILE_STAGE_Y * height : 0, width, height);
 
     // building
     building.position.x = state.bx;
@@ -288,21 +304,25 @@ export function createScene(canvas) {
     scanMat.uniforms.uOpacity.value = state.scan > 0.005 && state.scan < 0.995 ? 1 : 0;
 
     // windows light up from the bottom as `lit` climbs (with the scan sweep on top)
-    const litFloor = state.lit * (FLOORS + 1.2);
-    for (let i = 0; i < meta.length; i++) {
-      const d = litFloor - meta[i].floor - meta[i].jitter;
-      const k = THREE.MathUtils.clamp(d, 0, 1);
-      color.copy(DIM).lerp(LIME, ease(k));
-      // twinkle on the lit ones
-      if (k > 0.99) color.multiplyScalar(0.9 + 0.1 * Math.sin(t * 1.4 + i * 1.7));
-      windows.setColorAt(i, color);
+    if (!small || Math.abs(state.lit - lastLit) > 0.0004 || firstWindows) {
+      firstWindows = false;
+      lastLit = state.lit;
+      const litFloor = state.lit * (FLOORS + 1.2);
+      for (let i = 0; i < meta.length; i++) {
+        const d = litFloor - meta[i].floor - meta[i].jitter;
+        const k = THREE.MathUtils.clamp(d, 0, 1);
+        color.copy(DIM).lerp(LIME, ease(k));
+        // twinkle on the lit ones (desktop only)
+        if (!small && k > 0.99) color.multiplyScalar(0.9 + 0.1 * Math.sin(t * 1.4 + i * 1.7));
+        windows.setColorAt(i, color);
+      }
+      windows.instanceColor.needsUpdate = true;
     }
-    windows.instanceColor.needsUpdate = true;
 
     // gauge
     const g = ease(THREE.MathUtils.clamp(state.gauge, 0, 1));
     gauge.visible = g > 0.001;
-    gauge.scale.setScalar(Math.max(g * 0.85, 0.0001));
+    gauge.scale.setScalar(Math.max(g * (width <= 760 ? 0.66 : 0.85), 0.0001));
     gauge.rotation.y = (1 - g) * 0.9 + Math.sin(t * 0.6) * 0.05;
     needle.rotation.z = THREE.MathUtils.degToRad((0.5 - state.needle) * SWEEP) + Math.sin(t * 9) * 0.004 * g;
     const alert = THREE.MathUtils.clamp((state.needle - 0.74) / 0.1, 0, 1);
@@ -326,6 +346,15 @@ export function createScene(canvas) {
       stats.fps = Math.round((stats.frames * 1000) / (now - stats.last));
       stats.frames = 0;
       stats.last = now;
+      // Two slow seconds in a row -> render fewer pixels (never below 0.6x). Keeps older phones smooth.
+      slowChecks = stats.fps < 34 ? slowChecks + 1 : 0;
+      if (slowChecks >= 2 && dprScale > 0.6 && !document.hidden) {
+        dprScale = Math.max(0.6, dprScale - 0.2);
+        slowChecks = 0;
+        renderer.setPixelRatio(dprCap());
+        renderer.setSize(width, height, false);
+        stats.quality = dprScale;
+      }
     }
   }
   renderer.setAnimationLoop(() => running && frame());

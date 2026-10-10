@@ -5,6 +5,8 @@ import Lenis from "lenis";
 import { createScene, state } from "./scene.js";
 
 gsap.registerPlugin(ScrollTrigger);
+// A phone's address bar growing/shrinking fires resize; don't re-measure every trigger for it.
+ScrollTrigger.config({ ignoreMobileResize: true });
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -124,17 +126,19 @@ function build() {
   if (!reduced) {
     state.lit = 0.04;
     state.scan = 0;
-    ScrollTrigger.create({
-      trigger: sections.walk,
-      start: "top top",
-      end: "+=240%",
-      pin: true,
-      scrub: true,
-      onUpdate: (self) => {
-        state.scan = self.progress;
-        state.lit = 0.04 + self.progress * 0.76;
-        setStep(self.progress > 0.52 ? 1 : 0);
-      },
+    const paint = (progress) => {
+      state.scan = progress;
+      state.lit = 0.04 + progress * 0.76;
+      setStep(progress > 0.52 ? 1 : 0);
+    };
+    const mm = gsap.matchMedia();
+    // Desktop: pin the section while the building is inspected and the phone steps through.
+    mm.add("(min-width: 901px)", () => {
+      ScrollTrigger.create({ trigger: sections.walk, start: "top top", end: "+=240%", pin: true, scrub: true, onUpdate: (self) => paint(self.progress) });
+    });
+    // Phones: the section is taller than the screen, so don't pin it -- just drive it by scroll position.
+    mm.add("(max-width: 900px)", () => {
+      ScrollTrigger.create({ trigger: sections.walk, start: "top 75%", end: "bottom 45%", scrub: true, onUpdate: (self) => paint(self.progress) });
     });
   } else {
     state.lit = 1;
