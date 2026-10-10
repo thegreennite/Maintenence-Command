@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 340" fill="none">
+<defs>
+ <linearGradient id="red" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8e2a21"/><stop offset=".4" stop-color="#ff7a68"/><stop offset="1" stop-color="#7a231c"/></linearGradient>
+ <linearGradient id="metal" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#6f8d86"/><stop offset=".45" stop-color="#e6efec"/><stop offset="1" stop-color="#5d7a73"/></linearGradient>
+ <linearGradient id="brass" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#9a6a2a"/><stop offset=".45" stop-color="#f0cf80"/><stop offset="1" stop-color="#8a5a20"/></linearGradient>
+</defs>
+<style>
+ .flow{stroke-dasharray:3 22;animation:flow 1.6s linear infinite}@keyframes flow{to{stroke-dashoffset:-50}}
+ .needle{transform-origin:center;transform-box:fill-box;animation:sway 4.2s ease-in-out infinite alternate}.n2{animation-delay:-2.2s;animation-duration:5.2s}@keyframes sway{from{transform:rotate(-16deg)}to{transform:rotate(16deg)}}
+ .led{animation:blink 1.1s steps(2) infinite}@keyframes blink{50%{opacity:.2}}
+ .wheel{transform-origin:center;transform-box:fill-box;animation:turn 9s ease-in-out infinite alternate}@keyframes turn{to{transform:rotate(40deg)}}
+</style>
+<ellipse cx="240" cy="314" rx="190" ry="12" fill="#000" opacity=".38"/>
+<!-- floor flange + riser -->
+<rect x="160" y="292" width="100" height="14" rx="3" fill="#12302b"/><rect x="190" y="30" width="40" height="266" fill="url(#red)"/><path class="flow" d="M210 292V40" stroke="#fff" stroke-opacity=".6" stroke-width="3" style="animation-direction:reverse"/>
+<rect x="182" y="272" width="56" height="12" rx="3" fill="#9db7b0"/>
+<!-- OS&Y gate valve with wheel -->
+<rect x="176" y="196" width="68" height="46" rx="10" fill="url(#brass)" stroke="#6b4a1c" stroke-width="2"/>
+<rect x="205" y="120" width="10" height="80" fill="url(#metal)"/><rect x="188" y="118" width="44" height="10" rx="3" fill="#8fa9a2"/><rect x="195" y="190" width="30" height="10" rx="3" fill="#8fa9a2"/>
+<g class="wheel"><ellipse cx="210" cy="108" rx="40" ry="11" stroke="#d33b30" stroke-width="7"/><path d="M170 108h80M210 98v20" stroke="#d33b30" stroke-width="4"/></g>
+<!-- check valve + flow switch -->
+<path d="M236 160h60a18 18 0 0 1 18 18v26a18 18 0 0 1-18 18h-60z" fill="url(#brass)" stroke="#6b4a1c" stroke-width="2"/><path d="M262 196h34" stroke="#7a5a22" stroke-width="3"/>
+<rect x="284" y="124" width="52" height="38" rx="7" fill="#243a37" stroke="#6b8a83" stroke-width="2"/><circle cx="296" cy="136" r="4" class="led" fill="#dceb61"/><path d="M336 142c30 0 36 18 54 18" stroke="#e5c13b" stroke-width="3"/>
+<!-- top branch with two gauges -->
+<rect x="190" y="44" width="150" height="16" rx="5" fill="url(#red)"/>
+<rect x="268" y="58" width="8" height="26" fill="#6b8a83"/><circle cx="272" cy="96" r="30" fill="#1b2528"/><circle cx="272" cy="96" r="24" fill="#f1f5f2"/>
+<path d="M251 110A24 24 0 0 1 247 94" stroke="#3b8f73" stroke-width="4"/>
+<g class="needle"><path d="M272 96V76" stroke="#d33b30" stroke-width="2.8" stroke-linecap="round"/></g><circle cx="272" cy="96" r="3.6" fill="#1b2528"/><text x="272" y="116" text-anchor="middle" font-family="Arial" font-size="8" font-weight="700" fill="#1b2528">AIR</text>
+<rect x="336" y="58" width="8" height="26" fill="#6b8a83"/><circle cx="340" cy="96" r="30" fill="#1b2528"/><circle cx="340" cy="96" r="24" fill="#f1f5f2"/>
+<path d="M319 110A24 24 0 0 1 315 94" stroke="#3b8f73" stroke-width="4"/><path d="M365 94A24 24 0 0 1 361 110" stroke="#d84b3e" stroke-width="4"/>
+<g class="needle n2"><path d="M340 96V76" stroke="#d33b30" stroke-width="2.8" stroke-linecap="round"/></g><circle cx="340" cy="96" r="3.6" fill="#1b2528"/><text x="340" y="116" text-anchor="middle" font-family="Arial" font-size="8" font-weight="700" fill="#1b2528">WATER</text>
+<!-- tag -->
+<rect x="84" y="232" width="78" height="30" rx="5" fill="#e5c13b"/><text x="123" y="251" text-anchor="middle" font-family="Arial" font-size="11" font-weight="800" fill="#1b2528">SPRINKLER</text><path d="M162 247h16" stroke="#e5c13b" stroke-width="2"/>
+</svg>

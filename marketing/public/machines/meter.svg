@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 340" fill="none">
+<defs>
+ <linearGradient id="brass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4d58a"/><stop offset=".45" stop-color="#c58f3c"/><stop offset="1" stop-color="#7a4f1a"/></linearGradient>
+ <linearGradient id="pipe" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3fb0a4"/><stop offset=".5" stop-color="#1f7a70"/><stop offset="1" stop-color="#0d3f39"/></linearGradient>
+ <clipPath id="win"><rect x="170" y="112" width="140" height="34" rx="4"/></clipPath>
+</defs>
+<style>
+ .flow{stroke-dasharray:3 22;animation:flow 1.5s linear infinite}@keyframes flow{to{stroke-dashoffset:-50}}
+ .reel{animation:roll 6s steps(10) infinite}@keyframes roll{from{transform:translateY(0)}to{transform:translateY(-340px)}}
+ .star{transform-origin:center;transform-box:fill-box;animation:spin 2.4s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+<ellipse cx="240" cy="306" rx="200" ry="12" fill="#000" opacity=".38"/>
+<!-- pipe run -->
+<rect x="0" y="196" width="480" height="40" fill="url(#pipe)"/><path class="flow" d="M0 216H480" stroke="#fff" stroke-opacity=".7" stroke-width="3"/>
+<rect x="58" y="180" width="18" height="72" rx="4" fill="#9db7b0"/><rect x="404" y="180" width="18" height="72" rx="4" fill="#9db7b0"/>
+<g fill="#5d7a73"><circle cx="67" cy="190" r="3.5"/><circle cx="67" cy="242" r="3.5"/><circle cx="413" cy="190" r="3.5"/><circle cx="413" cy="242" r="3.5"/></g>
+<!-- meter body -->
+<path d="M96 196h64a20 20 0 0 1 20-20h120a20 20 0 0 1 20 20h64v40h-64a20 20 0 0 1-20 20H180a20 20 0 0 1-20-20H96z" fill="url(#brass)" stroke="#6b4a1c" stroke-width="2.5"/>
+<!-- register housing -->
+<rect x="140" y="66" width="200" height="130" rx="30" fill="url(#brass)" stroke="#6b4a1c" stroke-width="2.5"/>
+<rect x="154" y="80" width="172" height="102" rx="20" fill="#f6f8f4" stroke="#5a3d14" stroke-width="3"/>
+<!-- odometer -->
+<rect x="170" y="108" width="140" height="42" rx="5" fill="#1b2528"/>
+<g clip-path="url(#win)" font-family="ui-monospace,Menlo,monospace" font-size="30" font-weight="700" fill="#f6f8f4">
+ <text x="178" y="140">0</text><text x="200" y="140">1</text><text x="222" y="140">3</text><text x="244" y="140">7</text><text x="266" y="140">0</text>
+ <g class="reel"><text x="288" y="140">6</text><text x="288" y="174">7</text><text x="288" y="208">8</text><text x="288" y="242">9</text><text x="288" y="276">0</text><text x="288" y="310">1</text><text x="288" y="344">2</text><text x="288" y="378">3</text><text x="288" y="412">4</text><text x="288" y="446">5</text></g>
+</g>
+<rect x="283" y="108" width="3" height="42" fill="#5a3d14" opacity=".8"/>
+<!-- sweep hand dial -->
+<circle cx="240" cy="160" r="0" fill="none"/><text x="240" y="98" text-anchor="middle" font-family="Arial" font-size="11" font-weight="800" fill="#5a3d14" letter-spacing="2">WATER · US GAL</text>
+<g class="star"><circle cx="240" cy="168" r="9" fill="#d84b3e"/><path d="M240 159v18M231 168h18" stroke="#fff" stroke-width="2"/></g>
+<path d="M214 176h-14m96 0h-14" stroke="#5a3d14" stroke-width="2" opacity="0"/>
+<!-- arrow -->
+<path d="M104 280h36l-8-8m8 8l-8 8" stroke="#dceb61" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><text x="150" y="285" fill="#dceb61" font-family="Arial" font-size="12" font-weight="800" letter-spacing="1.5">FLOW</text>
+</svg>

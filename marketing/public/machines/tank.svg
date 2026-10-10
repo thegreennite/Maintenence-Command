@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 340" fill="none">
+<defs>
+ <linearGradient id="vessel" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#14594f"/><stop offset=".35" stop-color="#5fb8aa"/><stop offset=".7" stop-color="#1f7a70"/><stop offset="1" stop-color="#0b3a34"/></linearGradient>
+ <linearGradient id="metal" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#6f8d86"/><stop offset=".45" stop-color="#e6efec"/><stop offset="1" stop-color="#5d7a73"/></linearGradient>
+</defs>
+<style>
+ .flow{stroke-dasharray:3 22;animation:flow 1.6s linear infinite}@keyframes flow{to{stroke-dashoffset:-50}}
+ .needle{transform-origin:center;transform-box:fill-box;animation:sway 4.6s ease-in-out infinite alternate}@keyframes sway{from{transform:rotate(-10deg)}to{transform:rotate(22deg)}}
+ .level{animation:lvl 6s ease-in-out infinite alternate}@keyframes lvl{from{transform:translateY(8px)}to{transform:translateY(-8px)}}
+</style>
+<ellipse cx="240" cy="316" rx="150" ry="12" fill="#000" opacity=".38"/>
+<!-- stand -->
+<rect x="150" y="252" width="14" height="60" fill="#12302b"/><rect x="316" y="252" width="14" height="60" fill="#12302b"/><rect x="140" y="304" width="200" height="10" rx="3" fill="#12302b"/>
+<!-- vessel -->
+<path d="M150 90a90 56 0 0 1 180 0v152a90 36 0 0 1-180 0z" fill="url(#vessel)"/>
+<path d="M170 100a70 40 0 0 1 22-24" stroke="#fff" stroke-opacity=".45" stroke-width="6" stroke-linecap="round"/>
+<rect x="150" y="150" width="180" height="8" fill="#07201c" opacity=".35"/><rect x="150" y="196" width="180" height="8" fill="#07201c" opacity=".35"/>
+<!-- sight glass with level -->
+<rect x="296" y="96" width="14" height="124" rx="7" fill="#06100e" stroke="#9db7b0" stroke-width="2.5"/><g clip-path="inset(0)"><rect class="level" x="299" y="150" width="8" height="66" rx="4" fill="#dceb61"/></g>
+<text x="236" y="190" text-anchor="middle" font-family="Arial" font-size="13" font-weight="800" fill="#e6f4f0" letter-spacing="2">GLYCOL</text><text x="236" y="208" text-anchor="middle" font-family="Arial" font-size="10" font-weight="700" fill="#bfe3dc" letter-spacing="2">EXPANSION</text>
+<!-- top valve + gauge -->
+<rect x="232" y="26" width="16" height="24" fill="url(#metal)"/><circle cx="240" cy="22" r="0"/>
+<rect x="232" y="44" width="16" height="16" rx="3" fill="#8fa9a2"/><rect x="236" y="56" width="8" height="12" fill="#6b8a83"/>
+<circle cx="240" cy="38" r="26" fill="#1b2528"/><circle cx="240" cy="38" r="21" fill="#f1f5f2"/>
+<path d="M225 52A21 21 0 0 1 219 36" stroke="#3b8f73" stroke-width="4"/><path d="M261 36A21 21 0 0 1 255 52" stroke="#d84b3e" stroke-width="4"/>
+<g class="needle"><path d="M240 38V20" stroke="#d33b30" stroke-width="2.6" stroke-linecap="round"/></g><circle cx="240" cy="38" r="3.4" fill="#1b2528"/>
+<!-- bottom connection -->
+<path d="M240 276V316H430" stroke="#144f49" stroke-width="22" stroke-linecap="round"/><path d="M240 276V316H430" stroke="#36a79b" stroke-width="16" stroke-linecap="round"/><path class="flow" d="M240 276V316H430" stroke="#fff" stroke-opacity=".75" stroke-width="3" stroke-linecap="round"/>
+<rect x="352" y="300" width="20" height="32" rx="4" fill="#9db7b0"/><rect x="310" y="288" width="38" height="10" rx="3" fill="#d33b30"/><circle cx="329" cy="290" r="10" fill="#d33b30"/>
+</svg>

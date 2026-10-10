@@ -76,6 +76,54 @@
         <div class="marquee__row marquee__row--outline" data-dir="1"><span>Time-stamped · Geo-located · AI-checked · Photo proof · Weekly reports · Time-stamped · Geo-located · AI-checked · </span><span>Time-stamped · Geo-located · AI-checked · Photo proof · Weekly reports · Time-stamped · Geo-located · AI-checked · </span></div>
       </div>
 
+      <!-- MACHINES -->
+      <section class="machines" id="machines">
+        <div class="machines__head">
+          <p class="eyebrow">On the round</p>
+          <h2 class="reveal">Every machine, <em>every reading.</em></h2>
+          <p class="lede reveal-p">The boiler room, the pump room, the sprinkler riser, the meter. Each machine carries the readings your supers take, the photo they owe, and the range the AI has learned.</p>
+        </div>
+        <div class="machines__grid cards3">
+          <article class="machine tilt reveal-card" data-tilt>
+            <div class="machine__art"><img src="./machines/boiler.svg" width="480" height="380" alt="Illustration of a commercial boiler with burner, gauges and supply and return piping" /></div>
+            <h3>Boiler</h3>
+            <ul class="machine__reads"><li>Inlet temperature</li><li>Outlet temperature</li><li>Inlet pressure</li><li>On / off</li></ul>
+            <span class="machine__tag">Photo required</span>
+          </article>
+          <article class="machine tilt reveal-card" data-tilt>
+            <div class="machine__art"><img src="./machines/pump.svg" width="480" height="340" alt="Illustration of a circulation pump with motor, casing and discharge gauge" /></div>
+            <h3>Circulation pump</h3>
+            <ul class="machine__reads"><li>On / off</li><li>Discharge pressure</li></ul>
+            <span class="machine__tag">Drift flagged at 5 PSI</span>
+          </article>
+          <article class="machine tilt reveal-card" data-tilt>
+            <div class="machine__art"><img src="./machines/booster.svg" width="480" height="340" alt="Illustration of a three-pump booster set with its control cabinet" /></div>
+            <h3>Booster pumps</h3>
+            <ul class="machine__reads"><li>Inlet pressure</li><li>Outlet pressure</li><li>Run state</li></ul>
+            <span class="machine__tag">Photo required</span>
+          </article>
+          <article class="machine tilt reveal-card" data-tilt>
+            <div class="machine__art"><img src="./machines/sprinkler.svg" width="480" height="340" alt="Illustration of a sprinkler riser with valve and air and water gauges" /></div>
+            <h3>Sprinkler system</h3>
+            <ul class="machine__reads"><li>Air pressure</li><li>Water (city)</li><li>Water (building)</li></ul>
+            <span class="machine__tag">Monitored daily</span>
+          </article>
+          <article class="machine tilt reveal-card" data-tilt>
+            <div class="machine__art"><img src="./machines/meter.svg" width="480" height="340" alt="Illustration of a water meter with a rolling odometer" /></div>
+            <h3>Utility meters</h3>
+            <ul class="machine__reads"><li>Running total</li></ul>
+            <span class="machine__tag">A drop or a doubling is questioned</span>
+          </article>
+          <article class="machine tilt reveal-card" data-tilt>
+            <div class="machine__art"><img src="./machines/tank.svg" width="480" height="340" alt="Illustration of a glycol expansion tank with sight glass and gauge" /></div>
+            <h3>Expansion tank</h3>
+            <ul class="machine__reads"><li>Pressure</li><li>Level %</li></ul>
+            <span class="machine__tag">Drift flagged at 5%</span>
+          </article>
+        </div>
+        <p class="fine machines__fine">Illustrations. Your checklist is built from your own sheets, so it lists whatever your buildings have.</p>
+      </section>
+
       <!-- 01 WALK (pinned phone) -->
       <section class="chapter chapter--pin" id="walk" data-chapter="walk">
         <div class="chapter__grid">
@@ -112,7 +160,7 @@
               <span>Time-stamped at capture</span><span>Street address</span><span>Distance from the building</span><span>Flagged when it’s far away</span>
             </div>
             <figure class="frame tilt frame--inline" data-tilt>
-              <img src="./shots/proof-ok.png" width="2380" height="658" alt="Proof of work: general and detail photos, each with time and address" />
+              <img src="./shots/proof-ok.png" width="1280" height="658" alt="Proof of work: general and detail photos, each with time and address" />
             </figure>
           </div>
           <div class="chapter__visual chapter__visual--space"></div>
@@ -174,7 +222,7 @@
           </div>
         </div>
         <figure class="frame frame--wide parallax-y" data-parallax="-30">
-          <img src="./shots/proof-far.png" width="2380" height="656" alt="A photo flagged 9000 m from the building, with address and time" />
+          <img src="./shots/proof-far.png" width="1280" height="656" alt="A photo flagged 9000 m from the building, with address and time" />
           <figcaption>When a photo is taken somewhere else, you see it — with the address.</figcaption>
         </figure>
       </section>
