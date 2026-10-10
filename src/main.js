@@ -476,7 +476,7 @@ function icon(name) {
 }
 
 function setDocumentTitle(suffix) {
-  document.title = suffix ? `${suffix} · Power Log Command` : "Power Log Command";
+  document.title = suffix ? `${suffix} · Inspect N Snap` : "Inspect N Snap";
 }
 
 function renderLoading() {
@@ -492,11 +492,11 @@ function renderLogin(message = "") {
   setDocumentTitle("Sign in");
   app.innerHTML = `
     <main class="login-page">
-      <section class="login-story" aria-label="Power Log Command overview">
+      <section class="login-story" aria-label="Inspect N Snap overview">
         <div class="login-story__inner">
           <div class="brand brand--light">
             <span class="brand-mark">${icon("command")}</span>
-            <span>Power Log <strong>Command</strong></span>
+            <span>Inspect <strong>N</strong> Snap</span>
           </div>
           <div class="story-copy">
             <p class="eyebrow eyebrow--light">Property operations, clearly directed</p>
@@ -514,13 +514,13 @@ function renderLogin(message = "") {
           <div class="login-panel__top">
             <div class="mobile-brand brand">
               <span class="brand-mark">${icon("command")}</span>
-              <span>Power Log <strong>Command</strong></span>
+              <span>Inspect <strong>N</strong> Snap</span>
             </div>
             <button type="button" class="link-button add-business-link" id="add-business-link">+ Add a business</button>
           </div>
           <p class="eyebrow">Secure access</p>
           <h2>Welcome back</h2>
-          <p class="form-intro">Sign in with your Power Log Command account.</p>
+          <p class="form-intro">Sign in with your Inspect N Snap account.</p>
           <form class="login-form" id="login-form">
             <label>
               <span>Username</span>
@@ -566,7 +566,7 @@ function renderAddBusinessModal(fromAgencyView = false) {
   wrap.innerHTML = `
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="add-business-title">
       <h3 id="add-business-title">${icon("command")} Set up your company</h3>
-      <p class="form-intro">Get your own Power Log Command workspace, fully separate from every other company's. You'll be set up as the Operations Manager — from there you can add Area Managers and Superintendents and start registering buildings.</p>
+      <p class="form-intro">Get your own Inspect N Snap workspace, fully separate from every other company's. You'll be set up as the Operations Manager — from there you can add Area Managers and Superintendents and start registering buildings.</p>
       <form id="add-business-form" class="login-form">
         <label><span>Company name</span><input name="companyName" required maxlength="120" autocomplete="organization" /></label>
         <label><span>Your name</span><input name="fullName" required maxlength="120" autocomplete="name" /></label>
@@ -640,7 +640,7 @@ function renderRegister() {
         <div class="login-form-wrap">
           <div class="mobile-brand brand">
             <span class="brand-mark">${icon("command")}</span>
-            <span>Power Log <strong>Command</strong></span>
+            <span>Inspect <strong>N</strong> Snap</span>
           </div>
           <p class="eyebrow">${reg.role ? `Register as ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}` : "Create an account"}</p>
           <h2>${titles[reg.step]}</h2>
@@ -734,7 +734,7 @@ function renderRegisterProfileStep(reg) {
       <label><span>Profile picture <small>(optional)</small></span><input name="profilePhoto" type="file" accept="image/*" /></label>
       <label class="consent-checkbox">
         <input type="checkbox" name="consent" required />
-        <span>I agree to receive text messages and emails from Power Log Command about my account, assignments, and building operations.</span>
+        <span>I agree to receive text messages and emails from Inspect N Snap about my account, assignments, and building operations.</span>
       </label>
       <p class="form-error" id="registration-error" hidden role="alert"></p>
       <button class="button button--primary button--full" type="submit"><span>Submit request</span>${icon("arrow")}</button>
@@ -835,11 +835,11 @@ function renderVerifyCodeScreen(pendingToken) {
   setDocumentTitle("Verify it's you");
   app.innerHTML = `
     <main class="login-page">
-      <section class="login-story" aria-label="Power Log Command overview">
+      <section class="login-story" aria-label="Inspect N Snap overview">
         <div class="login-story__inner">
           <div class="brand brand--light">
             <span class="brand-mark">${icon("command")}</span>
-            <span>Power Log <strong>Command</strong></span>
+            <span>Inspect <strong>N</strong> Snap</span>
           </div>
           <div class="story-copy">
             <p class="eyebrow eyebrow--light">Weekly check</p>
@@ -852,7 +852,7 @@ function renderVerifyCodeScreen(pendingToken) {
         <div class="login-form-wrap">
           <div class="mobile-brand brand">
             <span class="brand-mark">${icon("command")}</span>
-            <span>Power Log <strong>Command</strong></span>
+            <span>Inspect <strong>N</strong> Snap</span>
           </div>
           <p class="eyebrow">Verify it's you</p>
           <h2>Check your email</h2>
@@ -1134,9 +1134,9 @@ function renderApp() {
   app.innerHTML = `
     <div class="app-shell">
       <header class="topbar">
-        <a class="brand" href="#" aria-label="Power Log Command home">
+        <a class="brand" href="#" aria-label="Inspect N Snap home">
           <span class="brand-mark">${icon("command")}</span>
-          <span>Power Log <strong>Command</strong></span>
+          <span>Inspect <strong>N</strong> Snap</span>
         </a>
         <div class="topbar__right">
           <span class="role-pill">${escapeHtml(user.roleLabel)}</span>
@@ -1168,7 +1168,7 @@ function renderApp() {
       <main class="dashboard">
         ${isAgencyBroadView ? renderAgencyClients() : renderDashboard(state.dashboard)}
       </main>
-      <footer class="app-footer"><span>Power Log Command</span><span>Phase 5 · Secure operations workspace</span></footer>
+      <footer class="app-footer"><span>Inspect N Snap</span><span>Phase 5 · Secure operations workspace</span></footer>
     </div>`;
 
   // Tools that load their own data when shown (e.g. Schedules).
@@ -1207,7 +1207,7 @@ function renderAgencyClients() {
       <div>
         <p class="eyebrow">Agency view</p>
         <h1>All companies</h1>
-        <p>Every company running on Power Log Command. Enter one to see its dashboard exactly as its own Operations Manager would.</p>
+        <p>Every company running on Inspect N Snap. Enter one to see its dashboard exactly as its own Operations Manager would.</p>
       </div>
     </section>
     <section class="card">
@@ -1543,7 +1543,7 @@ async function handleDownloadWeeklyReport(button) {
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement("a");
     link.href = url;
-    link.download = week === "all" ? "Power-Log-Command-All-Days.xlsx" : `Power-Log-Command-Weekly-${week}.xlsx`;
+    link.download = week === "all" ? "Inspect-N-Snap-All-Days.xlsx" : `Inspect-N-Snap-Weekly-${week}.xlsx`;
     document.body.appendChild(link);
     link.click();
     link.remove();

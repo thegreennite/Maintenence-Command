@@ -138,9 +138,9 @@ export async function handleCreateBusiness(request, env, corsHeaders) {
     const contactId = await ghlUpsertContact(env, { email, name: fullName });
     await ghlSendEmail(env, {
       contactId,
-      subject: `Your Power Log Command account for ${companyName} is ready`,
+      subject: `Your Inspect N Snap account for ${companyName} is ready`,
       html: `<p>Hi ${fullName},</p>
-        <p>Your Power Log Command account for <strong>${companyName}</strong> is set up. Sign in with:</p>
+        <p>Your Inspect N Snap account for <strong>${companyName}</strong> is set up. Sign in with:</p>
         <p>Email: ${email}<br>Temporary password: <strong>${tempPassword}</strong></p>
         <p>You're set up as the Operations Manager -- from here you can add Area Managers and Superintendents, and start registering buildings.</p>`,
     });

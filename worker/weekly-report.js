@@ -36,7 +36,7 @@ export function weekTitle(dates) {
 }
 
 export function reportFilename(weekStart) {
-  return weekStart === "all" ? "Power-Log-Command-All-Days.xlsx" : `Power-Log-Command-Weekly-${weekStart}.xlsx`;
+  return weekStart === "all" ? "Inspect-N-Snap-All-Days.xlsx" : `Inspect-N-Snap-Weekly-${weekStart}.xlsx`;
 }
 
 const readingLabel = (tag) => [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ") || tag.system_name;
@@ -399,7 +399,7 @@ function writeBuildingSheet(wb, bld, week, opts = {}) {
 function writeSummarySheet(wb, week, opts = {}) {
   const lastCol = 9;
   const ws = wb.addSheet("Summary", { cols: [34, 11, 11, 10, 10, 13, 15, 15, 14, 28], freeze: { rows: 4, cols: 1 } });
-  ws.set(0, 0, opts.heading || `Power Log Command — Weekly Summary`, S.title);
+  ws.set(0, 0, opts.heading || `Inspect N Snap — Weekly Summary`, S.title);
   ws.merge(0, 0, 0, lastCol);
   ws.height(0, 28);
   ws.set(1, 0, `${opts.range || `Week of ${weekTitle(week.dates)}`}  ·  Generated ${new Date().toLocaleString("en-US", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" })} Toronto time`, S.subtitle);
@@ -489,7 +489,7 @@ export async function buildAllDaysReport(env) {
   const week = await gatherRange(env, dates);
   const range = `${longDate(dates[0])}, ${dates[0].slice(0, 4)} – ${longDate(dates[dates.length - 1])}, ${dates[dates.length - 1].slice(0, 4)}`;
   const wb = new Workbook();
-  writeSummarySheet(wb, week, { heading: "Power Log Command — All Recorded Days", range: `Every day on record: ${range}` });
+  writeSummarySheet(wb, week, { heading: "Inspect N Snap — All Recorded Days", range: `Every day on record: ${range}` });
   for (const b of week.buildings) {
     writeBuildingSheet(wb, b, week, {
       title: `All recorded days (${range})`,
@@ -617,7 +617,7 @@ export function renderReportEmail(week, downloadUrl, filename, allDaysUrl) {
 
   return `
   <div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:680px;margin:0 auto;color:#19252a;">
-    <h1 style="font-size:20px;margin:0 0 4px;">Power Log Command — Weekly Summary</h1>
+    <h1 style="font-size:20px;margin:0 0 4px;">Inspect N Snap — Weekly Summary</h1>
     <p style="margin:0 0 18px;color:#677478;font-size:13px;">Week of ${esc(weekTitle(week.dates))}</p>
     <table style="width:100%;border-collapse:collapse;margin-bottom:20px;"><tr>
       ${tile("Completion", `${pct}%`, `${t.submitted} of ${t.due} inspections`, false)}
@@ -641,7 +641,7 @@ export function renderReportEmail(week, downloadUrl, filename, allDaysUrl) {
     <h2 style="font-size:15px;margin:0 0 8px;">Comments &amp; notes from the week</h2>
     ${noteRows ? `<ul style="padding-left:18px;margin:0 0 20px;font-size:13px;">${noteRows}</ul>` : `<p style="color:#677478;font-size:13px;margin:0 0 20px;">No notes were left this week.</p>`}
     <p style="margin:0 0 6px;font-size:13px;"><strong>Your comments</strong> — there's a blank "Manager comments" block at the bottom of the Summary sheet and each building's sheet, ready to write in or print.</p>
-    <p style="margin-top:24px;font-size:11px;color:#8a9491;">Sent automatically every Friday at 5 PM Toronto time from Power Log Command. Past weeks are always available from the Weekly summaries card on your dashboard.</p>
+    <p style="margin-top:24px;font-size:11px;color:#8a9491;">Sent automatically every Friday at 5 PM Toronto time from Inspect N Snap. Past weeks are always available from the Weekly summaries card on your dashboard.</p>
   </div>`;
 }
 
@@ -674,7 +674,7 @@ export async function sendWeeklyReportEmail(env, { weekStart, onlyTo } = {}) {
   const url = await signedReportUrl(env, start);
   const allDaysUrl = await signedReportUrl(env, "all");
   const html = renderReportEmail(report.week, url, report.filename, allDaysUrl);
-  const subject = `Power Log Command weekly summary — week of ${weekTitle(report.week.dates)}`;
+  const subject = `Inspect N Snap weekly summary — week of ${weekTitle(report.week.dates)}`;
 
   const recipients = onlyTo ? [{ userId: null, name: onlyTo, email: onlyTo, contactId: null }] : await reportRecipients(env);
   const results = [];

@@ -12,7 +12,7 @@ export function canSeeAllBuildings(session) {
   return session.role === "admin" || session.building_access === "all";
 }
 
-// Multi-tenant: every company (a maintenance company Power Log Command is
+// Multi-tenant: every company (a maintenance company Inspect N Snap is
 // sold to) has its own physically separate database (see
 // worker/tenant-db.js) -- which one a request even talks to is resolved
 // before any handler runs (requireSession in index.js swaps env.DB to

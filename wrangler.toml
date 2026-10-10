@@ -8,7 +8,7 @@ database_name = "fhg-command-db"
 database_id = "96ae85a7-61f5-493e-847b-51a17aa39465"
 migrations_dir = "migrations"
 
-# Control-plane database: the registry of every company using Power Log
+# Control-plane database: the registry of every company using Inspect N Snap
 # Command (the "clients" table) plus the email->company directory login
 # uses to find the right company database before a session exists. Each
 # company's actual app data (users, buildings, inspections, everything)

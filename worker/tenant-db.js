@@ -120,7 +120,7 @@ export async function ensureAgencyUserRow(db) {
   const insert = await db
     .prepare(
       `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, building_access, status, is_active, client_id)
-       VALUES (?, ?, ?, 'Agency', 'Agency (Power Log Command)', 'admin', 'all', 'active', 1, 1)`,
+       VALUES (?, ?, ?, 'Agency', 'Agency (Inspect N Snap)', 'admin', 'all', 'active', 1, 1)`,
     )
     .bind(AGENCY_LOCAL_USERNAME, randomHex(32), randomHex(16))
     .run();
