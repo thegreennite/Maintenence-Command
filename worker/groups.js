@@ -200,7 +200,7 @@ export async function handleCreateTag(request, session, env, corsHeaders) {
     .bind(buildingId, systemName, tagNo, readingType, unit, valueType, groupId, newOrder, newOrder)
     .run();
 
-  return jsonOk({ ok: true, tagId: inserted.meta.last_row_id, valueType }, corsHeaders);
+  return jsonOk({ ok: true, tagId: inserted.meta.last_row_id, valueType, sortOrder: newOrder }, corsHeaders);
 }
 
 // Editing a reading after the checklist's already live -- a manager fixing

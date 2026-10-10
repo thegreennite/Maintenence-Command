@@ -489,7 +489,7 @@ export async function handleBuildingDetail(request, session, env, corsHeaders) {
 
   const [tags, workOrders, notices, recentNotes, superintendents, locations, groups, groupNotes, todayGroupPhotos] = await Promise.all([
     env.DB.prepare(
-      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.answer_kind AS value_type,
+      `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.answer_kind AS value_type, t.sort_order,
          t.location_id, l.name AS location_name, t.equipment_group_id, g.name AS equipment_group_name, t.monitor_trend
        FROM inspection_tags t
        LEFT JOIN building_locations l ON l.id = t.location_id

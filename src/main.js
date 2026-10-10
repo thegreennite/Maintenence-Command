@@ -4,6 +4,7 @@ installCameraCapture();
 import { jsPDF } from "jspdf";
 import { createSchedules } from "./schedules.js";
 import { plausibilityFlag } from "../shared/plausibility.js";
+import { walkOrder, previewNewReading } from "../shared/walk-order.js";
 
 // Google Maps JS API loads as a global script, not an npm module — lazily
 // injected the first time a map is actually shown, and cached so repeat
@@ -67,6 +68,9 @@ const state = {
   // Which machine's (or the ungrouped zone's, via the string "ungrouped")
   // "+ Add reading" form is currently open -- undefined = none open.
   buildingWorldAddingTagGroupId: undefined,
+  // The reading just added (highlighted in the command-mode walk preview) and whether that preview is open.
+  buildingWorldHighlightTagId: null,
+  walkPreviewOpen: false,
   buildingWorldSelectedGroupIds: new Set(),
   buildingWorldRenamingBuilding: false,
   buildingWorldHistory: null,
@@ -3206,8 +3210,13 @@ async function handleAddReadingSave(event) {
       equipment_group_id: groupId,
       equipment_group_name: group?.name || null,
       location_id: null,
+      sort_order: result.sortOrder,
     });
     state.buildingWorldAddingTagGroupId = undefined;
+    // Open the walk preview on the new reading, so the manager sees where it lands.
+    state.buildingWorldHighlightTagId = result.tagId;
+    state.walkPreviewOpen = true;
+    queueScroll(".walk-row.is-new");
     renderApp();
   } catch (requestError) {
     button.disabled = false;
@@ -3748,6 +3757,8 @@ function renderBuildingWorld() {
           ${renderChecklistBulkBar(world)}
           ${renderMachineBoard(world)}
         </section>
+
+        ${renderWalkPreviewCard(world)}
       </div>`,
         },
         {
@@ -3919,6 +3930,59 @@ function bindUnitFieldToggle(formEl) {
   });
 }
 
+const walkLabel = (t) => [t.equipment_group_name || t.system_name, [t.tag_no, t.reading_type].filter(Boolean).join(" — ")].filter(Boolean).join(" · ");
+
+// "Where will this show up?" -- shown while typing a new reading, before it
+// exists, so the manager sees its place in the superintendent's command-mode
+// walk ahead of time.
+function renderNewReadingWhere(world, groupId) {
+  const tags = (world.tags || []).filter((t) => Number.isFinite(t.sort_order));
+  if (!tags.length && (world.tags || []).length) return "";
+  const p = previewNewReading(tags, groupId);
+  return `<p class="add-tag-where">${icon("list")}<span>In command mode this will be <strong>reading ${p.position} of ${p.total}</strong>${
+    p.after ? `, right after <em>${escapeHtml(walkLabel(p.after))}</em>` : ", the very first one"
+  }${p.before ? `, before <em>${escapeHtml(walkLabel(p.before))}</em>` : p.after ? " — the last one" : ""}.</span></p>`;
+}
+
+// The whole command-mode walk, in the order a superintendent will see it.
+// Recomputed from the checklist every render, so adding, regrouping or
+// removing a reading shows up here immediately.
+function renderWalkPreviewCard(world) {
+  const tags = (world.tags || []).filter((t) => Number.isFinite(t.sort_order));
+  if (!tags.length) return "";
+  const ordered = walkOrder(tags);
+  const highlight = state.buildingWorldHighlightTagId;
+  const open = state.walkPreviewOpen || highlight != null;
+  let lastGroup = Symbol();
+  const rows = ordered
+    .map((t, i) => {
+      const group = t.equipment_group_id ?? null;
+      const header =
+        group !== lastGroup
+          ? `<li class="walk-group">${icon(group == null ? "list" : "cog")}${escapeHtml(group == null ? "Not on a machine" : t.equipment_group_name || "Machine")}</li>`
+          : "";
+      lastGroup = group;
+      return `${header}<li class="walk-row ${t.id === highlight ? "is-new" : ""}" data-tag-id="${t.id}"><span class="walk-row__n">${i + 1}</span>
+        <span class="walk-row__label">${escapeHtml([t.tag_no, t.reading_type].filter(Boolean).join(" — ") || t.reading_type)}${t.unit ? ` <small>${escapeHtml(t.unit)}</small>` : ""}</span>${t.id === highlight ? `<span class="walk-row__new">Just added</span>` : ""}</li>`;
+    })
+    .join("");
+  return `
+    <section class="card walk-preview" id="walk-preview">
+      <div class="card__header">
+        <div><p class="section-kicker">Command mode</p><h2>Walk order · ${ordered.length} reading${ordered.length === 1 ? "" : "s"}</h2></div>
+        <button type="button" class="button button--outline button--small" id="toggle-walk-preview">${open ? "Hide" : "Show"}</button>
+      </div>
+      ${
+        open
+          ? `<div class="walk-preview__body">
+              <p class="parameters-intro">This is exactly the order your superintendents will be walked through, one reading at a time. A new reading goes at the end of its machine, or last overall if it isn't on a machine. Drag a reading onto a machine above and this list updates.</p>
+              <ol class="walk-list">${rows}</ol>
+            </div>`
+          : ""
+      }
+    </section>`;
+}
+
 function renderMachineBoard(world) {
   const tags = world.tags || [];
   const groups = world.groups || [];
@@ -3963,6 +4027,7 @@ function renderAddReadingControl(groupKey, groupId, world) {
             .map(([value, { label }]) => `<option value="${value}">${escapeHtml(label)}</option>`)
             .join("")}
         </select>
+        ${renderNewReadingWhere(world, groupId)}
         <div class="reading-chip__edit-actions">
           <button type="submit" class="icon-button" title="Add" aria-label="Add reading">${icon("check")}</button>
           <button type="button" class="icon-button cancel-add-tag" title="Cancel" aria-label="Cancel">${icon("close")}</button>
@@ -5121,20 +5186,7 @@ function startCommandMode() {
   // board_sort_order either -- that's the machine board's own
   // drag-and-drop arrangement, for a manager's own organizing, and
   // must never reshuffle what a superintendent actually walks through.
-  const groupPosition = new Map();
-  for (const tag of [...tags].sort((a, b) => a.sort_order - b.sort_order)) {
-    if (tag.equipment_group_id != null && !groupPosition.has(tag.equipment_group_id)) {
-      groupPosition.set(tag.equipment_group_id, tag.sort_order);
-    }
-  }
-  const order = [...tags]
-    .sort((a, b) => {
-      const pa = a.equipment_group_id == null ? a.sort_order : groupPosition.get(a.equipment_group_id);
-      const pb = b.equipment_group_id == null ? b.sort_order : groupPosition.get(b.equipment_group_id);
-      if (pa !== pb) return pa - pb;
-      return a.sort_order - b.sort_order;
-    })
-    .map((t) => t.id);
+  const order = walkOrder(tags).map((t) => t.id);
 
   const readings = { ...(state.inspection.readings || {}) };
   const flags = { ...(state.inspection.flags || {}) };
@@ -5339,9 +5391,32 @@ function commandModeAdvance() {
   commandModeContinueAdvance();
 }
 
+// A small physical tap when command mode moves to another reading, so you can
+// feel it worked without looking at the screen. Android browsers support the
+// Vibration API. iPhone Safari doesn't, but toggling a native switch control
+// from a tap makes iOS 17.4+ play its own haptic -- same trick, no library.
+// Everything here is best-effort and silently does nothing if unsupported.
+let hapticSwitch = null;
+function haptic(pattern = 12) {
+  try {
+    if (navigator.vibrate && navigator.vibrate(pattern)) return;
+    if (!hapticSwitch) {
+      hapticSwitch = document.createElement("label");
+      hapticSwitch.setAttribute("aria-hidden", "true");
+      hapticSwitch.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none;";
+      hapticSwitch.innerHTML = '<input type="checkbox" switch tabindex="-1">';
+      document.body.appendChild(hapticSwitch);
+    }
+    hapticSwitch.click();
+  } catch {
+    /* no haptics available */
+  }
+}
+
 function commandModeContinueAdvance() {
   const cm = state.commandMode;
   if (cm.index < cm.order.length - 1) {
+    haptic(14);
     cm.index += 1;
     cm.entryMode = "choose";
     cm.abnormalPrompt = null;
@@ -5561,6 +5636,7 @@ function handleCommandModeFlag() {
 function handleCommandModePrev() {
   const cm = state.commandMode;
   if (cm.index === 0) return;
+  haptic([8, 40, 8]);
   cm.index -= 1;
   cm.entryMode = "choose";
   cm.abnormalPrompt = null;
@@ -6571,8 +6647,14 @@ function bindDashboardEvents() {
   document.querySelectorAll(".add-reading-start").forEach((button) => {
     button.addEventListener("click", () => {
       state.buildingWorldAddingTagGroupId = button.dataset.groupKey;
+      state.buildingWorldHighlightTagId = null;
       renderApp();
     });
+  });
+  document.querySelector("#toggle-walk-preview")?.addEventListener("click", () => {
+    state.walkPreviewOpen = !state.walkPreviewOpen;
+    state.buildingWorldHighlightTagId = null;
+    renderApp();
   });
   document.querySelector("#add-tag-form")?.addEventListener("submit", handleAddReadingSave);
   bindUnitFieldToggle(document.querySelector("#add-tag-form"));
