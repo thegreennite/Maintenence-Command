@@ -222,7 +222,9 @@ function build() {
     $$(".sheet i.bad").forEach((cell) => {
       gsap.fromTo(cell, { boxShadow: "0 0 0 0 rgba(216,75,62,0)" }, { boxShadow: "0 0 0 10px rgba(216,75,62,0.0)", duration: 1.4, repeat: -1, ease: "power2.out", onRepeat: () => {}, scrollTrigger: { trigger: cell, start: "top 85%", toggleActions: "play pause resume pause" } });
     });
+    // The drifting-card effect is desktop-only: on a phone it makes cards overlap the text around them.
     $$("[data-parallax]").forEach((el) => {
+      if (window.matchMedia("(max-width: 900px)").matches) return;
       const amount = Number(el.dataset.parallax) || 40;
       gsap.fromTo(el, { y: amount }, { y: -amount, ease: "none", scrollTrigger: { trigger: el, start: "top bottom", end: "bottom top", scrub: true } });
     });

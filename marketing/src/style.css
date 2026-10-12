@@ -285,3 +285,45 @@ html { -webkit-tap-highlight-color: transparent; }
   .machines { padding-top: 10vh; }
   .cta { min-height: 100svh; }
 }
+
+/* ---------------- phones, round two ---------------- */
+.swipe-hint { display: none; }
+:root { --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px); }
+.nav { padding-top: calc(18px + var(--safe-top)); }
+.footer { padding-bottom: calc(6vh + var(--safe-bottom)); }
+@media (max-width: 900px) {
+  /* Wide screenshots keep a readable size and swipe sideways instead of shrinking to nothing. */
+  .browser, .frame--inline, .frame--wide { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: none; }
+  .browser::-webkit-scrollbar, .frame--inline::-webkit-scrollbar, .frame--wide::-webkit-scrollbar { display: none; }
+  .browser > img { width: 820px; max-width: none; height: auto; }
+  .frame--inline > img, .frame--wide > img { width: 640px; max-width: none; height: auto; }
+  .browser__bar { position: sticky; left: 0; width: 100%; }
+  .frame--wide figcaption { position: sticky; left: 0; width: min(100vw, 100%); }
+  .swipe-hint { display: block; margin: 10px 4px 0; text-align: center; font: 700 12px var(--sans); letter-spacing: 0.1em; text-transform: uppercase; color: var(--lime); opacity: 0.85; }
+
+  /* The dev bar shouldn't sit on top of buttons: tiny, and it ignores taps. */
+  .devbar { left: 8px; bottom: calc(8px + var(--safe-bottom)); padding: 5px 9px; gap: 7px; font-size: 9.5px; pointer-events: none; opacity: 0.8; }
+  .devbar > span:first-child { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav { padding-left: max(var(--pad), env(safe-area-inset-left, 0px)); padding-right: max(var(--pad), env(safe-area-inset-right, 0px)); }
+}
+/* small phones (iPhone SE and similar) */
+@media (max-width: 380px), (max-height: 680px) and (max-width: 900px) {
+  .hero__title { font-size: clamp(54px, 15vw, 96px); }
+  .hero__lede { font-size: 16px; margin-top: 20px; }
+  .hero__cta { margin-top: 24px; }
+  .hero__meta { margin-top: 30px; }
+  h2 { font-size: clamp(34px, 9.4vw, 52px); }
+  .btn { padding: 14px 22px; }
+}
+/* phones held sideways */
+@media (max-height: 520px) and (orientation: landscape) {
+  .hero { padding-top: 84px; padding-bottom: 16px; }
+  .hero__title { font-size: clamp(40px, 15svh, 96px); }
+  .hero__eyebrow, .hero__lede { display: none; }
+  .hero__cta { margin-top: 16px; }
+  .hero__meta { margin-top: 18px; }
+  .chapter { padding-top: 22svh; }
+  .phone { height: min(70svh, 360px); }
+  .phone--small { height: min(60svh, 300px); }
+  .devbar { display: none; }
+}
