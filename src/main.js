@@ -5223,9 +5223,17 @@ function startCommandMode() {
 // commandModeScheduleSave) -- with saves now debounced rather than
 // blocking every question, this is the one moment that actually needs
 // the server fully caught up before state.commandMode disappears.
-async function exitCommandMode() {
+// `toSubmit`: the walkthrough is finished, so land on the Submit button instead of the top of
+// a form with every value above it. The exit button passes the click event as its first
+// argument, so only a real `{ toSubmit: true }` counts.
+async function exitCommandMode(options) {
+  const toSubmit = options?.toSubmit === true;
   await commandModeFlushSave();
   state.commandMode = null;
+  if (toSubmit) {
+    haptic([18, 50, 18]);
+    queueScroll("#submit-inspection-button", { block: "center" });
+  }
   renderApp();
 }
 
@@ -5435,7 +5443,7 @@ function commandModeContinueAdvance() {
     cm.reviewFlags = true;
     renderApp();
   } else {
-    exitCommandMode();
+    exitCommandMode({ toSubmit: true });
   }
 }
 
@@ -5540,7 +5548,7 @@ function commandModeAfterValueSettled() {
       cm.reviewFlags = true;
       renderApp();
     } else {
-      exitCommandMode();
+      exitCommandMode({ toSubmit: true });
     }
     return;
   }
@@ -5693,8 +5701,23 @@ function handleCommandModeManualSubmit(event) {
 
 function handleCommandModeManualChoice(button) {
   const cm = state.commandMode;
+  if (cm.choicePending) return; // a double tap must not record two answers
   const tagId = cm.order[cm.index];
-  commandModeAcceptValue(tagId, button.dataset.value);
+  cm.choicePending = true;
+  // Light the pressed button straight away, and give it a beat on screen before moving on.
+  const grid = button.closest(".command-mode__choice-grid");
+  grid?.querySelectorAll(".command-mode-manual-choice").forEach((b) => {
+    const picked = b === button;
+    b.classList.toggle("is-selected", picked);
+    b.classList.toggle("button--primary", picked);
+    b.classList.toggle("button--outline", !picked);
+    b.setAttribute("aria-pressed", String(picked));
+  });
+  setTimeout(() => {
+    cm.choicePending = false;
+    if (state.commandMode !== cm) return; // left command mode in the meantime
+    commandModeAcceptValue(tagId, button.dataset.value);
+  }, prefersReducedMotion() ? 0 : 230);
 }
 
 async function handleCommandModePhotoInput(event) {
@@ -5886,10 +5909,11 @@ function renderCommandModeManualEntry(cm, tag) {
       <div class="command-mode__manual">
         <div class="command-mode__choice-grid">
           ${choices
-            .map(
-              (choice) =>
-                `<button type="button" class="button button--outline command-mode-manual-choice" data-value="${escapeHtml(choice)}">${escapeHtml(choice)}</button>`,
-            )
+            .map((choice) => {
+              // The answer already given for this reading stays lit, so going back shows what was pressed.
+              const picked = String(cm.readings[tag.id] ?? "").trim().toLowerCase() === choice.toLowerCase();
+              return `<button type="button" class="button command-mode-manual-choice ${picked ? "button--primary is-selected" : "button--outline"}" aria-pressed="${picked}" data-value="${escapeHtml(choice)}">${escapeHtml(choice)}</button>`;
+            })
             .join("")}
         </div>
         ${showCancel ? `<div class="command-mode__manual-actions"><button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button></div>` : ""}

@@ -1415,3 +1415,10 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 @media (max-width: 680px) { .walk-preview__body { padding: 0 14px 16px; } }
 .walk-preview { grid-column: 1 / -1; }
 @media (min-width: 900px) { .walk-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; } .walk-group { grid-column: 1 / -1; } }
+
+/* Command mode: the button you pressed stays lit (also when you come back to the reading). */
+.command-mode__choice-grid .command-mode-manual-choice { position: relative; transition: background .15s, border-color .15s, color .15s, transform .12s; }
+.command-mode__choice-grid .command-mode-manual-choice:active { transform: scale(.97); }
+.command-mode__choice-grid .command-mode-manual-choice.is-selected { box-shadow: 0 0 0 3px rgba(220, 235, 97, .9), 0 8px 22px rgba(23, 76, 67, .35); }
+.command-mode__choice-grid .command-mode-manual-choice.is-selected::before { content: "✓"; margin-right: 8px; font-weight: 800; color: var(--lime); }
+@media (prefers-reduced-motion: reduce) { .command-mode__choice-grid .command-mode-manual-choice { transition: none; } }
