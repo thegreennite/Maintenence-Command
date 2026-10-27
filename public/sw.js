@@ -2,10 +2,10 @@
 // Purpose: make the app installable and open instantly. It caches the app shell and its
 // (content-hashed) files. It never touches /api/ -- readings, photos, logins and sessions
 // always go straight to the network, so nothing private or stale is ever served from here.
-const VERSION = "v4";
+const VERSION = "v5";
 const SHELL = `if-shell-${VERSION}`;
 const FILES = `if-files-${VERSION}`;
-const SHELL_URLS = ["/", "/offline", "/manifest.webmanifest", "/favicon.svg", "/icons/icon-192.png?v=3"];
+const SHELL_URLS = ["/", "/offline", "/manifest.webmanifest?v=4", "/favicon.svg", "/icons/icon-192.png?v=4"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(SHELL_URLS)).then(() => self.skipWaiting()));
