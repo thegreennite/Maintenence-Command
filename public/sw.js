@@ -2,7 +2,7 @@
 // Purpose: make the app installable and open instantly. It caches the app shell and its
 // (content-hashed) files. It never touches /api/ -- readings, photos, logins and sessions
 // always go straight to the network, so nothing private or stale is ever served from here.
-const VERSION = "v3";
+const VERSION = "v4";
 const SHELL = `if-shell-${VERSION}`;
 const FILES = `if-files-${VERSION}`;
 const SHELL_URLS = ["/", "/offline", "/manifest.webmanifest", "/favicon.svg", "/icons/icon-192.png?v=3"];
@@ -65,19 +65,16 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Icons, manifest and the like: show the cached copy now, refresh it in the background.
+  // Icons, manifest and the like: network first so a changed icon shows up right away; cached copy when offline.
   event.respondWith(
-    caches.match(request).then((hit) => {
-      const refresh = fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(FILES).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        })
-        .catch(() => hit);
-      return hit || refresh;
-    }),
+    withTimeout(fetch(request), 5000)
+      .then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(FILES).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      })
+      .catch(async () => (await caches.match(request)) || Response.error()),
   );
 });
