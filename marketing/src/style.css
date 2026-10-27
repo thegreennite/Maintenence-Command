@@ -67,7 +67,7 @@ main, .footer { position: relative; z-index: 2; }
 .nav.is-solid { background: rgba(7, 17, 15, 0.6); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
 .nav.is-hidden { transform: translateY(-110%); }
 .logo { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 800; letter-spacing: -0.03em; font-size: 20px; }
-.logo svg { width: 30px; height: 30px; color: var(--lime); }
+.logo img { width: 30px; height: 30px; border-radius: 8px; display: block; }
 .logo b { color: var(--lime); font-family: var(--serif); font-style: italic; font-weight: 400; }
 .nav__links { display: flex; gap: 6px; }
 .nav__links a { padding: 8px 14px; border-radius: 999px; text-decoration: none; font-weight: 600; font-size: 15px; color: var(--muted); transition: color 0.2s, background 0.2s; }

@@ -3,6 +3,7 @@ import { installCameraCapture, liveCaptureTime, showPhotoFeedback } from "./came
 installCameraCapture();
 import { jsPDF } from "jspdf";
 import { createSchedules } from "./schedules.js";
+import { initInstall, installLinkHtml } from "./install.js";
 import { plausibilityFlag } from "../shared/plausibility.js";
 import { walkOrder, previewNewReading } from "../shared/walk-order.js";
 
@@ -442,6 +443,11 @@ function bindPasswordToggles(root = document) {
   });
 }
 
+// The Inspect Funnels mark (viewfinder + funnel + snap dot): same artwork as brand/logo-glyph.svg.
+function logoGlyph() {
+  return `<svg class="logo-glyph" viewBox="86 86 340 340" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"><path d="M108 188V108h80"/><path d="M324 108h80v80"/><path d="M404 324v80h-80"/><path d="M188 404h-80v-80"/></g><path d="M166 176H346L282 268V326H230V268Z" fill="var(--glyph-funnel, #fff)" stroke="var(--glyph-funnel, #fff)" stroke-width="16" stroke-linejoin="round"/><circle cx="256" cy="378" r="23" fill="currentColor"/></svg>`;
+}
+
 function icon(name) {
   const paths = {
     arrow: '<path d="m9 18 6-6-6-6"/>',
@@ -482,7 +488,7 @@ function setDocumentTitle(suffix) {
 function renderLoading() {
   app.innerHTML = `
     <main class="loading-screen" aria-live="polite">
-      <div class="brand-mark">${icon("command")}</div>
+      <div class="brand-mark">${logoGlyph()}</div>
       <div class="loading-bar"><span></span></div>
       <p>Opening command center…</p>
     </main>`;
@@ -495,7 +501,7 @@ function renderLogin(message = "") {
       <section class="login-story" aria-label="Inspect Funnels overview">
         <div class="login-story__inner">
           <div class="brand brand--light">
-            <span class="brand-mark">${icon("command")}</span>
+            <span class="brand-mark">${logoGlyph()}</span>
             <span>Inspect <strong>Funnels</strong></span>
           </div>
           <div class="story-copy">
@@ -513,7 +519,7 @@ function renderLogin(message = "") {
         <div class="login-form-wrap">
           <div class="login-panel__top">
             <div class="mobile-brand brand">
-              <span class="brand-mark">${icon("command")}</span>
+              <span class="brand-mark">${logoGlyph()}</span>
               <span>Inspect <strong>Funnels</strong></span>
             </div>
             <button type="button" class="link-button add-business-link" id="add-business-link">+ Add a business</button>
@@ -536,6 +542,7 @@ function renderLogin(message = "") {
           <div class="register-links">
             <span>New here?</span>
             <button type="button" class="link-button" id="create-account-link">Create an account</button>
+            ${installLinkHtml()}
           </div>
         </div>
       </section>
@@ -639,7 +646,7 @@ function renderRegister() {
       <section class="login-panel login-panel--wide">
         <div class="login-form-wrap">
           <div class="mobile-brand brand">
-            <span class="brand-mark">${icon("command")}</span>
+            <span class="brand-mark">${logoGlyph()}</span>
             <span>Inspect <strong>Funnels</strong></span>
           </div>
           <p class="eyebrow">${reg.role ? `Register as ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}` : "Create an account"}</p>
@@ -838,7 +845,7 @@ function renderVerifyCodeScreen(pendingToken) {
       <section class="login-story" aria-label="Inspect Funnels overview">
         <div class="login-story__inner">
           <div class="brand brand--light">
-            <span class="brand-mark">${icon("command")}</span>
+            <span class="brand-mark">${logoGlyph()}</span>
             <span>Inspect <strong>Funnels</strong></span>
           </div>
           <div class="story-copy">
@@ -851,7 +858,7 @@ function renderVerifyCodeScreen(pendingToken) {
       <section class="login-panel">
         <div class="login-form-wrap">
           <div class="mobile-brand brand">
-            <span class="brand-mark">${icon("command")}</span>
+            <span class="brand-mark">${logoGlyph()}</span>
             <span>Inspect <strong>Funnels</strong></span>
           </div>
           <p class="eyebrow">Verify it's you</p>
@@ -1135,7 +1142,7 @@ function renderApp() {
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="#" aria-label="Inspect Funnels home">
-          <span class="brand-mark">${icon("command")}</span>
+          <span class="brand-mark">${logoGlyph()}</span>
           <span>Inspect <strong>Funnels</strong></span>
         </a>
         <div class="topbar__right">
@@ -1168,7 +1175,7 @@ function renderApp() {
       <main class="dashboard">
         ${isAgencyBroadView ? renderAgencyClients() : renderDashboard(state.dashboard)}
       </main>
-      <footer class="app-footer"><span>Inspect Funnels</span><span>Phase 5 · Secure operations workspace</span></footer>
+      <footer class="app-footer"><span>Inspect Funnels</span><span>Phase 5 · Secure operations workspace</span>${installLinkHtml()}</footer>
     </div>`;
 
   // Tools that load their own data when shown (e.g. Schedules).
@@ -7161,6 +7168,8 @@ async function bootstrap() {
     renderLogin();
   }
 }
+
+initInstall();
 
 const schedules = createSchedules({
   request: (path, options) => api.request(path, options),
