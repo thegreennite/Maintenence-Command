@@ -5215,7 +5215,6 @@ function startCommandMode() {
     lastLocationWarning: null,
     entryMode: "choose",
     manualDraft: "",
-    tempUnit: "C",
     scanResult: null,
     abnormalPrompt: null,
     reviewFlags: false,
@@ -5436,7 +5435,6 @@ function commandModeContinueAdvance() {
     cm.entryMode = "choose";
     cm.abnormalPrompt = null;
     cm.scanResult = null;
-    cm.tempUnit = "C";
     // Skipping straight to the manual box (see skipToManual) bypasses
     // handleCommandModeManualOpen, which is normally what copies an
     // already-recorded value into the draft -- do that here too, or the
@@ -5656,7 +5654,6 @@ function handleCommandModePrev() {
   cm.entryMode = "choose";
   cm.abnormalPrompt = null;
   cm.scanResult = null;
-  cm.tempUnit = "C";
   cm.manualDraft = cm.readings[cm.order[cm.index]] || "";
   renderApp();
 }
@@ -5683,26 +5680,15 @@ function handleCommandModeManualCancel() {
   renderApp();
 }
 
-// Everything in this app assumes one consistent unit per gauge over
-// time (min/max parameters, the 7-day trend check) -- so no matter which
-// button a super hits, what actually gets stored is always Celsius. The
-// °F button is just so they don't have to do the math by hand off an
-// old Fahrenheit gauge.
-function fahrenheitToCelsius(f) {
-  return Math.round(((f - 32) * (5 / 9)) * 10) / 10;
-}
-
+// The number is saved exactly as typed -- Fahrenheit stays Fahrenheit, Celsius stays Celsius.
+// Nothing is converted; a gauge keeps whatever unit its own dial reads.
 function handleCommandModeManualSubmit(event) {
   event.preventDefault();
   const cm = state.commandMode;
   const tagId = cm.order[cm.index];
   const tag = state.inspection.tags.find((t) => t.id === tagId);
-  let value = document.querySelector("#command-mode-manual-input").value.trim();
+  const value = document.querySelector("#command-mode-manual-input").value.trim();
   if (!value) return;
-  if (isTemperatureTag(tag) && cm.tempUnit === "F") {
-    const num = Number.parseFloat(value);
-    if (!Number.isNaN(num)) value = String(fahrenheitToCelsius(num));
-  }
   commandModeAcceptValue(tagId, value);
 }
 
@@ -5891,12 +5877,6 @@ function renderCommandModeChoose(currentValue, isFlagged, tag) {
     </div>`;
 }
 
-// A tag reading in whole degrees with no closed-choice type is a
-// temperature -- "°" is the only unit this app hands a super for that.
-function isTemperatureTag(tag) {
-  return tag.unit === "°" && !CLOSED_CHOICE_TYPES[tag.value_type];
-}
-
 function renderCommandModeManualEntry(cm, tag) {
   // Matches skipToManual above (TEMPORARY, everyone skips the "choose"
   // stage right now) -- there's no "choose" screen underneath to cancel
@@ -5926,17 +5906,8 @@ function renderCommandModeManualEntry(cm, tag) {
         ${showCancel ? `<div class="command-mode__manual-actions"><button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button></div>` : ""}
       </div>`;
   }
-  const isTemp = isTemperatureTag(tag);
   return `
     <form id="command-mode-manual-form" class="command-mode__manual">
-      ${
-        isTemp
-          ? `<div class="command-mode__unit-toggle" role="group" aria-label="Unit for the value you're about to type">
-              <button type="button" class="command-mode-temp-unit ${cm.tempUnit === "C" ? "is-selected" : ""}" data-unit="C">°C</button>
-              <button type="button" class="command-mode-temp-unit ${cm.tempUnit === "F" ? "is-selected" : ""}" data-unit="F">°F</button>
-            </div>`
-          : ""
-      }
       <input
         type="text"
         inputmode="decimal"
@@ -6061,18 +6032,6 @@ function bindCommandModeEvents() {
   document.querySelector("#command-mode-manual-form")?.addEventListener("submit", handleCommandModeManualSubmit);
   document.querySelectorAll(".command-mode-manual-choice").forEach((button) => {
     button.addEventListener("click", () => handleCommandModeManualChoice(button));
-  });
-  document.querySelectorAll(".command-mode-temp-unit").forEach((button) => {
-    button.addEventListener("click", () => {
-      // Preserve whatever's already typed -- re-rendering to flip the
-      // selected-button style would otherwise redraw the input from
-      // manualDraft, which is only synced at a few transition points,
-      // not on every keystroke.
-      const input = document.querySelector("#command-mode-manual-input");
-      if (input) state.commandMode.manualDraft = input.value;
-      state.commandMode.tempUnit = button.dataset.unit;
-      renderApp();
-    });
   });
   document.querySelector("#command-mode-camera")?.addEventListener("change", handleCommandModePhotoInput);
   document.querySelector("#command-mode-scan-accept")?.addEventListener("click", handleCommandModeScanAccept);
