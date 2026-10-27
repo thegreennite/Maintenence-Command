@@ -6,6 +6,7 @@ import { createSchedules } from "./schedules.js";
 import { initInstall, installLinkHtml } from "./install.js";
 import { plausibilityFlag } from "../shared/plausibility.js";
 import { walkOrder, previewNewReading } from "../shared/walk-order.js";
+import { splitReading, withTempUnit, readingParts, readingText } from "../shared/reading-unit.js";
 
 // Google Maps JS API loads as a global script, not an npm module — lazily
 // injected the first time a map is actually shown, and cached so repeat
@@ -3605,7 +3606,7 @@ async function handleDownloadInspectionPdf(button) {
           y = margin;
         }
         const label = [row.tag_no, row.reading_type].filter(Boolean).join(" — ");
-        const value = row.value ? `${row.value}${row.unit ? ` ${row.unit}` : ""}` : "—";
+        const value = row.value ? readingText(row.value, row.unit) : "—";
         const flaggedNote = row.flagged ? "  [flagged]" : "";
         doc.text(`${label}`, margin + 10, y);
         doc.text(`${value}${flaggedNote}`, margin + 320, y);
@@ -5215,6 +5216,7 @@ function startCommandMode() {
     lastLocationWarning: null,
     entryMode: "choose",
     manualDraft: "",
+    tempUnit: lastTempUnit(),
     scanResult: null,
     abnormalPrompt: null,
     reviewFlags: false,
@@ -5439,7 +5441,7 @@ function commandModeContinueAdvance() {
     // handleCommandModeManualOpen, which is normally what copies an
     // already-recorded value into the draft -- do that here too, or the
     // box would look empty for a tag that's actually already answered.
-    cm.manualDraft = cm.readings[cm.order[cm.index]] || "";
+    commandModeLoadDraft(cm, cm.readings[cm.order[cm.index]]);
     renderApp();
     return;
   }
@@ -5654,7 +5656,7 @@ function handleCommandModePrev() {
   cm.entryMode = "choose";
   cm.abnormalPrompt = null;
   cm.scanResult = null;
-  cm.manualDraft = cm.readings[cm.order[cm.index]] || "";
+  commandModeLoadDraft(cm, cm.readings[cm.order[cm.index]]);
   renderApp();
 }
 
@@ -5670,7 +5672,7 @@ function handleCommandModeManualOpen() {
   const cm = state.commandMode;
   const tagId = cm.order[cm.index];
   cm.entryMode = "manual";
-  cm.manualDraft = cm.readings[tagId] || "";
+  commandModeLoadDraft(cm, cm.readings[tagId]);
   renderApp();
 }
 
@@ -5680,15 +5682,45 @@ function handleCommandModeManualCancel() {
   renderApp();
 }
 
-// The number is saved exactly as typed -- Fahrenheit stays Fahrenheit, Celsius stays Celsius.
-// Nothing is converted; a gauge keeps whatever unit its own dial reads.
+// A temperature is saved exactly as typed, with the scale it was typed in ("72°F") -- never
+// converted. The °C/°F buttons only say which scale the number is in; the last one used is
+// remembered on this phone so a Fahrenheit gauge doesn't need a tap every time.
+function lastTempUnit() {
+  try {
+    return localStorage.getItem("if-temp-unit") === "F" ? "F" : "C";
+  } catch {
+    return "C";
+  }
+}
+
+// A gauge reading in whole degrees with no closed-choice type is a temperature --
+// "°" is the only unit this app hands a super for that.
+function isTemperatureTag(tag) {
+  return tag.unit === "°" && !CLOSED_CHOICE_TYPES[tag.value_type];
+}
+
+// Fill the manual box from an already-saved value: the number goes in the box, its scale on the buttons.
+function commandModeLoadDraft(cm, value) {
+  const { number, unit } = splitReading(value);
+  cm.manualDraft = number;
+  if (unit) cm.tempUnit = unit;
+}
+
 function handleCommandModeManualSubmit(event) {
   event.preventDefault();
   const cm = state.commandMode;
   const tagId = cm.order[cm.index];
   const tag = state.inspection.tags.find((t) => t.id === tagId);
-  const value = document.querySelector("#command-mode-manual-input").value.trim();
+  let value = document.querySelector("#command-mode-manual-input").value.trim();
   if (!value) return;
+  if (isTemperatureTag(tag)) {
+    value = withTempUnit(value, cm.tempUnit);
+    try {
+      localStorage.setItem("if-temp-unit", cm.tempUnit);
+    } catch {
+      /* private mode: just don't remember it */
+    }
+  }
   commandModeAcceptValue(tagId, value);
 }
 
@@ -5761,7 +5793,7 @@ function handleCommandModeScanManual() {
   const value = cm.scanResult?.value;
   cm.scanResult = null;
   cm.entryMode = "manual";
-  cm.manualDraft = value || "";
+  commandModeLoadDraft(cm, value);
   renderApp();
 }
 
@@ -5858,11 +5890,16 @@ function renderCommandMode() {
     </section>`;
 }
 
+function currentValueHtml(value, tag) {
+  const { number, unit } = readingParts(value, tag.unit);
+  return `<span>${escapeHtml(number)}</span>${unit ? ` <small>${escapeHtml(unit)}</small>` : ""}`;
+}
+
 function renderCommandModeChoose(currentValue, isFlagged, tag) {
   return `
     ${
       currentValue
-        ? `<div class="command-mode__current"><span>${escapeHtml(currentValue)}</span>${tag.unit ? ` <small>${escapeHtml(tag.unit)}</small>` : ""}</div>`
+        ? `<div class="command-mode__current">${currentValueHtml(currentValue, tag)}</div>`
         : `<p class="command-mode__empty">${isFlagged ? "🚩 Flagged for later — no value yet" : "No value yet"}</p>`
     }
     <div class="command-mode__actions">
@@ -5906,8 +5943,17 @@ function renderCommandModeManualEntry(cm, tag) {
         ${showCancel ? `<div class="command-mode__manual-actions"><button type="button" class="button button--outline" id="command-mode-manual-cancel">Cancel</button></div>` : ""}
       </div>`;
   }
+  const isTemp = isTemperatureTag(tag);
   return `
     <form id="command-mode-manual-form" class="command-mode__manual">
+      ${
+        isTemp
+          ? `<div class="command-mode__unit-toggle" role="group" aria-label="Scale for the value you're about to type">
+              <button type="button" class="command-mode-temp-unit ${cm.tempUnit === "C" ? "is-selected" : ""}" data-unit="C" aria-pressed="${cm.tempUnit === "C"}">°C</button>
+              <button type="button" class="command-mode-temp-unit ${cm.tempUnit === "F" ? "is-selected" : ""}" data-unit="F" aria-pressed="${cm.tempUnit === "F"}">°F</button>
+            </div>`
+          : ""
+      }
       <input
         type="text"
         inputmode="decimal"
@@ -5950,7 +5996,7 @@ function renderCommandModeScanResult(cm, tag) {
 function renderCommandModeAbnormal(prompt, tag) {
   return `
     <div class="command-mode__abnormal">
-      <div class="command-mode__current"><span>${escapeHtml(prompt.value)}</span>${tag.unit ? ` <small>${escapeHtml(tag.unit)}</small>` : ""}</div>
+      <div class="command-mode__current">${currentValueHtml(prompt.value, tag)}</div>
       <p class="command-mode__scan-note">${icon("warning")} ${escapeHtml(prompt.detail)}</p>
       <div class="command-mode__manual-actions">
         <button type="button" class="button button--outline" id="command-mode-abnormal-incorrect">Incorrect — re-enter</button>
@@ -6032,6 +6078,16 @@ function bindCommandModeEvents() {
   document.querySelector("#command-mode-manual-form")?.addEventListener("submit", handleCommandModeManualSubmit);
   document.querySelectorAll(".command-mode-manual-choice").forEach((button) => {
     button.addEventListener("click", () => handleCommandModeManualChoice(button));
+  });
+  document.querySelectorAll(".command-mode-temp-unit").forEach((button) => {
+    button.addEventListener("click", () => {
+      // Keep whatever is already typed: re-rendering to flip the highlighted button
+      // would otherwise redraw the box from manualDraft, which isn't updated per keystroke.
+      const input = document.querySelector("#command-mode-manual-input");
+      if (input) state.commandMode.manualDraft = input.value;
+      state.commandMode.tempUnit = button.dataset.unit;
+      renderApp();
+    });
   });
   document.querySelector("#command-mode-camera")?.addEventListener("change", handleCommandModePhotoInput);
   document.querySelector("#command-mode-scan-accept")?.addEventListener("click", handleCommandModeScanAccept);
@@ -6186,7 +6242,7 @@ function renderOutOfRangeModal(flagged) {
           .map(
             (item) => `
           <div class="out-of-range-item" data-tag-id="${item.tag.id}">
-            <div class="out-of-range-item__label"><strong>${escapeHtml([item.tag.tag_no, item.tag.reading_type].filter(Boolean).join(" — "))}</strong><span>You entered: ${escapeHtml(String(item.value))}${item.tag.unit ? " " + escapeHtml(item.tag.unit) : ""}${item.detail ? ` · ${escapeHtml(item.detail)}` : ""}</span></div>
+            <div class="out-of-range-item__label"><strong>${escapeHtml([item.tag.tag_no, item.tag.reading_type].filter(Boolean).join(" — "))}</strong><span>You entered: ${escapeHtml(readingText(String(item.value), item.tag.unit))}${item.detail ? ` · ${escapeHtml(item.detail)}` : ""}</span></div>
             <div class="out-of-range-item__actions">
               <button type="button" class="button button--small button--outline" data-choice="fix">Let me fix it</button>
               <button type="button" class="button button--small button--light" data-choice="normal">It's normal</button>

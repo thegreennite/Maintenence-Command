@@ -7,6 +7,7 @@
 // current -- nothing is stored or has to be backfilled.
 
 import { Workbook, S } from "./xlsx-writer.js";
+import { readingText } from "../shared/reading-unit.js";
 import { weekDates, todayIso, weekdayName } from "./dashboard-data.js";
 import { loadBaselines, evaluateDeviation, MIN_BASELINE_DAYS, inferTolerance, trendMonitored } from "./deviation.js";
 import { ghlUpsertContact, ghlSendEmail } from "./ghl.js";
@@ -41,7 +42,7 @@ export function reportFilename(weekStart) {
 
 const readingLabel = (tag) => [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ") || tag.system_name;
 const asCell = (value) => (/^-?\d+(\.\d+)?$/.test(String(value).trim()) ? Number(value) : String(value));
-const withUnit = (value, unit) => (!unit ? `${value}` : unit === "°" ? `${value}°` : `${value} ${unit}`);
+const withUnit = (value, unit) => readingText(value, unit);
 
 // ----- data -----------------------------------------------------------
 async function gatherBuilding(env, building, dates, today) {

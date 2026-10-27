@@ -6,6 +6,7 @@
 // inventory.
 
 import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
+import { readingText } from "../shared/reading-unit.js";
 
 const CATEGORY_LABELS = {
   inventory: "Inventory",
@@ -29,7 +30,7 @@ export async function createReadingWorkOrder(env, { buildingId, tagId, value, cr
 
   const label = [tag.tag_no, tag.reading_type].filter(Boolean).join(" — ");
   const title = `Abnormal reading: ${label}`;
-  const description = `Reported as ${value}${tag.unit ? " " + tag.unit : ""}, confirmed abnormal by the superintendent rather than a mistaken entry.`;
+  const description = `Reported as ${readingText(value, tag.unit)}, confirmed abnormal by the superintendent rather than a mistaken entry.`;
 
   await env.DB.prepare(
     `INSERT INTO work_orders (building_id, created_by, source, title, description, reading_tag_id, reading_value)
