@@ -13,9 +13,8 @@ def page_for(svg_markup, size, bg="transparent", pad=0, scale=1.0, tile_bg=None)
     return f"""<html><body style="margin:0;background:{bg};width:{size}px;height:{size}px;display:grid;place-items:center;overflow:hidden">
     <div style="width:{size*scale}px;height:{size*scale}px">{inner}</div></body></html>"""
 
-# Maskable icons are cropped to a circle/squircle by the phone, so the art must sit in the safe middle ~70%.
-maskable = mark.replace('<rect width="512" height="512" rx="116" fill="url(#tile)"/>', '<rect width="512" height="512" fill="url(#tile)"/>')
-maskable = maskable.replace('</defs>', '</defs><g transform="translate(256 256) scale(.74) translate(-256 -256)">', 1).replace('</svg>', '</g></svg>')
+# One full-bleed design for every size: art sits inside the maskable safe zone, so the phone can crop it freely.
+maskable = mark
 
 jobs = [
     ("icons/icon-192.png", mark, 192), ("icons/icon-512.png", mark, 512),
@@ -34,7 +33,7 @@ with sync_playwright() as p:
     # Wordmark + share image (1200x630)
     share = f"""<html><head><link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;700;800&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet"></head>
     <body style="margin:0;width:1200px;height:630px;background:radial-gradient(90% 120% at 80% 10%,#1d5c52 0%,#0b1a18 60%,#07110f 100%);color:#e8efe9;font-family:'Inter Tight',Arial,sans-serif;display:flex;align-items:center;gap:56px;padding:0 90px;box-sizing:border-box">
-    <div style="width:250px;height:250px;flex:none;filter:drop-shadow(0 24px 48px rgba(0,0,0,.5))">{mark}</div>
+    <div style="width:250px;height:250px;flex:none;border-radius:58px;overflow:hidden;box-shadow:0 24px 48px rgba(0,0,0,.5)">{mark}</div>
     <div><div style="font-weight:800;font-size:118px;letter-spacing:-.05em;line-height:.95">Inspect<br><span style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-weight:400;color:#dceb61;letter-spacing:-.02em">Funnels</span></div>
     <div style="margin-top:26px;font-size:30px;color:#a9bbb4;font-weight:500">Maintenance operations, with proof.</div></div></body></html>"""
     pg = b.new_page(viewport={"width": 1200, "height": 630}); pg.set_content(share); pg.wait_for_timeout(1500)

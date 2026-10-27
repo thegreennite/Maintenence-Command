@@ -445,7 +445,7 @@ function bindPasswordToggles(root = document) {
 
 // The Inspect Funnels mark (viewfinder + funnel + snap dot): same artwork as brand/logo-glyph.svg.
 function logoGlyph() {
-  return `<svg class="logo-glyph" viewBox="86 86 340 340" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"><path d="M108 188V108h80"/><path d="M324 108h80v80"/><path d="M404 324v80h-80"/><path d="M188 404h-80v-80"/></g><path d="M166 176H346L282 268V326H230V268Z" fill="var(--glyph-funnel, #fff)" stroke="var(--glyph-funnel, #fff)" stroke-width="16" stroke-linejoin="round"/><circle cx="256" cy="378" r="23" fill="currentColor"/></svg>`;
+  return `<svg class="logo-glyph" viewBox="92 92 328 328" aria-hidden="true"><path d="M116 128H396L292 262V330H220V262Z" fill="var(--glyph-funnel, #ffffff)" stroke="var(--glyph-funnel, #ffffff)" stroke-width="24" stroke-linejoin="round"/> <circle cx="256" cy="394" r="30" fill="currentColor"/></svg>`;
 }
 
 function icon(name) {
