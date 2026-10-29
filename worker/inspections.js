@@ -3,7 +3,9 @@
 // checklist pulled from an actual Forest Hill inspection sheet.
 
 import { createReadingWorkOrder } from "./work-orders.js";
-import { loadBaselines, loadLastValues, evaluateDeviation, inferTolerance, trendMonitored } from "./deviation.js";
+import { loadBaselines, loadLastValues, evaluateDeviation, inferTolerance, trendMonitored, stateTagIdsFor, readingState } from "./deviation.js";
+import { loadLearned, learnFromNormal } from "./learned-ranges.js";
+import { sendAbnormalAlert } from "./abnormal-alert.js";
 
 // Toronto time, not UTC -- an inspection "day" should turn over at
 // midnight ET, not at 8pm local when UTC quietly rolls to the next date.
@@ -12,7 +14,7 @@ function today() {
 }
 
 async function loadTags(env, buildingId) {
-  const [result, baselines, lastValues] = await Promise.all([
+  const [result, baselines, lastValues, learned] = await Promise.all([
     env.DB.prepare(
       `SELECT t.id, t.system_name, t.tag_no, t.reading_type, t.unit, t.sort_order, t.answer_kind AS value_type, t.location_id,
          l.name AS location_name, l.sort_order AS location_sort_order,
@@ -28,7 +30,9 @@ async function loadTags(env, buildingId) {
       .all(),
     loadBaselines(env, buildingId, today()),
     loadLastValues(env, buildingId, today()),
+    loadLearned(env, buildingId),
   ]);
+  const idsFor = stateTagIdsFor(result.results);
   // Included so the app can nudge "does that look right?" the moment a
   // superintendent types something outside the expected range, before it
   // ever reaches the manager — same normal-range info a technician would
@@ -59,7 +63,13 @@ async function loadTags(env, buildingId) {
     // Real-world drift allowed before this reading flags (null = no fixed
     // number, statistical rule only) -- see worker/deviation.js.
     tolerance: inferTolerance(row.unit, row.reading_type),
-    history: trendMonitored(row) ? baselines[row.id] || null : null,
+    // A machine's readings are judged per state (on / off / auto...): the app picks
+    // `history_by_state[<the machine's current answer>]`. A reading with no such answer
+    // just has one history.
+    state_tag_ids: idsFor(row),
+    history: trendMonitored(row) && !idsFor(row).length ? baselines[row.id]?.[""] || null : null,
+    history_by_state: trendMonitored(row) && idsFor(row).length ? baselines[row.id] || {} : null,
+    learned_by_state: learned[row.id] || null,
     // Last submitted value, for the "does that number make sense?" check.
     last_value: lastValues[row.id] ?? null,
   }));
@@ -399,13 +409,22 @@ async function recordDeviations(env, buildingId, submissionId, body) {
     env.DB.prepare("SELECT tag_id, value FROM inspection_readings WHERE submission_id = ?").bind(submissionId).all(),
   ]);
   const tagById = new Map(tags.map((t) => [t.id, t]));
+  const idsFor = stateTagIdsFor(tags);
+  const valueById = new Map(saved.results.map((r) => [r.tag_id, r.value]));
   const statements = [env.DB.prepare("UPDATE inspection_readings SET deviation = NULL WHERE submission_id = ?").bind(submissionId)];
+  const stamped = new Map(); // tagId -> { tag, value, deviation } for every flagged reading
   for (const row of saved.results) {
     const tag = tagById.get(row.tag_id);
     if (!tag) continue;
-    const deviation = evaluateDeviation(tag, row.value, tag.history);
+    // Judged against this machine's own history in the state it was in (on / off / auto...).
+    const hasStates = (tag.state_tag_ids || []).length > 0;
+    const state = readingState(tag, idsFor, (id) => valueById.get(id));
+    const baseline = hasStates ? tag.history_by_state?.[state] || null : tag.history;
+    const learnedRange = tag.learned_by_state?.[hasStates ? state : ""] || null;
+    const deviation = evaluateDeviation(tag, row.value, baseline, learnedRange, hasStates ? state : "");
     if (!deviation) continue;
     const ack = abnormal.has(row.tag_id) ? "abnormal" : normal.has(row.tag_id) ? "normal" : null;
+    stamped.set(row.tag_id, { tag, value: row.value, deviation: { ...deviation, tolerance: deviation.tolerance ?? tag.tolerance, ack } });
     statements.push(
       env.DB.prepare("UPDATE inspection_readings SET deviation = ? WHERE submission_id = ? AND tag_id = ?").bind(
         JSON.stringify({ ...deviation, tolerance: deviation.tolerance ?? tag.tolerance, ack }),
@@ -415,6 +434,18 @@ async function recordDeviations(env, buildingId, submissionId, body) {
     );
   }
   await env.DB.batch(statements);
+
+  // "It's normal" teaches the machine: this reading, in this state, is ordinary for it.
+  for (const tagId of normal) {
+    const item = stamped.get(tagId);
+    if (!item) continue;
+    try {
+      await learnFromNormal(env, { tagId, value: item.value, deviation: item.deviation, margin: item.tag.tolerance ?? item.deviation.tolerance ?? 0 });
+    } catch (error) {
+      console.error("learnFromNormal failed", error);
+    }
+  }
+  return stamped;
 }
 
 export async function handleInspectionSubmit(request, session, env, corsHeaders) {
@@ -481,6 +512,18 @@ export async function handleInspectionSubmit(request, session, env, corsHeaders)
     const value = body.readings?.[tagId] ?? body.readings?.[String(tagId)];
     if (!tagId || value == null) continue;
     await createReadingWorkOrder(env, { buildingId: session.building_id, tagId, value, createdBy: session.id });
+  }
+
+  // Readings the super confirmed as abnormal go to the property manager. Never blocks the submit.
+  try {
+    await sendAbnormalAlert(env, {
+      buildingId: session.building_id,
+      submissionId,
+      superName: session.full_name || session.username,
+      abnormalTagIds: body.confirmedAbnormalTagIds,
+    });
+  } catch (error) {
+    console.error("sendAbnormalAlert failed", error);
   }
 
   return handleInspectionToday(session, env, corsHeaders);

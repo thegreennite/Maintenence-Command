@@ -9,7 +9,8 @@
 import { Workbook, S } from "./xlsx-writer.js";
 import { readingText } from "../shared/reading-unit.js";
 import { weekDates, todayIso, weekdayName } from "./dashboard-data.js";
-import { loadBaselines, evaluateDeviation, MIN_BASELINE_DAYS, inferTolerance, trendMonitored } from "./deviation.js";
+import { loadBaselines, evaluateDeviation, MIN_BASELINE_DAYS, inferTolerance, trendMonitored, stateTagIdsFor, readingState } from "./deviation.js";
+import { loadLearned } from "./learned-ranges.js";
 import { ghlUpsertContact, ghlSendEmail } from "./ghl.js";
 import { getNativeClientId } from "./tenant-db.js";
 
@@ -105,6 +106,8 @@ async function gatherBuilding(env, building, dates, today) {
   }
 
   const tagById = new Map(tags.map((t) => [t.id, t]));
+  const idsFor = stateTagIdsFor(tags);
+  const learnedAll = await loadLearned(env, building.id);
   const days = [];
   const flagged = [];
   const notes = [];
@@ -140,7 +143,10 @@ async function gatherBuilding(env, building, dates, today) {
         // Anything recorded at submit time wins (it carries the
         // superintendent's own answer); older days and partial days get
         // judged now against the baseline as it stood on that date.
-        deviation = deviation || evaluateDeviation(tag, row.value, baselines[tagId]);
+        if (!deviation) {
+          const state = readingState(tag, idsFor, (id) => rows.get(id)?.value);
+          deviation = evaluateDeviation(tag, row.value, baselines[tagId]?.[state] || null, learnedAll[tagId]?.[state] || null, state);
+        }
         readings.set(tagId, { value: String(row.value).trim(), deviation });
         if (deviation) {
           flagged.push({ date, tag, value: String(row.value).trim(), deviation });
@@ -266,9 +272,13 @@ function normalText(tag, baseline) {
   if (tag.monitor_trend === 0) return "Not monitored";
   // Meters, pump RPM/amps/Hz etc. have no fixed normal worth showing.
   if (!trendMonitored(tag)) return "";
-  if (baseline) {
+  const states = Object.entries(baseline || {});
+  if (states.length) {
     const tol = inferTolerance(tag.unit, tag.reading_type);
-    return `about ${Math.round(baseline.avg * 10) / 10}${tol != null ? ` (±${tol})` : ""}`;
+    // One line per machine state ("on: about 150, off: about 141"); plain "about 60" when there is just one.
+    return states
+      .map(([state, b]) => `${state ? `${state}: ` : ""}about ${Math.round(b.avg * 10) / 10}${tol != null ? ` (±${tol})` : ""}`)
+      .join("; ");
   }
   return `Learning (needs ${MIN_BASELINE_DAYS} days)`;
 }

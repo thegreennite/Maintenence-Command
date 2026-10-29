@@ -37,7 +37,7 @@ export function installCameraCapture() {
     const dialog = document.createElement("dialog");
     dialog.className = "inspection-camera";
     dialog.innerHTML = `<h2>Take Inspection Photo</h2>
-      <video autoplay muted playsinline></video>
+      <div class="inspection-camera__view"><video autoplay muted playsinline></video></div>
       <p role="status">Starting camera…</p>
       <div class="inspection-camera__actions">
         <button type="button" class="button button--primary" data-shutter disabled>Take Photo</button>
@@ -101,6 +101,7 @@ export function installCameraCapture() {
       if (!dialog.isConnected) { stop(); return; }
       video.srcObject = stream;
       await video.play();
+      enableTapToFocus(video, stream.getVideoTracks()[0]);
       shutter.disabled = false;
       status.textContent = "Frame the equipment, then tap Take Photo.";
     } catch (error) {
@@ -111,4 +112,48 @@ export function installCameraCapture() {
       showPhotoFeedback(false, status.textContent);
     }
   }
+}
+
+// Tap the picture to focus there (where the phone's camera lets a web page do that --
+// most Android phones in Chrome; iPhone Safari doesn't, and just keeps its own autofocus).
+// Never blocks or changes the photo: if anything is unsupported it quietly does nothing.
+function enableTapToFocus(video, track) {
+  const caps = track?.getCapabilities?.() || {};
+  const modes = caps.focusMode || [];
+  if (!modes.length) return;
+  // Let the camera keep refocusing on its own between taps.
+  if (modes.includes("continuous")) track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
+
+  const view = video.parentElement;
+  video.addEventListener("pointerdown", (event) => {
+    const box = video.getBoundingClientRect();
+    // The picture is letterboxed inside the <video> (object-fit: contain): only taps on the image count.
+    const scale = Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
+    const shownW = video.videoWidth * scale;
+    const shownH = video.videoHeight * scale;
+    const left = box.left + (box.width - shownW) / 2;
+    const top = box.top + (box.height - shownH) / 2;
+    const x = (event.clientX - left) / shownW;
+    const y = (event.clientY - top) / shownH;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
+
+    const ring = document.createElement("span");
+    ring.className = "inspection-camera__focus";
+    const viewBox = view.getBoundingClientRect();
+    ring.style.left = `${event.clientX - viewBox.left}px`;
+    ring.style.top = `${event.clientY - viewBox.top}px`;
+    view.append(ring);
+    setTimeout(() => ring.remove(), 900);
+
+    const mode = modes.includes("single-shot") ? "single-shot" : modes.includes("manual") ? "manual" : null;
+    if (!mode) return;
+    const constraint = { focusMode: mode, pointsOfInterest: [{ x, y }] };
+    track
+      .applyConstraints({ advanced: [constraint] })
+      .catch(() => track.applyConstraints({ advanced: [{ focusMode: mode }] }).catch(() => {}))
+      .then(() => {
+        // After the one-off focus, go back to continuous so the next shot isn't left blurry.
+        if (modes.includes("continuous")) setTimeout(() => track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {}), 1200);
+      });
+  });
 }

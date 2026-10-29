@@ -5109,9 +5109,9 @@ function findFlaggedReadings(readings) {
       // Same learned-baseline check command mode already did -- the
       // regular form never ran it, which is how a heating inlet reading
       // of 28 PSI against a steady 60 sailed through unflagged.
-      if (historyFlagFor(tag, value)) {
-        const avg = Math.round(tag.history.avg * 10) / 10;
-        return { tag, value, flag: "trend", detail: `Usually about ${avg}${tag.unit ? ` ${tag.unit}` : ""}` };
+      if (historyFlagFor(tag, value, readings)) {
+        const avg = Math.round(historyFor(tag, readings).h.avg * 10) / 10;
+        return { tag, value, flag: "trend", detail: `Usually about ${avg}${tag.unit ? ` ${tag.unit}` : ""}${machineStateFor(tag, readings) ? ` when ${machineStateFor(tag, readings)}` : ""}` };
       }
       // Common-sense check: runs for every numeric reading, including the
       // ones with no range and no history -- 1000000 on an RPM gauge.
@@ -5158,11 +5158,30 @@ function unitTolerance(unit) {
   return null;
 }
 
-// Same trend check the backend used to decide whether history data was
-// even worth attaching (see worker/inspections.js loadHistory) -- this is
-// the client-side half: does THIS value look like an outlier against it.
-function historyFlagFor(tag, rawValue) {
-  const h = tag.history;
+// Which state ("on", "off", "auto", "open"...) this reading's machine is in right now: the
+// first answered on/off/auto-type reading of the same machine. "" when there is none.
+function machineStateFor(tag, readings) {
+  for (const id of tag.state_tag_ids || []) {
+    const state = String(readings?.[id] ?? "").trim().toLowerCase();
+    if (state) return state;
+  }
+  return "";
+}
+
+// A machine reads differently on than off, so a reading is only judged against its own history
+// in the same state; a reading with no on/off/auto answer just has the one history.
+function historyFor(tag, readings) {
+  if ((tag.state_tag_ids || []).length) {
+    const state = machineStateFor(tag, readings);
+    return { h: state ? tag.history_by_state?.[state] || null : null, learned: tag.learned_by_state?.[state] || null };
+  }
+  return { h: tag.history || null, learned: tag.learned_by_state?.[""] || null };
+}
+
+// Same trend check the backend uses (worker/deviation.js) -- the client-side half: does THIS
+// value look like an outlier against the machine's own history in its current state.
+function historyFlagFor(tag, rawValue, readings) {
+  const { h, learned } = historyFor(tag, readings);
   if (!h || CLOSED_CHOICE_TYPES[tag.value_type] || rawValue == null || rawValue === "") return null;
   const num = Number.parseFloat(rawValue);
   if (Number.isNaN(num)) return null;
@@ -5176,7 +5195,10 @@ function historyFlagFor(tag, rawValue) {
   // something that should flag, and readings in this domain are usually
   // whole numbers, so a strict > would silently let the boundary case
   // through.
-  return Math.abs(num - h.avg) >= threshold;
+  if (Math.abs(num - h.avg) < threshold) return false;
+  // The crew already marked this level as normal for this machine in this state.
+  if (learned && num >= learned.lo && num <= learned.hi) return false;
+  return true;
 }
 
 function startCommandMode() {
@@ -5576,7 +5598,7 @@ async function commandModeAcceptValue(tagId, rawValue, { photoKey } = {}) {
   cm.error = "";
 
   const paramFlag = clientFlagFor(tag, rawValue);
-  const trendFlag = !paramFlag && historyFlagFor(tag, rawValue);
+  const trendFlag = !paramFlag && historyFlagFor(tag, rawValue, cm.readings);
 
   if (paramFlag) {
     const detail = tag.parameter?.expected
@@ -5590,12 +5612,12 @@ async function commandModeAcceptValue(tagId, rawValue, { photoKey } = {}) {
     return;
   }
   if (trendFlag) {
-    const avg = Math.round(tag.history.avg * 10) / 10;
+    const avg = Math.round(historyFor(tag, cm.readings).h.avg * 10) / 10;
     cm.abnormalPrompt = {
       tagId,
       value: rawValue,
       basis: "history",
-      detail: `Recent readings for this item have averaged ${avg}${tag.unit ? ` ${tag.unit}` : ""} — this is a noticeable jump from that.`,
+      detail: `Recent readings for this item${machineStateFor(tag, cm.readings) ? ` while ${machineStateFor(tag, cm.readings)}` : ""} have averaged ${avg}${tag.unit ? ` ${tag.unit}` : ""} — this is a noticeable jump from that.`,
     };
     cm.entryMode = "choose";
     renderApp();
@@ -6244,7 +6266,7 @@ function renderOutOfRangeModal(flagged) {
           <div class="out-of-range-item" data-tag-id="${item.tag.id}">
             <div class="out-of-range-item__label"><strong>${escapeHtml([item.tag.tag_no, item.tag.reading_type].filter(Boolean).join(" — "))}</strong><span>You entered: ${escapeHtml(readingText(String(item.value), item.tag.unit))}${item.detail ? ` · ${escapeHtml(item.detail)}` : ""}</span></div>
             <div class="out-of-range-item__actions">
-              <button type="button" class="button button--small button--outline" data-choice="fix">Let me fix it</button>
+              <button type="button" class="button button--small button--outline" data-choice="fix">Mistake</button>
               <button type="button" class="button button--small button--light" data-choice="normal">It's normal</button>
               <button type="button" class="button button--small button--danger" data-choice="abnormal">It's abnormal</button>
             </div>

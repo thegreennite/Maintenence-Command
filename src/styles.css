@@ -939,6 +939,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .inspection-camera { width: min(94vw, 640px); max-height: 95dvh; overflow: auto; border: 0; border-radius: 16px; padding: 20px; background: #fff; color: #122024; }
 .inspection-camera::backdrop { background: rgba(0,0,0,.75); }
 .inspection-camera video { display: block; width: 100%; max-height: 60dvh; background: #122024; object-fit: contain; border-radius: 10px; }
+.inspection-camera__view { position: relative; margin: 0; }
+.inspection-camera__focus { position: absolute; width: 64px; height: 64px; margin: -32px 0 0 -32px; border: 2px solid #dceb61; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,.35); pointer-events: none; animation: if-focus-ring .9s ease-out forwards; }
+@keyframes if-focus-ring { 0% { transform: scale(1.5); opacity: 0; } 25% { opacity: 1; } 100% { transform: scale(.8); opacity: 0; } }
 .inspection-camera__actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .photo-feedback { position: fixed; bottom: max(24px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); box-sizing: border-box; z-index: 10000; display: flex; align-items: center; gap: 14px; padding: 18px; border-radius: 20px; background: #f0fff7; color: #146347; border: 1px solid #a6d9c3; box-shadow: 0 12px 40px #102a2526; animation: photo-arrive .4s cubic-bezier(.2,.8,.2,1) both; }
 .photo-feedback--error { background: #fff4f2; color: #a4332b; border-color: #edb7b1; }

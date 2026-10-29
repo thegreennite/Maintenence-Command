@@ -9,8 +9,14 @@
 // (drops count the same as rises): 3 degrees for temperature, 5 PSI for
 // pressure, 5 points for a percentage. Manager-set min/max still win
 // when they exist, and apply from day one.
+//
+// Per machine state: a numeric reading is only compared with past readings
+// taken while its machine was in the SAME on/off/auto (hand-off-auto,
+// open/closed) state, and a range the crew has marked "normal" at the end of
+// an inspection (worker/learned-ranges.js) stretches what counts as normal.
 
 import { plausibilityFlag } from "../shared/plausibility.js";
+import { STATE_KINDS, stateOf } from "./learned-ranges.js";
 
 export const MIN_BASELINE_DAYS = 3;
 export const BASELINE_WINDOW_DAYS = 7;
@@ -55,6 +61,35 @@ export function trendMonitored(tag) {
   return inferTolerance(tag.unit, tag.reading_type) != null;
 }
 
+// A machine's own on/off/auto-type reading(s): same equipment group, or the same
+// system + tag number (checklists from paper sheets often leave the on/off line
+// out of the group). Returns a function: reading -> [state reading ids, in checklist order].
+export function stateTagIdsFor(tags) {
+  const states = [...tags]
+    .filter((t) => STATE_KINDS.includes(t.value_type))
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  return (tag) => {
+    if (STATE_KINDS.includes(tag.value_type)) return [];
+    return states
+      .filter(
+        (st) =>
+          (tag.equipment_group_id != null && st.equipment_group_id === tag.equipment_group_id) ||
+          (tag.tag_no && st.tag_no === tag.tag_no && (st.system_name || "") === (tag.system_name || "")),
+      )
+      .map((st) => st.id);
+  };
+}
+
+// The state ("on", "off", "auto", "open"...) a numeric reading was taken in: the
+// first answered on/off/auto-type reading of the same machine. "" when there is none.
+export function readingState(tag, idsFor, valueOf) {
+  for (const id of idsFor(tag)) {
+    const state = stateOf(valueOf(id));
+    if (state) return state;
+  }
+  return "";
+}
+
 function median(sorted) {
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
@@ -80,33 +115,50 @@ function robustStats(values) {
 
 // Baselines for every numeric reading in a building as of `date`: the
 // submitted days in the 7 before it (never `date` itself, so a day is
-// never judged against itself). A reading needs MIN_BASELINE_DAYS days
-// before it gets a baseline at all.
+// never judged against itself), kept separately for each state of the
+// machine's on/off/auto answer ("" for a reading with no such answer).
+// A reading needs MIN_BASELINE_DAYS days in a state before that state gets a
+// baseline at all, and readings the crew marked abnormal never count.
+// Returns { [tagId]: { [state]: stats } }.
 export async function loadBaselines(env, buildingId, date) {
-  const result = await env.DB.prepare(
-    `SELECT r.tag_id, r.value
+  const sql = (skipAbnormal) => `SELECT r.tag_id, r.value,
+       (SELECT LOWER(TRIM(cr.value)) FROM inspection_readings cr
+          JOIN inspection_tags ct ON ct.id = cr.tag_id
+         WHERE cr.submission_id = r.submission_id
+           AND ((t.equipment_group_id IS NOT NULL AND ct.equipment_group_id = t.equipment_group_id)
+             OR (t.tag_no IS NOT NULL AND ct.tag_no = t.tag_no AND COALESCE(ct.system_name, '') = COALESCE(t.system_name, '')))
+           AND ct.answer_kind IN ('on_off','hoa','open_closed') AND TRIM(COALESCE(cr.value, '')) != ''
+         ORDER BY ct.sort_order LIMIT 1) AS state
      FROM inspection_readings r
      JOIN inspection_submissions s ON s.id = r.submission_id
      JOIN inspection_tags t ON t.id = r.tag_id
      WHERE s.building_id = ? AND s.status = 'submitted'
        AND s.inspection_date >= date(?, '-${BASELINE_WINDOW_DAYS} days') AND s.inspection_date < ?
-       AND t.answer_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''`,
-  )
-    .bind(buildingId, date, date)
-    .all();
+       AND t.answer_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
+       ${skipAbnormal ? `AND (r.deviation IS NULL OR r.deviation NOT LIKE '%"ack":"abnormal"%')` : ""}`;
+  let result;
+  try {
+    result = await env.DB.prepare(sql(true)).bind(buildingId, date, date).all();
+  } catch {
+    // A company database from before the deviation column existed: still judge, just without
+    // leaving out the readings the crew called abnormal.
+    result = await env.DB.prepare(sql(false)).bind(buildingId, date, date).all();
+  }
 
-  const valuesByTag = new Map();
+  const values = new Map(); // `${tagId}|${state}` -> numbers
   for (const row of result.results) {
     const num = Number.parseFloat(row.value);
     if (Number.isNaN(num)) continue;
-    if (!valuesByTag.has(row.tag_id)) valuesByTag.set(row.tag_id, []);
-    valuesByTag.get(row.tag_id).push(num);
+    const key = `${row.tag_id}|${row.state ?? ""}`;
+    if (!values.has(key)) values.set(key, []);
+    values.get(key).push(num);
   }
 
   const baselines = {};
-  for (const [tagId, values] of valuesByTag) {
-    if (values.length < MIN_BASELINE_DAYS) continue;
-    baselines[tagId] = robustStats(values);
+  for (const [key, list] of values) {
+    if (list.length < MIN_BASELINE_DAYS) continue;
+    const [tagId, state] = [Number(key.slice(0, key.indexOf("|"))), key.slice(key.indexOf("|") + 1)];
+    (baselines[tagId] ||= {})[state] = robustStats(list);
   }
   return baselines;
 }
@@ -138,7 +190,10 @@ export async function loadLastValues(env, buildingId, date) {
 // Returns null when the reading is fine (or can't be judged), otherwise
 // { basis, baseline, change, tolerance, detail }.
 //   tag: { unit, reading_type, value_type, monitor_trend, parameter }
-export function evaluateDeviation(tag, rawValue, baseline) {
+//   baseline: stats for this reading in its machine's current state (or null)
+//   learned: { lo, hi } the crew has marked normal for this state (or null)
+//   state: the on/off/auto answer the reading was taken in, recorded on the flag
+export function evaluateDeviation(tag, rawValue, baseline, learned = null, state = "") {
   if (rawValue == null || String(rawValue).trim() === "") return null;
   const value = String(rawValue).trim();
   const parameter = tag.parameter;
@@ -180,8 +235,11 @@ export function evaluateDeviation(tag, rawValue, baseline) {
   // here are mostly whole numbers, so a strict > would let the boundary
   // case straight through.
   if (Math.abs(num - baseline.avg) < threshold) return sanity();
+  // Marked "normal" before for this machine in this state -- not a surprise any more.
+  if (learned && num >= learned.lo && num <= learned.hi) return sanity();
   return {
     basis: "trend",
+    state,
     baseline: Math.round(baseline.avg * 100) / 100,
     change,
     tolerance: Math.round(threshold * 100) / 100,
