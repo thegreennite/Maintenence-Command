@@ -23,7 +23,23 @@ export async function ensureLearnedTable(env) {
        tag_id INTEGER NOT NULL, state TEXT NOT NULL DEFAULT '', lo REAL NOT NULL, hi REAL NOT NULL,
        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (tag_id, state))`,
   ).run();
+  // One row per building: learning counts readings from this date on (a reset).
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS learning_reset (
+       building_id INTEGER PRIMARY KEY, since TEXT NOT NULL, reset_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+  ).run();
   ready.add(env.DB);
+}
+
+// The first inspection day that counts toward what a building's machines have learned.
+export async function learningStart(env, buildingId) {
+  try {
+    await ensureLearnedTable(env);
+    const row = await env.DB.prepare("SELECT since FROM learning_reset WHERE building_id = ?").bind(buildingId).first();
+    return row?.since || "0000-00-00";
+  } catch {
+    return "0000-00-00";
+  }
 }
 
 // { [tagId]: { [state]: { lo, hi } } } for every tag in a building.

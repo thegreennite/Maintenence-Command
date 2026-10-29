@@ -16,7 +16,7 @@
 // an inspection (worker/learned-ranges.js) stretches what counts as normal.
 
 import { plausibilityFlag } from "../shared/plausibility.js";
-import { STATE_KINDS, stateOf } from "./learned-ranges.js";
+import { STATE_KINDS, stateOf, learningStart } from "./learned-ranges.js";
 
 export const MIN_BASELINE_DAYS = 3;
 export const BASELINE_WINDOW_DAYS = 7;
@@ -121,6 +121,7 @@ function robustStats(values) {
 // baseline at all, and readings the crew marked abnormal never count.
 // Returns { [tagId]: { [state]: stats } }.
 export async function loadBaselines(env, buildingId, date) {
+  const since = await learningStart(env, buildingId);
   const sql = (skipAbnormal) => `SELECT r.tag_id, r.value,
        (SELECT LOWER(TRIM(cr.value)) FROM inspection_readings cr
           JOIN inspection_tags ct ON ct.id = cr.tag_id
@@ -133,16 +134,16 @@ export async function loadBaselines(env, buildingId, date) {
      JOIN inspection_submissions s ON s.id = r.submission_id
      JOIN inspection_tags t ON t.id = r.tag_id
      WHERE s.building_id = ? AND s.status = 'submitted'
-       AND s.inspection_date >= date(?, '-${BASELINE_WINDOW_DAYS} days') AND s.inspection_date < ?
+       AND s.inspection_date >= MAX(date(?, '-${BASELINE_WINDOW_DAYS} days'), ?) AND s.inspection_date < ?
        AND t.answer_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
        ${skipAbnormal ? `AND (r.deviation IS NULL OR r.deviation NOT LIKE '%"ack":"abnormal"%')` : ""}`;
   let result;
   try {
-    result = await env.DB.prepare(sql(true)).bind(buildingId, date, date).all();
+    result = await env.DB.prepare(sql(true)).bind(buildingId, date, since, date).all();
   } catch {
     // A company database from before the deviation column existed: still judge, just without
     // leaving out the readings the crew called abnormal.
-    result = await env.DB.prepare(sql(false)).bind(buildingId, date, date).all();
+    result = await env.DB.prepare(sql(false)).bind(buildingId, date, since, date).all();
   }
 
   const values = new Map(); // `${tagId}|${state}` -> numbers

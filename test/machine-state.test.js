@@ -56,3 +56,14 @@ test("abnormal readings are emailed to the test PM, on submit only for those mar
     globalThis.fetch = realFetch;
   }
 });
+
+test("a reset makes learning count only readings from its start date", async () => {
+  const { loadBaselines } = await import("../worker/deviation.js");
+  const seen = [];
+  const env = { DB: { prepare(sql) { return { bind(...args) { seen.push({ sql, args }); return this; },
+    async run() {}, async first() { return { since: "2026-10-29" }; }, async all() { return { results: [] }; } }; } } };
+  await loadBaselines(env, 4, "2026-10-30");
+  const q = seen.find((c) => c.sql.includes("FROM inspection_readings r"));
+  assert.deepEqual(q.args, [4, "2026-10-30", "2026-10-29", "2026-10-30"]);
+  assert.match(q.sql, /MAX\(date\(\?/);
+});
