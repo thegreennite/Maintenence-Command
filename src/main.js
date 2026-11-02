@@ -7,6 +7,7 @@ import { initInstall, installLinkHtml } from "./install.js";
 import { plausibilityFlag } from "../shared/plausibility.js";
 import { outsideRange, outsideDetail, rangeMonitored, OBSERVE_DAYS } from "../shared/machine-range.js";
 import { isEnglish, ENGLISH_ONLY_MESSAGE } from "../shared/english-only.js";
+import { LANGUAGES, L, currentLanguage, setLanguage, installTranslator } from "./i18n.js";
 import { walkOrder, previewNewReading } from "../shared/walk-order.js";
 import { splitReading, withTempUnit, readingParts, readingText } from "../shared/reading-unit.js";
 
@@ -542,6 +543,7 @@ function renderLogin(message = "") {
               <span class="brand-mark">${logoGlyph()}</span>
               <span>Inspect <strong>Funnels</strong></span>
             </div>
+            ${languagePickerHtml()}
             <button type="button" class="link-button add-business-link" id="add-business-link">+ Add a business</button>
           </div>
           <p class="eyebrow">Secure access</p>
@@ -1170,7 +1172,7 @@ function renderApp() {
           <span>Inspect <strong>Funnels</strong></span>
         </a>
         <div class="topbar__right">
-          <span class="role-pill">${escapeHtml(user.roleLabel)}</span>
+          ${FIELD_ROLES.includes(user.role) ? languagePickerHtml() : `<span class="role-pill">${escapeHtml(user.roleLabel)}</span>`}
           ${
             user.id != null
               ? `<button class="user-identity user-identity--button" id="open-profile-edit" title="Edit your profile">
@@ -1551,7 +1553,7 @@ function renderFieldPermissionGate() {
     <section class="card super-home super-home--gate">
       <p class="section-kicker">Before you start</p>
       <h2>${icon("pin")} Allow location and camera</h2>
-      <p>Every machine photo records when and where it was taken, as proof the inspection was done on site. Tap the button below and choose <strong>Allow</strong> when your phone asks.</p>
+      <p>${L("Every machine photo records when and where it was taken, as proof the inspection was done on site. Tap the button below and choose <strong>Allow</strong> when your phone asks.")}</p>
       ${
         denied
           ? `<div class="super-home__denied">${icon("warning")}<div><strong>${what} is blocked for Inspect Funnels.</strong>
@@ -1575,8 +1577,8 @@ function renderSuperTutorial() {
   ];
   return `
     <section class="card tutorial">
-      <div class="card__header"><div><p class="section-kicker">For superintendents</p><h2>How Inspect Funnels works</h2></div></div>
-      <ol class="tutorial__steps">${steps.map(([title, body]) => `<li><strong>${title}</strong><p>${body}</p></li>`).join("")}</ol>
+      <div class="card__header"><div><p class="section-kicker">${L("For superintendents")}</p><h2>${L("How Inspect Funnels works")}</h2></div></div>
+      <ol class="tutorial__steps">${steps.map(([title, body]) => `<li><strong>${L(title)}</strong><p>${L(body)}</p></li>`).join("")}</ol>
     </section>`;
 }
 
@@ -5200,7 +5202,7 @@ function groupTagsForChecklist(tags) {
 
 function formatInspectionDate(isoDate) {
   const date = new Date(`${isoDate}T00:00:00`);
-  return date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  return date.toLocaleDateString(usesAppLanguage() && currentLanguage() !== "en" ? currentLanguage() : undefined, { weekday: "long", month: "long", day: "numeric" });
 }
 
 // When a photo was taken (clock time, Toronto) -- a short form for badges.
@@ -6202,7 +6204,7 @@ function renderCommandMode() {
 
       <div class="command-mode__stage">
         <p class="command-mode__location">${tag.location_name ? escapeHtml(tag.location_name) : "⚠ No location set for this item"}${tag.equipment_group_name ? ` · ${escapeHtml(tag.equipment_group_name)}` : ""}</p>
-        <h1 class="command-mode__label">${escapeHtml(label)}</h1>
+        <h1 class="command-mode__label" data-no-translate>${escapeHtml(label)}</h1>
         ${
           tag.unit
             ? `<p class="command-mode__unit">Unit: ${escapeHtml(tag.unit)}</p>`
@@ -6781,8 +6783,8 @@ function renderPropertyTutorial() {
   ];
   return `
     <section class="card tutorial">
-      <div class="card__header"><div><p class="section-kicker">For property managers</p><h2>How Inspect Funnels works</h2></div></div>
-      <ol class="tutorial__steps">${steps.map(([title, body]) => `<li><strong>${title}</strong><p>${body}</p></li>`).join("")}</ol>
+      <div class="card__header"><div><p class="section-kicker">${L("For property managers")}</p><h2>${L("How Inspect Funnels works")}</h2></div></div>
+      <ol class="tutorial__steps">${steps.map(([title, body]) => `<li><strong>${L(title)}</strong><p>${L(body)}</p></li>`).join("")}</ol>
     </section>`;
 }
 
@@ -7670,6 +7672,27 @@ async function handleLogout(event) {
   state.agencyActiveCompanyName = null;
   renderLogin();
 }
+
+// Field roles (and the sign-in page) can use the app in their own language;
+// manager and admin screens stay English. Reports are always English.
+const FIELD_ROLES = ["superintendent", "cleaner", "property_manager"];
+const usesAppLanguage = () => !state.session || FIELD_ROLES.includes(state.session?.user?.role);
+installTranslator(usesAppLanguage);
+
+function languagePickerHtml() {
+  return `<label class="lang-picker" data-no-translate title="Language">
+    <span class="visually-hidden">Language</span>
+    <select id="lang-select" aria-label="Language">
+      ${LANGUAGES.map(([code, name]) => `<option value="${code}" ${code === currentLanguage() ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}
+    </select>
+  </label>`;
+}
+
+document.addEventListener("change", (event) => {
+  if (event.target?.id !== "lang-select") return;
+  setLanguage(event.target.value);
+  location.reload();
+});
 
 async function bootstrap() {
   renderLoading();

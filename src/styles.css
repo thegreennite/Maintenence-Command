@@ -1496,3 +1496,11 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .tutorial__heading { margin: 18px 0 10px; font-size: 1rem; }
 .tutorial__heading:first-of-type { margin-top: 0; }
 .tutorial__steps + .tutorial__heading { margin-top: 22px; }
+
+/* Language picker (field roles and the sign-in page) */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lang-picker select { appearance: none; -webkit-appearance: none; width: auto; min-height: 36px; padding: 0 28px 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23677478' stroke-width='1.5' fill='none'/%3E%3C/svg%3E") no-repeat right 11px center; color: var(--ink); font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+@media (max-width: 560px) {
+  .topbar .lang-picker select { max-width: 96px; padding-right: 22px; background-position: right 8px center; text-overflow: ellipsis; }
+  .topbar .user-identity small { display: none; }
+}
