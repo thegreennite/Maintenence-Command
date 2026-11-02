@@ -11,6 +11,7 @@ import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit, lo
 import { handleManagerInspection, handleManagerParametersSave, handleManagerSuperintendents } from "./manager.js";
 import { handlePropertyInspections } from "./property.js";
 import { handleInspectionPhoto, handleCommandModePhoto } from "./vision.js";
+import { hasFeature, usersWithFeature, canUseScheduling, handleSetFeature } from "./feature-access.js";
 import { handleGroupPhotoUpload } from "./group-photos.js";
 import { handleListLocations, handleCreateLocation, handleDeleteLocation, handleAssignTagLocation } from "./locations.js";
 import { handleListGroups, handleCreateGroup, handleDeleteGroup, handleAssignTagGroup, handleAssignGroupLocation, handleRenameGroup, handleUpdateTag, handleCreateTag, handleReorderTags, handleSetGroupPhotoRequirement } from "./groups.js";
@@ -215,7 +216,11 @@ export default {
 
       // Schedules: managers build them (AI reads the uploaded document);
       // cleaners and superintendents work through the day's checklist.
-      // Each handler enforces its own role.
+      // Each handler enforces its own role. The whole feature is an add-on
+      // the admin switches on per account (worker/feature-access.js).
+      if ((url.pathname.startsWith("/api/manager/schedules") || url.pathname.startsWith("/api/schedule/")) && !canUseScheduling(session)) {
+        return json({ error: "Schedules aren't turned on for this account." }, 403, cors.headers);
+      }
       if (url.pathname === "/api/manager/schedules/analyze" && request.method === "POST") return handleScheduleAnalyze(request, session, env, cors.headers);
       if (url.pathname === "/api/manager/schedules/create" && request.method === "POST") return handleScheduleCreate(request, session, env, cors.headers);
       if (url.pathname === "/api/manager/schedules" && request.method === "GET") return handleScheduleList(request, session, env, cors.headers);
@@ -274,6 +279,9 @@ export default {
       }
       if (url.pathname === "/api/admin/accounts/classification" && request.method === "POST") {
         return handleSetClassification(request, session, env, cors.headers);
+      }
+      if (url.pathname === "/api/admin/accounts/feature" && request.method === "POST") {
+        return handleSetFeature(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/admin/buildings/delete-requests" && request.method === "GET") {
@@ -844,6 +852,7 @@ async function createSessionForUser(request, env, db, clientId, user, corsHeader
   ]);
 
   user.client_id = clientId;
+  user.scheduling = await hasFeature(db, user.id, "scheduling");
   const headers = new Headers(corsHeaders);
   // The cookie value carries which company this session belongs to
   // (clientId.token) -- requireSession needs that to know which
@@ -956,9 +965,10 @@ async function handleAccounts(session, env, corsHeaders) {
        WHEN 'cleaner' THEN 3
        ELSE 4 END, full_name`,
   ).all();
+  const scheduling = await usersWithFeature(env.DB, "scheduling");
 
   return json(
-    { accounts: result.results.map((u) => ({ ...publicUser(u), classification: u.classification || "standard" })) },
+    { accounts: result.results.map((u) => ({ ...publicUser({ ...u, scheduling: scheduling.has(u.id) }), classification: u.classification || "standard" })) },
     200,
     corsHeaders,
   );
@@ -996,6 +1006,7 @@ async function handleImpersonate(request, session, env, corsHeaders) {
         .first();
 
   if (!target) return json({ error: "Account not found" }, 404, corsHeaders);
+  target.scheduling = await hasFeature(env.DB, target.id, "scheduling");
 
   await env.DB.prepare("UPDATE sessions SET user_id = ?, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?")
     .bind(target.id, session.session_id)
@@ -1083,6 +1094,7 @@ async function requireSession(request, env) {
   // ids happen to coincidentally both be 1).
   session.companyId = clientId;
   session.__db = db;
+  session.scheduling = await hasFeature(db, session.id, "scheduling");
   return session;
 }
 
@@ -1197,6 +1209,7 @@ async function requireAgencySession(token, env) {
     session_id: companySession.session_id,
     companyId: row.active_client_id,
     __db: resolved.db,
+    scheduling: await hasFeature(resolved.db, companySession.id, "scheduling"),
   };
 }
 
@@ -1234,6 +1247,7 @@ function publicUser(user) {
     roleLabel: displayRoleLabel(role, user.building_access),
     region: user.region,
     classification: user.classification || "standard",
+    scheduling: user.scheduling === true,
     clientId: user.companyId ?? user.client_id ?? null,
   };
 }

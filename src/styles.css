@@ -1110,6 +1110,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .admin-section .building-row { flex-wrap: nowrap; gap: 12px; }
 .admin-section .building-row__name { flex: 1 1 auto; min-width: 0; }
 .admin-section .building-row .button, .admin-section .building-row select { flex: 0 0 auto; width: auto; }
+.account-feature { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--muted, inherit); cursor: pointer; white-space: nowrap; }
+.account-feature input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent, currentColor); }
 .admin-section .building-row .inspection-actions { flex: 0 0 auto; }
 .admin-section .building-row .inspection-actions .button { width: auto; }
 .admin-subhead .status-dot { display: inline-block; vertical-align: middle; margin: 0 8px 1px 2px; }

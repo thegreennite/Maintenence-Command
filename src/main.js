@@ -252,6 +252,9 @@ const api = {
   adminSetClassification(payload) {
     return this.request("/admin/accounts/classification", { method: "POST", body: JSON.stringify(payload) });
   },
+  adminSetFeature(payload) {
+    return this.request("/admin/accounts/feature", { method: "POST", body: JSON.stringify(payload) });
+  },
   managerSuperintendents() {
     return this.request("/manager/superintendents");
   },
@@ -960,7 +963,7 @@ async function loadDashboard() {
     schedules.reset();
     lastScheduleUserId = state.session?.user?.id;
   }
-  if (isSuperintendent || isCleaner) await schedules.loadMine();
+  if ((isSuperintendent || isCleaner) && hasScheduling()) await schedules.loadMine();
   state.adminStats = isAdminViewing ? await api.adminStats().catch(() => null) : null;
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
@@ -1430,7 +1433,7 @@ function renderSuperMetrics(history, inspectionDays) {
 }
 
 function renderSuperintendentTools() {
-  const tasks = schedules.taskSummary();
+  const tasks = hasScheduling() ? schedules.taskSummary() : null;
   const buildingId = state.inspection?.building?.id;
   const tools = [
     {
@@ -1479,7 +1482,7 @@ function renderDashboard(data) {
       : data.kind === "admin"
         ? renderAdminDashboard(data)
         : data.kind === "cleaner"
-          ? schedules.renderMyTasks() || renderCleanerEmpty()
+          ? (hasScheduling() && schedules.renderMyTasks()) || renderCleanerEmpty()
           : data.kind === "superintendent"
             ? renderSuperintendentTools()
           : data.kind === "property_manager"
@@ -1629,7 +1632,7 @@ function renderManagerDashboard(data) {
       force: state.buildingWizard.step !== "closed" || Boolean(state.deleteBuildingTarget),
       body: () => renderBuildingsPanel(),
     },
-    { id: "schedules", label: "Schedules", icon: "calendar", activate: () => schedules.activate(null), body: () => scheduleToolBody() },
+    ...(hasScheduling() ? [{ id: "schedules", label: "Schedules", icon: "calendar", activate: () => schedules.activate(null), body: () => scheduleToolBody() }] : []),
     {
       id: "people",
       label: "People",
@@ -2667,7 +2670,7 @@ function renderAdminDashboard(data) {
       force: state.buildingWizard.step !== "closed" || Boolean(state.deleteBuildingTarget),
       body: () => renderToolCard("Portfolio", "Buildings", renderBuildingsBody(), `${plural(buildingCount, "building")}${registering ? ` · ${registering} being set up` : ""}`),
     },
-    { id: "schedules", label: "Schedules", icon: "calendar", activate: () => schedules.activate(null), body: () => scheduleToolBody() },
+    ...(hasScheduling() ? [{ id: "schedules", label: "Schedules", icon: "calendar", activate: () => schedules.activate(null), body: () => scheduleToolBody() }] : []),
     {
       id: "people",
       label: "People",
@@ -2699,6 +2702,13 @@ function renderAdminDashboard(data) {
 }
 
 const CLASSIFICATION_LABELS = { standard: "Standard", beta_tester: "Beta Tester" };
+
+// Schedules is an add-on the admin turns on per account (worker/feature-access.js);
+// admins always have it.
+function hasScheduling() {
+  const user = state.session?.user;
+  return user?.role === "admin" || user?.scheduling === true;
+}
 
 const ADMIN_CREATABLE_ROLES = {
   superintendent: "Superintendent",
@@ -2779,6 +2789,10 @@ function renderAdminAccountsBody() {
                   .map(([value, label]) => `<option value="${value}" ${a.classification === value ? "selected" : ""}>${escapeHtml(label)}</option>`)
                   .join("")}
               </select>
+              <label class="account-feature" title="Cleaning &amp; duty schedules and the day's task checklist">
+                <input type="checkbox" class="account-feature__toggle" data-user-id="${a.id}" data-feature="scheduling" ${a.scheduling ? "checked" : ""} />
+                <span>Schedules</span>
+              </label>
               <button type="button" class="button button--outline button--small remove-account" data-user-id="${a.id}" data-user-name="${escapeHtml(a.fullName)}">Remove</button>
             </div>`,
           )
@@ -3805,13 +3819,17 @@ function renderBuildingWorld() {
         ${canManageSharing ? renderBuildingWorldSharing(world) : ""}
       </div>`,
         },
-        {
-          id: "schedules",
-          label: "Schedules",
-          icon: "calendar",
-          activate: () => schedules.activate(world.buildingId),
-          body: () => scheduleToolBody(world.building.name),
-        },
+        ...(hasScheduling()
+          ? [
+              {
+                id: "schedules",
+                label: "Schedules",
+                icon: "calendar",
+                activate: () => schedules.activate(world.buildingId),
+                body: () => scheduleToolBody(world.building.name),
+              },
+            ]
+          : []),
         {
           id: "history",
           label: "History",
@@ -6592,6 +6610,9 @@ function bindDashboardEvents() {
   document.querySelectorAll(".account-classification").forEach((select) => {
     select.addEventListener("change", () => handleSetClassification(select));
   });
+  document.querySelectorAll(".account-feature__toggle").forEach((toggle) => {
+    toggle.addEventListener("change", () => handleSetFeature(toggle));
+  });
   document.querySelector("#open-add-account")?.addEventListener("click", () => {
     state.adminAddingAccount = true;
     state.adminNewAccountCreated = null;
@@ -7118,6 +7139,21 @@ async function handleRestoreAccount(button) {
   }
 }
 
+async function handleSetFeature(toggle) {
+  toggle.disabled = true;
+  const userId = Number(toggle.dataset.userId);
+  try {
+    await api.adminSetFeature({ userId, feature: toggle.dataset.feature, enabled: toggle.checked });
+    const account = state.accounts.find((a) => a.id === userId);
+    if (account) account[toggle.dataset.feature] = toggle.checked;
+  } catch (error) {
+    toggle.checked = !toggle.checked;
+    toggle.title = error.message;
+  } finally {
+    toggle.disabled = false;
+  }
+}
+
 async function handleSetClassification(select) {
   select.disabled = true;
   try {
@@ -7224,6 +7260,10 @@ const schedules = createSchedules({
 schedules.install();
 
 function renderCleanerEmpty() {
+  if (!hasScheduling()) {
+    return `<section class="card"><div class="card__header"><div><p class="section-kicker">Today's checklist</p><h2>Tasks aren't turned on for your account</h2></div></div>
+    <p class="parameters-intro sch-pad">Ask your manager if you should have access to the daily task checklist.</p></section>`;
+  }
   return `<section class="card"><div class="card__header"><div><p class="section-kicker">Today's checklist</p><h2>Nothing scheduled for you today</h2></div></div>
     <p class="parameters-intro sch-pad">When your manager assigns you a schedule, today's tasks show up here — check each one off with photos as you finish it.</p></section>`;
 }
