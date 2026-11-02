@@ -1621,3 +1621,5 @@ p, li, .parameters-intro, .super-home__meta, .tutorial__steps p { text-wrap: pre
 /* File pickers (profile photo, sheet upload): a real button instead of the browser's raw control. */
 .login-form input[type="file"] { padding: 8px; font-size: 14px; color: var(--muted); }
 .login-form input[type="file"]::file-selector-button { margin-right: 12px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--canvas); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+.update-banner { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 10001; display: flex; align-items: center; gap: 12px; width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 12px 12px 12px 16px; border-radius: 16px; background: var(--forest); color: #fff; font-size: 0.92rem; box-shadow: 0 12px 40px rgba(16, 42, 37, .25); }
+.update-banner span { flex: 1; line-height: 1.35; }

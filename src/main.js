@@ -7855,6 +7855,67 @@ function installBackButton() {
 }
 installBackButton();
 
+// ---------------------------------------------------------------------
+// Staying up to date. An installed app left open in the background keeps
+// running the copy it started with until it's fully closed -- so a fix could
+// sit unseen for days. Whenever the app comes back to the screen (and every
+// 10 minutes while open) it checks whether a newer version is live; if so it
+// refreshes itself, unless the person is mid-typing or has something open, in
+// which case it shows a "Refresh" bar instead. Command mode's place and values
+// are kept on the phone, so a refresh never loses the walk-through.
+// ---------------------------------------------------------------------
+const LOADED_SCRIPT = document.querySelector('script[type="module"][src*="/assets/index-"]')?.getAttribute("src") || null;
+let updateBannerShown = false;
+
+function safeToRefreshNow() {
+  const active = document.activeElement;
+  // A box with the cursor in it but nothing typed yet (like the sign-in screen) is fine to refresh.
+  if (active && ["INPUT", "TEXTAREA"].includes(active.tagName) && String(active.value || "").trim()) return false;
+  if (document.querySelector(".modal-overlay, dialog[open]")) return false;
+  if (state.buildingWizard?.step && state.buildingWizard.step !== "closed") return false;
+  return true;
+}
+
+function showUpdateBanner() {
+  if (updateBannerShown) return;
+  updateBannerShown = true;
+  const bar = document.createElement("div");
+  bar.className = "update-banner";
+  bar.setAttribute("role", "status");
+  bar.innerHTML = `<span>A new version of Inspect Funnels is ready.</span><button type="button" class="button button--small button--light">Refresh</button>`;
+  bar.querySelector("button").addEventListener("click", async () => {
+    if (state.commandMode?.active) await commandModeFlushSave().catch(() => {});
+    location.reload();
+  });
+  document.body.appendChild(bar);
+}
+
+async function checkForNewVersion() {
+  if (!LOADED_SCRIPT || !navigator.onLine) return;
+  navigator.serviceWorker?.getRegistration().then((reg) => reg?.update()).catch(() => {});
+  try {
+    const html = await (await fetch(`/?version-check=${Date.now()}`, { cache: "no-store" })).text();
+    const live = html.match(/\/assets\/index-[^"']+\.js/)?.[0];
+    if (!live || live === LOADED_SCRIPT) return;
+    if (safeToRefreshNow()) {
+      if (state.commandMode?.active) await commandModeFlushSave().catch(() => {});
+      location.reload();
+    } else {
+      showUpdateBanner();
+    }
+  } catch {
+    // Offline or a blip: try again next time.
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkForNewVersion();
+});
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) checkForNewVersion();
+});
+setInterval(checkForNewVersion, 10 * 60_000);
+
 async function bootstrap() {
   renderLoading();
   try {
