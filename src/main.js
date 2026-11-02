@@ -746,8 +746,12 @@ function handleRegistrationRoleSubmit(event) {
 function renderRegisterBuildingStep(reg) {
   return `
     <p class="form-intro">Search for your building by name. If your operations manager hasn't registered it yet, you won't be able to create a profile until they do.</p>
-    <label class="inspection-field registration-building-search"><span>Building name</span><input id="registration-building-search" autocomplete="off" placeholder="Start typing…" /></label>
-    <div class="registration-building-results">
+    <label class="inspection-field registration-building-search"><span>Building name</span><input id="registration-building-search" autocomplete="off" autocapitalize="words" enterkeyhint="search" placeholder="Start typing…" /></label>
+    <div id="registration-building-matches">${renderRegistrationBuildingMatches(reg)}</div>`;
+}
+
+function renderRegistrationBuildingMatches(reg) {
+  return `<div class="registration-building-results">
       ${reg.buildingResults
         .map(
           (b) =>
@@ -760,6 +764,18 @@ function renderRegisterBuildingStep(reg) {
         ? `<p class="form-error" role="alert">Please talk to your operations manager to register the building before you can create a profile.</p>`
         : ""
     }`;
+}
+
+// Only the list under the search box is redrawn while typing. Rebuilding the
+// whole page on every letter replaced the input, which closes a phone's
+// keyboard after one character -- so supers, PMs and cleaners couldn't type.
+function updateRegistrationBuildingMatches() {
+  const box = document.querySelector("#registration-building-matches");
+  if (!box) return;
+  box.innerHTML = renderRegistrationBuildingMatches(state.registration);
+  box.querySelectorAll(".registration-building-result").forEach((button) => {
+    button.addEventListener("click", () => selectRegistrationBuilding(Number(button.dataset.buildingId), button.dataset.buildingName));
+  });
 }
 
 function renderRegisterProfileStep(reg) {
@@ -797,23 +813,22 @@ function renderRegisterDoneStep(reg) {
     <button type="button" class="button button--primary button--full auth-done" id="register-done-sign-in"><span>Go to sign in</span>${icon("arrow")}</button>`;
 }
 
+let registrationSearchSeq = 0;
 async function handleRegistrationBuildingSearch(event) {
   const q = event.currentTarget.value.trim();
+  const seq = ++registrationSearchSeq;
   if (q.length < 2) {
     state.registration.buildingResults = [];
     state.registration.buildingSearched = false;
-    renderRegister();
-    document.querySelector("#registration-building-search").focus();
+    updateRegistrationBuildingMatches();
     return;
   }
-  const { buildings } = await api.searchRegistrationBuildings(q);
+  const { buildings } = await api.searchRegistrationBuildings(q).catch(() => ({ buildings: [] }));
+  // A slower earlier search must not overwrite the results for what's typed now.
+  if (seq !== registrationSearchSeq || !state.registration) return;
   state.registration.buildingResults = buildings;
   state.registration.buildingSearched = true;
-  renderRegister();
-  const input = document.querySelector("#registration-building-search");
-  input.focus();
-  input.value = q;
-  input.setSelectionRange(q.length, q.length);
+  updateRegistrationBuildingMatches();
 }
 
 function selectRegistrationBuilding(id, name) {
