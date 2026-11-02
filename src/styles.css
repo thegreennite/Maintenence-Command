@@ -35,7 +35,7 @@ button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation
 button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid rgba(220, 235, 97, 0.8); outline-offset: 2px; }
 
 .icon { width: 20px; height: 20px; flex: 0 0 auto; }
-.brand { display: inline-flex; align-items: center; gap: 11px; color: var(--ink); font: 600 17px/1 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.025em; text-decoration: none; }
+.brand { display: inline-flex; align-items: center; gap: 11px; color: var(--ink); font: 600 17px/1 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.005em; text-decoration: none; }
 .brand strong { font-weight: 700; }
 .brand-mark { display: grid; place-items: center; width: 37px; height: 37px; border-radius: 11px; color: var(--lime); background: var(--forest); }
 .brand--light { color: #fff; }
@@ -54,7 +54,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .login-story::after { width: 360px; height: 360px; right: -220px; top: 80px; background: rgba(220,235,97,.06); }
 .login-story__inner { position: relative; z-index: 1; display: flex; flex-direction: column; min-height: 100%; padding: clamp(36px, 5vw, 72px); }
 .story-copy { max-width: 620px; margin: auto 0; padding: 80px 0; }
-.story-copy h1 { margin: 17px 0 24px; font: 600 clamp(50px, 6vw, 84px)/.98 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.065em; }
+.story-copy h1 { margin: 17px 0 24px; font: 600 clamp(50px, 6vw, 84px)/.98 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.025em; }
 .story-copy > p:last-child { max-width: 500px; margin: 0; color: rgba(255,255,255,.68); font-size: clamp(16px, 1.5vw, 19px); line-height: 1.65; }
 .story-status { display: flex; align-items: center; gap: 10px; color: rgba(255,255,255,.62); font-size: 12px; letter-spacing: .03em; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #98a19e; box-shadow: 0 0 0 4px rgba(152,161,158,.12); }
@@ -65,9 +65,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .login-panel__top .mobile-brand { margin-bottom: 0; }
 .add-business-link { margin-left: auto; font-size: 12.5px; white-space: nowrap; }
 .mobile-brand { display: none; margin-bottom: 64px; }
-.eyebrow, .section-kicker { margin: 0; color: var(--forest); font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.eyebrow, .section-kicker { margin: 0; color: var(--forest); font-size: 11px; font-weight: 700; letter-spacing: .08em; line-height: 1.4; text-transform: uppercase; }
 .eyebrow--light { color: var(--lime); }
-.login-form-wrap h2 { margin: 14px 0 8px; font: 600 40px/1.1 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.045em; }
+.login-form-wrap h2 { margin: 14px 0 8px; font: 600 40px/1.12 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.015em; }
 .form-intro { margin: 0 0 36px; color: var(--muted); }
 .login-form { display: grid; gap: 20px; }
 .login-form label { display: grid; gap: 9px; color: #3c474b; font-size: 13px; font-weight: 600; }
@@ -102,7 +102,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .topbar__right { display: flex; align-items: center; gap: 24px; }
 .role-pill { padding: 7px 10px; border-radius: 5px; color: var(--forest); background: var(--mint); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .user-identity { display: flex; align-items: center; gap: 10px; }
-.user-identity > span:last-child { display: grid; gap: 2px; }
+.user-identity > span:not(.avatar) { display: grid; gap: 2px; line-height: 1.2; }
 .user-identity strong { font-size: 12px; }
 .user-identity small { color: var(--muted); font-size: 10px; }
 .user-identity--button { border: 1px solid transparent; background: none; padding: 4px 8px; border-radius: 8px; cursor: pointer; text-align: left; }
@@ -115,16 +115,17 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .icon-button:hover { color: var(--danger); border-color: #e8c4bf; }
 .icon-button .icon { width: 17px; }
 .impersonation-bar { display: flex; justify-content: center; align-items: center; gap: 24px; min-height: 46px; padding: 6px 24px; color: white; background: var(--forest); font-size: 12px; }
-.impersonation-bar > span { display: flex; align-items: center; gap: 6px; }
+.impersonation-bar > span { display: block; line-height: 1.4; }
+.impersonation-bar > span .icon { display: inline-block; vertical-align: -3px; margin-right: 4px; }
 .impersonation-bar .icon { width: 16px; color: var(--lime); }
 
 .dashboard { width: min(100% - 44px, 1380px); margin: 0 auto; padding: 52px 0 68px; }
 .dashboard-heading { display: flex; align-items: end; justify-content: space-between; gap: 40px; margin-bottom: 48px; }
-.dashboard-heading h1 { margin: 10px 0 10px; font: 600 clamp(33px, 4vw, 50px)/1.05 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.05em; }
+.dashboard-heading h1 { margin: 10px 0 10px; font: 600 clamp(30px, 4vw, 48px)/1.1 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.015em; }
 .dashboard-heading > div > p:last-child { max-width: 670px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
 .live-indicator { display: flex; align-items: center; gap: 9px; flex: 0 0 auto; padding-bottom: 5px; color: var(--muted); font-size: 11px; }
 .section-heading { display: flex; justify-content: space-between; align-items: end; margin-bottom: 15px; }
-.section-heading h2, .card__header h2 { margin: 5px 0 0; font: 600 20px/1.2 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.03em; }
+.section-heading h2, .card__header h2 { margin: 6px 0 0; font: 600 20px/1.25 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.005em; }
 .section-heading > span, .quiet-label { color: #8a9491; font-size: 10px; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin-bottom: 36px; }
 .metric-grid--three { grid-template-columns: repeat(3, 1fr); }
@@ -136,7 +137,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .metric-card--neutral { --tone: #6d7a7a; --tone-soft: #edf0ed; }
 .metric-card__top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; color: var(--muted); font-size: 11px; font-weight: 600; }
 .metric-card__top i { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 4px var(--tone-soft); }
-.metric-card > strong { position: relative; z-index: 1; display: block; margin-bottom: 6px; font: 600 34px/1 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.05em; }
+.metric-card > strong { position: relative; z-index: 1; display: block; margin-bottom: 6px; font: 600 34px/1 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.015em; }
 .metric-card > .metric-card__value--wide { font-size: clamp(20px, 2.2vw, 30px); }
 .metric-card > small { position: relative; z-index: 1; color: var(--muted); font-size: 10px; }
 
@@ -167,7 +168,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .detail-card__flag { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; margin-bottom: 44px; padding: 7px 9px; border-radius: 5px; color: var(--forest-dark); background: var(--lime); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .detail-card__flag .icon { width: 13px; }
 .detail-card .eyebrow { color: rgba(255,255,255,.58); }
-.detail-card h2 { position: relative; z-index: 1; margin: 10px 0 14px; font: 600 25px/1.18 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.035em; }
+.detail-card h2 { position: relative; z-index: 1; margin: 10px 0 14px; font: 600 25px/1.22 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.01em; }
 .detail-copy { position: relative; z-index: 1; min-height: 84px; margin: 0; color: rgba(255,255,255,.67); font-size: 12px; line-height: 1.65; }
 .detail-facts { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; margin: 23px 0; padding: 17px 0; border-top: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); }
 .detail-facts div + div { padding-left: 18px; border-left: 1px solid rgba(255,255,255,.14); }
@@ -216,7 +217,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .shell-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .placeholder-card { position: relative; display: flex; align-items: start; gap: 22px; min-height: 220px; padding: 28px; overflow: hidden; }
 .placeholder-card__number { color: var(--success); font: 600 13px/1 "Avenir Next", Avenir, system-ui, sans-serif; }
-.placeholder-card h2 { margin: 0 0 12px; font: 600 22px/1.2 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.03em; }
+.placeholder-card h2 { margin: 0 0 12px; font: 600 22px/1.25 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.005em; }
 .placeholder-card p { max-width: 420px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
 .phase-tag { position: absolute; right: 22px; bottom: 22px; padding: 6px 8px; border-radius: 4px; color: var(--forest); background: var(--mint); font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .empty-state { display: grid; justify-items: center; padding: 70px; border: 1px solid var(--line); border-radius: 9px; background: white; text-align: center; }
@@ -610,7 +611,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .building-world { display: flex; flex-direction: column; gap: 18px; }
 .building-world__header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .building-world__header .link-button { flex: 0 0 100%; }
-.building-world__title h1 { margin: 4px 0 0; font: 600 26px/1.2 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.03em; }
+.building-world__title h1 { margin: 4px 0 0; font: 600 26px/1.22 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.01em; }
 .building-world__title p { margin: 4px 0 0; }
 .building-world__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; align-items: start; }
 .building-world__checklist { grid-column: 1 / -1; }
@@ -828,7 +829,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .command-mode__stage { flex: 1; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 32px 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); box-shadow: var(--shadow); }
 .command-mode__stage--review { align-items: stretch; text-align: left; }
 .command-mode__location { margin: 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-.command-mode__label { margin: 2px 0 0; font: 700 30px/1.2 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: -.02em; }
+.command-mode__label { margin: 2px 0 0; font: 700 30px/1.22 "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: 0; }
 .command-mode__unit { margin: 0 0 6px; color: var(--muted); font-size: 13px; }
 .command-mode__current { display: flex; align-items: baseline; gap: 8px; margin: 14px 0; font: 700 48px/1 "Avenir Next", Avenir, system-ui, sans-serif; color: var(--forest-dark); }
 .command-mode__current small { font-size: 16px; font-weight: 600; color: var(--muted); }
@@ -1585,4 +1586,20 @@ html { overflow-x: clip; }
 @media (max-width: 680px) {
   .super-home, .property-today { padding: 18px 16px; }
   .tutorial > .tutorial__steps, .tutorial > .tutorial__heading { margin-left: 14px; margin-right: 14px; }
+}
+
+/* Word spacing and wrapping (2026-11-02): headings break into even lines instead
+   of leaving one word alone on the last line, paragraphs avoid single-word
+   orphans, and body text gets a comfortable line height. */
+h1, h2, h3, .command-mode__label, .super-home h2 { text-wrap: balance; }
+p, li, .parameters-intro, .super-home__meta, .tutorial__steps p { text-wrap: pretty; }
+.parameters-intro, .tutorial__steps p, .super-home__learning, .modal-card p, .property-outside small, .property-messages p { line-height: 1.55; word-spacing: .02em; }
+.dashboard-heading p { line-height: 1.5; }
+.card__header .section-kicker + h2, .card__header .eyebrow + h2 { margin-top: 6px; }
+@media (max-width: 680px) {
+  .dashboard-heading h1 { font-size: 30px; line-height: 1.12; }
+  .login-form-wrap h2 { font-size: 32px; }
+  .command-mode__label { font-size: 24px; }
+  .user-identity strong { font-size: 13px; }
+  .impersonation-bar > span { max-width: 62%; font-size: 12px; }
 }
