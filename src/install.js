@@ -94,7 +94,7 @@ function showBanner() {
   banner.setAttribute("role", "region");
   banner.setAttribute("aria-label", "Install the app");
   banner.innerHTML = `
-    <img src="/icons/icon-192.png" alt="" width="46" height="46" />
+    <img src="${import.meta.env.BASE_URL}icons/icon-192.png" alt="" width="46" height="46" />
     <div class="install-banner__text"><strong>Install Inspect Funnels</strong><span>Opens full screen from your home screen.</span></div>
     <button type="button" class="button button--primary button--small" data-go>${deferred ? "Install" : "How"}</button>
     <button type="button" class="icon-button" data-no aria-label="Not now">×</button>`;
@@ -112,7 +112,7 @@ function showBanner() {
 
 export function initInstall() {
   if ("serviceWorker" in navigator && import.meta.env.PROD) {
-    window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch((error) => console.warn("Service worker not registered", error)));
+    window.addEventListener("load", () => navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).catch((error) => console.warn("Service worker not registered", error)));
   }
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();

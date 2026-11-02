@@ -1,21 +1,48 @@
 {
-  "id": "/",
+  "id": "/inspect-funnels/",
   "name": "Inspect Funnels",
   "short_name": "Inspect Funnels",
   "description": "Maintenance operations, with proof: inspections, schedules and time-stamped photo proof for building teams.",
   "lang": "en",
-  "start_url": "/?source=app",
-  "scope": "/",
+  "start_url": "/inspect-funnels/?source=app",
+  "scope": "/inspect-funnels/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "orientation": "any",
   "background_color": "#0f3a33",
   "theme_color": "#174c43",
-  "categories": ["business", "productivity", "utilities"],
+  "categories": [
+    "business",
+    "productivity",
+    "utilities"
+  ],
   "icons": [
-    { "src": "/icons/icon-192.png?v=4", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-512.png?v=4", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/maskable-512.png?v=4", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "/favicon.svg?v=4", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    {
+      "src": "/inspect-funnels/icons/icon-192.png?v=4",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/inspect-funnels/icons/icon-512.png?v=4",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/inspect-funnels/icons/maskable-512.png?v=4",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/inspect-funnels/favicon.svg?v=4",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
   ]
 }

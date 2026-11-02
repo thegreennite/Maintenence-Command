@@ -2,10 +2,12 @@
 // Purpose: make the app installable and open instantly. It caches the app shell and its
 // (content-hashed) files. It never touches /api/ -- readings, photos, logins and sessions
 // always go straight to the network, so nothing private or stale is ever served from here.
-const VERSION = "v5";
+const VERSION = "v6";
+// Where the app lives ("/inspect-funnels/"), taken from where this worker was registered.
+const BASE = new URL(self.registration.scope).pathname;
 const SHELL = `if-shell-${VERSION}`;
 const FILES = `if-files-${VERSION}`;
-const SHELL_URLS = ["/", "/offline", "/manifest.webmanifest?v=4", "/favicon.svg", "/icons/icon-192.png?v=4"];
+const SHELL_URLS = [BASE, `${BASE}offline`, `${BASE}manifest.webmanifest?v=5`, `${BASE}favicon.svg`, `${BASE}icons/icon-192.png?v=4`];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(SHELL_URLS)).then(() => self.skipWaiting()));
@@ -28,7 +30,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/cdn-cgi/")) return;
+  if (url.pathname.startsWith(`${BASE}api/`) || url.pathname.startsWith("/api/") || url.pathname.startsWith("/cdn-cgi/")) return;
 
   // Opening the app: always try the network first so a new version shows up; fall back to the
   // last good copy of the page (or the offline notice) when there's no signal.
@@ -38,17 +40,17 @@ self.addEventListener("fetch", (event) => {
         .then((response) => {
           if (response.ok) {
             const copy = response.clone();
-            caches.open(SHELL).then((cache) => cache.put("/", copy));
+            caches.open(SHELL).then((cache) => cache.put(BASE, copy));
           }
           return response;
         })
-        .catch(async () => (await caches.match("/")) || (await caches.match("/offline"))),
+        .catch(async () => (await caches.match(BASE)) || (await caches.match(`${BASE}offline`))),
     );
     return;
   }
 
   // Built files have a hash in their name, so a cached copy is always the right one.
-  if (url.pathname.startsWith("/assets/")) {
+  if (url.pathname.startsWith(`${BASE}assets/`)) {
     event.respondWith(
       caches.match(request).then(
         (hit) =>

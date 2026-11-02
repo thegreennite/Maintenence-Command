@@ -17,7 +17,7 @@ import { ghlUpsertContact, ghlSendEmail } from "./ghl.js";
 import { getNativeClientId } from "./tenant-db.js";
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const DEFAULT_APP_URL = "https://power-log-command.pages.dev";
+const DEFAULT_APP_URL = "https://revinetic.com/inspect-funnels";
 
 // ----- small formatting helpers ---------------------------------------
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;

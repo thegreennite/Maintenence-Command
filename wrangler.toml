@@ -28,7 +28,7 @@ binding = "PHOTOS"
 bucket_name = "fhg-command-photos"
 
 [vars]
-ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,https://power-log-command.pages.dev"
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,https://power-log-command.pages.dev,https://revinetic.com,https://preview.power-log-command.pages.dev"
 SESSION_TTL_HOURS = "12"
 # Not secret -- the account ID and this Worker's own D1 database ID, needed
 # so the admin stats endpoint can query Cloudflare's API about itself.
@@ -38,7 +38,7 @@ GITHUB_REPO_URL = "https://github.com/thegreennite/Maintenence-Command"
 # GHL_API_KEY is a Worker secret, not a var. Location/base aren't secret.
 GHL_API_BASE = "https://services.leadconnectorhq.com"
 GHL_LOCATION_ID = "B3DTv8qZBapYs1m8Rcv2"
-PUBLIC_APP_URL = "https://power-log-command.pages.dev"
+PUBLIC_APP_URL = "https://revinetic.com/inspect-funnels"
 # Copied on every Friday report in addition to the Operations Managers.
 # Comma-separated; remove an address here to stop its copy.
 WEEKLY_REPORT_EXTRA_EMAILS = "lucas.garcia.gla@gmail.com"

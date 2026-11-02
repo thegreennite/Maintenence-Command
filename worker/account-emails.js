@@ -8,7 +8,7 @@
 
 import { ghlUpsertContact, ghlSendEmail } from "./ghl.js";
 
-const DEFAULT_APP_URL = "https://power-log-command.pages.dev";
+const DEFAULT_APP_URL = "https://revinetic.com/inspect-funnels";
 
 const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 

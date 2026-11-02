@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "wrangler dev --local --port 8787",
-    "build": "vite build",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && vite build && node scripts/finish-build.mjs",
     "preview": "vite preview",
     "db:migrate:local": "wrangler d1 migrations apply fhg-command-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply fhg-command-db --remote",

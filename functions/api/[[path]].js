@@ -20,11 +20,15 @@ export async function onRequest({ request }) {
   // The Worker only sees this proxy as the caller, so pass on where the phone
   // really connected from (IP + Cloudflare's rough city) -- recorded with each
   // proof photo as backup evidence when GPS isn't available.
-  proxied.headers.set("X-IF-Client-IP", request.headers.get("CF-Connecting-IP") || "");
-  const cf = request.cf || {};
-  proxied.headers.set(
-    "X-IF-Client-Geo",
-    JSON.stringify({ city: cf.city || null, region: cf.region || null, country: cf.country || null, network: cf.asOrganization || null }),
-  );
+  // When revinetic.com's worker is in front (the app's real address), it has already
+  // filled these in from the phone's own connection -- keep those.
+  if (!request.headers.get("X-IF-Client-IP")) {
+    proxied.headers.set("X-IF-Client-IP", request.headers.get("CF-Connecting-IP") || "");
+    const cf = request.cf || {};
+    proxied.headers.set(
+      "X-IF-Client-Geo",
+      JSON.stringify({ city: cf.city || null, region: cf.region || null, country: cf.country || null, network: cf.asOrganization || null }),
+    );
+  }
   return fetch(proxied);
 }

@@ -105,7 +105,8 @@ const state = {
 // relative path works. In production there's no proxy — call the deployed
 // Worker's own URL directly (cross-origin), which the Worker is already
 // built to support (CORS origin-reflection + SameSite=None cookie).
-const API_BASE = import.meta.env.VITE_API_URL || "";
+// "/inspect-funnels" in the built app (its API is at revinetic.com/inspect-funnels/api), "" in local dev.
+const API_BASE = import.meta.env.VITE_API_URL || import.meta.env.BASE_URL.replace(/\/$/, "");
 
 const api = {
   async request(path, options = {}) {
@@ -8162,8 +8163,8 @@ async function checkForNewVersion() {
   if (!LOADED_SCRIPT || !navigator.onLine) return;
   navigator.serviceWorker?.getRegistration().then((reg) => reg?.update()).catch(() => {});
   try {
-    const html = await (await fetch(`/?version-check=${Date.now()}`, { cache: "no-store" })).text();
-    const live = html.match(/\/assets\/index-[^"']+\.js/)?.[0];
+    const html = await (await fetch(`${import.meta.env.BASE_URL}?version-check=${Date.now()}`, { cache: "no-store" })).text();
+    const live = html.match(/[^"']*\/assets\/index-[^"']+\.js/)?.[0];
     if (!live || live === LOADED_SCRIPT) return;
     if (safeToRefreshNow()) {
       if (state.commandMode?.active) await commandModeFlushSave().catch(() => {});

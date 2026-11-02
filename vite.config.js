@@ -1,6 +1,12 @@
 import { defineConfig } from "vite";
 
-export default defineConfig({
+// The app's home is revinetic.com/inspect-funnels/ (revinetic.com's worker serves it
+// from this Pages project). Built files go in dist/inspect-funnels/ so the same paths
+// work here too; scripts/finish-build.mjs puts _headers/_redirects at the dist root.
+// The dev server stays at / so local testing is unchanged.
+export default defineConfig(({ command }) => ({
+  base: command === "build" ? "/inspect-funnels/" : "/",
+  build: { outDir: "dist/inspect-funnels", emptyOutDir: true },
   server: {
     port: 5173,
     proxy: {
@@ -19,4 +25,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
