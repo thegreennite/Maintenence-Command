@@ -1,9 +1,25 @@
-// Phase 4: Property Manager read-only view. Deliberately minimal per the
-// original spec — start time, submit time, and the day's outcome. Reuses
-// Phase 3's flagging logic against the building's current parameters so
-// "outcome" means the same thing here as it does on the Manager's panel.
+// Property Manager view: read-only, one building. What a PM needs at a glance --
+// is today's inspection done, how the last two weeks went, which readings were
+// outside normal (with the super's answer and remark), and every message the
+// superintendent sent up (issues they flagged, observations, abnormal readings).
+//
+// "Outcome" comes from what was recorded at submit (inspection_readings.deviation,
+// see worker/deviation.js), so it matches the Friday report: a reading the super
+// called abnormal makes the day Abnormal; anything else outside normal makes it
+// Needs a look.
 
-import { flagFor } from "./manager.js";
+import { remarksForSubmissions } from "./remarks.js";
+import { readingText } from "../shared/reading-unit.js";
+
+const DAYS_SHOWN = 14;
+
+const parse = (json) => {
+  try {
+    return json ? JSON.parse(json) : null;
+  } catch {
+    return null;
+  }
+};
 
 export async function handlePropertyInspections(request, session, env, corsHeaders) {
   const buildingId = session.building_id;
@@ -11,65 +27,91 @@ export async function handlePropertyInspections(request, session, env, corsHeade
     return jsonError("No building is assigned to this account yet.", 409, corsHeaders);
   }
 
-  const [building, tags, parameters, submissions] = await Promise.all([
+  const [building, tagCount, submissions, messages] = await Promise.all([
     env.DB.prepare("SELECT id, name, region FROM buildings WHERE id = ?").bind(buildingId).first(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM inspection_tags WHERE building_id = ?").bind(buildingId).first(),
     env.DB.prepare(
-      "SELECT id, answer_kind AS value_type FROM inspection_tags WHERE building_id = ?",
+      `SELECT s.id, s.inspection_date, s.status, s.started_at, s.submitted_at, u.full_name AS author
+       FROM inspection_submissions s LEFT JOIN users u ON u.id = s.superintendent_id
+       WHERE s.building_id = ? ORDER BY s.inspection_date DESC LIMIT ${DAYS_SHOWN}`,
     )
       .bind(buildingId)
       .all(),
     env.DB.prepare(
-      `SELECT p.tag_id, p.min_value, p.max_value, p.expected_value
-       FROM inspection_parameters p
-       JOIN inspection_tags t ON t.id = p.tag_id
-       WHERE t.building_id = ?`,
-    )
-      .bind(buildingId)
-      .all(),
-    env.DB.prepare(
-      `SELECT id, inspection_date, status, started_at, submitted_at
-       FROM inspection_submissions WHERE building_id = ?
-       ORDER BY inspection_date DESC LIMIT 14`,
+      `SELECT w.id, w.source, w.category, w.title, w.description, w.reading_value, w.status, w.created_at, u.full_name AS reported_by
+       FROM work_orders w LEFT JOIN users u ON u.id = w.created_by
+       WHERE w.building_id = ? AND w.created_at >= datetime('now', '-60 days')
+       ORDER BY w.created_at DESC LIMIT 50`,
     )
       .bind(buildingId)
       .all(),
   ]);
-
   if (!building) return jsonError("Building not found.", 404, corsHeaders);
 
-  const tagById = new Map(tags.results.map((tag) => [tag.id, tag]));
-  const parameterByTag = new Map(parameters.results.map((row) => [row.tag_id, row]));
+  const subs = submissions.results;
+  const ids = subs.map((s) => s.id);
+  const [readings, remarks] = ids.length
+    ? await Promise.all([
+        env.DB.prepare(
+          `SELECT r.submission_id, r.tag_id, r.value, r.deviation, t.tag_no, t.reading_type, t.unit, g.name AS group_name
+           FROM inspection_readings r JOIN inspection_tags t ON t.id = r.tag_id
+           LEFT JOIN equipment_groups g ON g.id = t.equipment_group_id
+           WHERE r.submission_id IN (${ids.map(() => "?").join(",")})`,
+        )
+          .bind(...ids)
+          .all(),
+        remarksForSubmissions(env, ids).catch(() => new Map()),
+      ])
+    : [{ results: [] }, new Map()];
 
-  const days = await Promise.all(
-    submissions.results.map(async (submission) => {
-      const readings = await env.DB.prepare(
-        "SELECT tag_id, value FROM inspection_readings WHERE submission_id = ?",
-      )
-        .bind(submission.id)
-        .all();
+  const bySub = new Map(subs.map((s) => [s.id, { filled: 0, flagged: 0, abnormal: 0 }]));
+  const dateOf = new Map(subs.map((s) => [s.id, s.inspection_date]));
+  const outside = [];
+  for (const row of readings.results) {
+    const c = bySub.get(row.submission_id);
+    if (String(row.value ?? "").trim()) c.filled += 1;
+    const deviation = parse(row.deviation);
+    if (!deviation) continue;
+    c.flagged += 1;
+    if (deviation.ack === "abnormal") c.abnormal += 1;
+    outside.push({
+      date: dateOf.get(row.submission_id),
+      where: [row.group_name, [row.tag_no, row.reading_type].filter(Boolean).join(" — ")].filter(Boolean).join(" · "),
+      value: readingText(row.value, row.unit),
+      detail: deviation.detail || "",
+      answer: deviation.ack || null,
+      remark: remarks.get(`${row.submission_id}|${row.tag_id}`) || "",
+    });
+  }
+  outside.sort((a, b) => b.date.localeCompare(a.date) || (a.answer === "abnormal" ? -1 : 1));
 
-      const counts = { green: 0, yellow: 0, red: 0 };
-      for (const reading of readings.results) {
-        const tag = tagById.get(reading.tag_id);
-        const parameter = parameterByTag.get(reading.tag_id);
-        const flag = tag ? flagFor(tag, reading.value, parameter) : null;
-        if (flag) counts[flag] += 1;
-      }
+  const days = subs.map((s) => {
+    const c = bySub.get(s.id);
+    const outcome = s.status !== "submitted" ? "not_evaluated" : c.abnormal ? "abnormal" : c.flagged ? "needs_look" : "normal";
+    return {
+      date: s.inspection_date,
+      status: s.status,
+      startedAt: s.started_at,
+      submittedAt: s.submitted_at,
+      author: s.author,
+      outcome,
+      counts: { filled: c.filled, flagged: c.flagged, abnormal: c.abnormal },
+    };
+  });
 
-      const outcome = counts.red > 0 ? "abnormal" : counts.yellow > 0 ? "needs_look" : counts.green > 0 ? "normal" : "not_evaluated";
+  const todayIso = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 
-      return {
-        date: submission.inspection_date,
-        status: submission.status,
-        startedAt: submission.started_at,
-        submittedAt: submission.submitted_at,
-        outcome,
-        counts,
-      };
-    }),
+  return jsonOk(
+    {
+      building,
+      totalReadings: tagCount?.c || 0,
+      today: days.find((d) => d.date === todayIso) || null,
+      days,
+      outside: outside.slice(0, 40),
+      messages: messages.results,
+    },
+    corsHeaders,
   );
-
-  return jsonOk({ building, days }, corsHeaders);
 }
 
 function jsonOk(data, headers) {

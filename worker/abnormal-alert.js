@@ -1,12 +1,14 @@
 // Email the property manager when a superintendent submits an inspection with
 // readings they confirmed as abnormal.
 //
-// TEST SETUP: until real property-manager accounts are wired in, every alert goes to
-// the address below. Set ABNORMAL_ALERT_EMAILS (comma separated) on the Worker to
-// change who gets them without touching code.
+// Goes to every Property Manager assigned to the building (with an email on file),
+// plus the address(es) below -- Lucas's test inbox by default; set
+// ABNORMAL_ALERT_EMAILS (comma separated) on the Worker to change those without
+// touching code. A remark the super left on the reading is included.
 
 import { ghlUpsertContact, ghlSendEmail } from "./ghl.js";
 import { readingText } from "../shared/reading-unit.js";
+import { loadRemarks } from "./remarks.js";
 
 const TEST_PM_EMAIL = "lucas.garcia.gla@gmail.com";
 
@@ -15,6 +17,20 @@ const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 export function alertRecipients(env) {
   const configured = String(env.ABNORMAL_ALERT_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
   return configured.length ? configured : [TEST_PM_EMAIL];
+}
+
+async function propertyManagersFor(env, buildingId) {
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT full_name, email FROM users WHERE role = 'property_manager' AND building_id = ? AND is_active = 1
+         AND email IS NOT NULL AND TRIM(email) != ''`,
+    )
+      .bind(buildingId)
+      .all();
+    return (rows.results || []).filter((r) => r.email);
+  } catch {
+    return [];
+  }
 }
 
 export async function sendAbnormalAlert(env, { buildingId, submissionId, superName, abnormalTagIds }) {
@@ -36,6 +52,7 @@ export async function sendAbnormalAlert(env, { buildingId, submissionId, superNa
   ]);
   if (!rows.results.length) return { sent: 0 };
 
+  const remarks = await loadRemarks(env, submissionId).catch(() => ({}));
   const items = rows.results.map((row) => {
     let deviation = null;
     try {
@@ -44,7 +61,7 @@ export async function sendAbnormalAlert(env, { buildingId, submissionId, superNa
       deviation = null;
     }
     const where = [row.group_name || row.system_name, [row.tag_no, row.reading_type].filter(Boolean).join(" — ")].filter(Boolean).join(" · ");
-    return { where, value: readingText(row.value, row.unit), state: deviation?.state || "", detail: deviation?.detail || "" };
+    return { where, value: readingText(row.value, row.unit), state: deviation?.state || "", detail: deviation?.detail || "", remark: remarks[row.id] || "" };
   });
 
   const buildingName = building?.name || "your building";
@@ -54,7 +71,7 @@ export async function sendAbnormalAlert(env, { buildingId, submissionId, superNa
     <p style="margin:0 0 16px;color:#5b6b68">${esc(superName || "The superintendent")} confirmed ${items.length === 1 ? "this reading as" : "these readings as"} abnormal when submitting today's inspection.</p>
     <table style="border-collapse:collapse;width:100%">${items
       .map(
-        (i) => `<tr><td style="padding:9px 10px;border-bottom:1px solid #e3e8e3"><strong>${esc(i.where)}</strong>${i.state ? `<br><span style="color:#5b6b68;font-size:12px">machine was ${esc(i.state)}</span>` : ""}${i.detail ? `<br><span style="color:#5b6b68;font-size:12px">${esc(i.detail)}</span>` : ""}</td>
+        (i) => `<tr><td style="padding:9px 10px;border-bottom:1px solid #e3e8e3"><strong>${esc(i.where)}</strong>${i.state ? `<br><span style="color:#5b6b68;font-size:12px">machine was ${esc(i.state)}</span>` : ""}${i.detail ? `<br><span style="color:#5b6b68;font-size:12px">${esc(i.detail)}</span>` : ""}${i.remark ? `<br><span style="font-size:13px">Remark: ${esc(i.remark)}</span>` : ""}</td>
         <td style="padding:9px 10px;border-bottom:1px solid #e3e8e3;text-align:right;font-weight:700;color:#b83a2f;white-space:nowrap">${esc(i.value)}</td></tr>`,
       )
       .join("")}</table>
@@ -64,10 +81,15 @@ export async function sendAbnormalAlert(env, { buildingId, submissionId, superNa
     console.warn("Abnormal alert not sent: GHL is not configured on this Worker.", { to: alertRecipients(env), subject });
     return { sent: 0, skipped: "ghl-not-configured" };
   }
+  const pms = await propertyManagersFor(env, buildingId);
+  const seen = new Set();
+  const recipients = [...pms.map((p) => ({ email: p.email, name: p.full_name })), ...alertRecipients(env).map((email) => ({ email, name: "Property manager" }))].filter(
+    (r) => !seen.has(r.email.toLowerCase()) && seen.add(r.email.toLowerCase()),
+  );
   let sent = 0;
-  for (const email of alertRecipients(env)) {
+  for (const { email, name } of recipients) {
     try {
-      const contactId = await ghlUpsertContact(env, { email, name: "Property manager" });
+      const contactId = await ghlUpsertContact(env, { email, name });
       await ghlSendEmail(env, { contactId, subject, html });
       sent += 1;
     } catch (error) {

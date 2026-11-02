@@ -85,10 +85,41 @@ export async function handleGroupPhotoUpload(request, session, env, corsHeaders)
     .bind(submissionId, groupId, photoKey, capturedAt, latitude, longitude, distanceFromBuildingM)
     .run();
 
+  await recordPhotoNetwork(env, request, submissionId, groupId).catch((error) => console.error("Photo network record failed", error));
+
   return jsonOk(
     { ok: true, groupId, photoKey, capturedAt, latitude, longitude, distanceFromBuildingM, locationMismatch },
     corsHeaders,
   );
+}
+
+// Backup proof for when GPS isn't available: the IP address the phone connected
+// from and Cloudflare's rough city/network for it (passed on by the Pages proxy,
+// functions/api/[[path]].js). City-level only -- it can't prove which building,
+// but it shows whether the phone was on the building's internet or mobile data.
+// Own table, created on demand, since company databases have no migration tooling.
+async function recordPhotoNetwork(env, request, submissionId, groupId) {
+  const ip = request.headers.get("X-IF-Client-IP") || request.headers.get("CF-Connecting-IP") || null;
+  let geo = {};
+  try {
+    geo = JSON.parse(request.headers.get("X-IF-Client-Geo") || "{}");
+  } catch {}
+  if (!geo.city && request.cf) geo = { city: request.cf.city, region: request.cf.region, country: request.cf.country, network: request.cf.asOrganization };
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS group_photo_network (
+       submission_id INTEGER NOT NULL, equipment_group_id INTEGER NOT NULL,
+       ip TEXT, city TEXT, region TEXT, country TEXT, network TEXT,
+       recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       PRIMARY KEY (submission_id, equipment_group_id))`,
+  ).run();
+  await env.DB.prepare(
+    `INSERT INTO group_photo_network (submission_id, equipment_group_id, ip, city, region, country, network)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (submission_id, equipment_group_id) DO UPDATE SET ip = excluded.ip, city = excluded.city,
+       region = excluded.region, country = excluded.country, network = excluded.network, recorded_at = CURRENT_TIMESTAMP`,
+  )
+    .bind(submissionId, groupId, ip, geo.city || null, geo.region || null, geo.country || null, geo.network || null)
+    .run();
 }
 
 function jsonOk(data, headers) {

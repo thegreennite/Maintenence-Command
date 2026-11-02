@@ -3,63 +3,25 @@
 // stored at submit time, and the weekly report all go through here, so
 // they can never disagree about what counts as a deviation.
 //
-// The rule Lucas set: once a reading has 3 submitted days behind it,
-// learn what "normal" is for that specific gauge, then flag any reading
-// that moves past a real-world tolerance from it, in either direction
-// (drops count the same as rises): 3 degrees for temperature, 5 PSI for
-// pressure, 5 points for a percentage. Manager-set min/max still win
-// when they exist, and apply from day one.
+// The rule (shared/machine-range.js): each machine reading is observed for
+// its first 3 inspection days in each on/off/auto state, then anything below
+// the lowest or above the highest value it has actually read is flagged --
+// exact, no plus-or-minus. Manager-set min/max are optional and still win
+// when they exist, from day one.
 //
 // Per machine state: a numeric reading is only compared with past readings
 // taken while its machine was in the SAME on/off/auto (hand-off-auto,
-// open/closed) state, and a range the crew has marked "normal" at the end of
-// an inspection (worker/learned-ranges.js) stretches what counts as normal.
+// open/closed) state, and a value the crew has called "normal"
+// (worker/learned-ranges.js) stretches the range to it.
 
 import { plausibilityFlag } from "../shared/plausibility.js";
+import { OBSERVE_DAYS, rangeMonitored, outsideRange, outsideDetail } from "../shared/machine-range.js";
 import { STATE_KINDS, stateOf, learningStart } from "./learned-ranges.js";
 
-export const MIN_BASELINE_DAYS = 3;
-export const BASELINE_WINDOW_DAYS = 7;
+export const MIN_BASELINE_DAYS = OBSERVE_DAYS;
 
-// Unit first (what the AI checklist extraction fills in), then the
-// reading's own name for gauges that came through with no unit at all
-// (Crest's booster pumps read "INTEL PRESS." / "OUTLET PRESS." with a
-// blank unit but are plainly pressures). Everything else (RPM, amps,
-// Hz, kW, meters) deliberately has no fixed tolerance -- no real-world
-// number to ground one on -- and falls back to the statistical rule.
-export function inferTolerance(unit, readingType) {
-  const u = (unit || "").trim().toLowerCase();
-  if (u === "°" || u.includes("deg") || /^°?[cf]$/.test(u)) return 3;
-  if (u === "psi") return 5;
-  if (u === "%" || u === "percent") return 5;
-  if (!u) {
-    const name = (readingType || "").toLowerCase();
-    if (/\bpress|\bpsi\b/.test(name)) return 5;
-    if (/\btemp/.test(name)) return 3;
-    if (/\bpercent|%/.test(name)) return 5;
-  }
-  return null;
-}
-
-// Utility meters (water, gas, electrical) are running totals that only
-// ever climb, so "different from usual" means nothing for them -- every
-// single day would look like a jump from the average of the days before.
-function isCumulativeMeter(tag) {
-  return /\bmeter\b/i.test(`${tag.system_name || ""} ${tag.reading_type || ""}`);
-}
-
-// Whether unusual day-to-day movement should be flagged for this reading
-// at all. Only readings with a real-world tolerance (temperature,
-// pressure, percentage) are -- RPM / amps / Hz / kW on a lead-and-standby
-// pump pair drop to zero every time the pumps rotate, which is normal
-// operation, not a fault, and flagging it would just teach people to
-// click through the prompts. Manager-set min/max still covers any of
-// those individually. A manager can also switch it off per reading.
-export function trendMonitored(tag) {
-  if (tag.monitor_trend === 0) return false;
-  if (isCumulativeMeter(tag)) return false;
-  return inferTolerance(tag.unit, tag.reading_type) != null;
-}
+// Whether this reading learns a range and gets drift flags at all.
+export const trendMonitored = rangeMonitored;
 
 // A machine's own on/off/auto-type reading(s): same equipment group, or the same
 // system + tag number (checklists from paper sheets often leave the on/off line
@@ -90,39 +52,31 @@ export function readingState(tag, idsFor, valueOf) {
   return "";
 }
 
-function median(sorted) {
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-// Median + a robust spread (1.4826 * median absolute deviation) instead
-// of mean + standard deviation: one bad day shouldn't be able to drag
-// the baseline toward itself and hide the next one. A gauge that sat at
-// 60 PSI for six days and read 28 on the seventh still has a baseline of
-// 60, not 55.
-function robustStats(values) {
-  const sorted = [...values].sort((a, b) => a - b);
-  const center = median(sorted);
-  const deviations = sorted.map((v) => Math.abs(v - center)).sort((a, b) => a - b);
+// What a machine has read in one state: the exact lowest and highest, how many
+// separate inspection days that covers (it observes for OBSERVE_DAYS of them
+// before judging anything), and the middle value for display.
+function rangeStats(entries) {
+  const values = entries.map((e) => e.value).sort((a, b) => a - b);
+  const mid = Math.floor(values.length / 2);
   return {
     count: values.length,
-    avg: center,
-    stdev: 1.4826 * median(deviations),
-    min: sorted[0],
-    max: sorted[sorted.length - 1],
+    days: new Set(entries.map((e) => e.date)).size,
+    min: values[0],
+    max: values[values.length - 1],
+    avg: values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2,
   };
 }
 
-// Baselines for every numeric reading in a building as of `date`: the
-// submitted days in the 7 before it (never `date` itself, so a day is
-// never judged against itself), kept separately for each state of the
-// machine's on/off/auto answer ("" for a reading with no such answer).
-// A reading needs MIN_BASELINE_DAYS days in a state before that state gets a
-// baseline at all, and readings the crew marked abnormal never count.
+// What every numeric reading in a building has read before `date`: every
+// submitted day since the building's learning start (never `date` itself, so
+// a day is never judged against itself), kept separately for each state of the
+// machine's on/off/auto answer ("" for a reading with no such answer). A state
+// needs MIN_BASELINE_DAYS days before it gets a range at all, and readings the
+// crew marked abnormal never count.
 // Returns { [tagId]: { [state]: stats } }.
 export async function loadBaselines(env, buildingId, date) {
   const since = await learningStart(env, buildingId);
-  const sql = (skipAbnormal) => `SELECT r.tag_id, r.value,
+  const sql = (skipAbnormal) => `SELECT r.tag_id, r.value, s.inspection_date,
        (SELECT LOWER(TRIM(cr.value)) FROM inspection_readings cr
           JOIN inspection_tags ct ON ct.id = cr.tag_id
          WHERE cr.submission_id = r.submission_id
@@ -134,32 +88,33 @@ export async function loadBaselines(env, buildingId, date) {
      JOIN inspection_submissions s ON s.id = r.submission_id
      JOIN inspection_tags t ON t.id = r.tag_id
      WHERE s.building_id = ? AND s.status = 'submitted'
-       AND s.inspection_date >= MAX(date(?, '-${BASELINE_WINDOW_DAYS} days'), ?) AND s.inspection_date < ?
+       AND s.inspection_date >= ? AND s.inspection_date < ?
        AND t.answer_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
        ${skipAbnormal ? `AND (r.deviation IS NULL OR r.deviation NOT LIKE '%"ack":"abnormal"%')` : ""}`;
   let result;
   try {
-    result = await env.DB.prepare(sql(true)).bind(buildingId, date, since, date).all();
+    result = await env.DB.prepare(sql(true)).bind(buildingId, since, date).all();
   } catch {
     // A company database from before the deviation column existed: still judge, just without
     // leaving out the readings the crew called abnormal.
-    result = await env.DB.prepare(sql(false)).bind(buildingId, date, since, date).all();
+    result = await env.DB.prepare(sql(false)).bind(buildingId, since, date).all();
   }
 
-  const values = new Map(); // `${tagId}|${state}` -> numbers
+  const values = new Map(); // `${tagId}|${state}` -> [{ value, date }]
   for (const row of result.results) {
     const num = Number.parseFloat(row.value);
     if (Number.isNaN(num)) continue;
     const key = `${row.tag_id}|${row.state ?? ""}`;
     if (!values.has(key)) values.set(key, []);
-    values.get(key).push(num);
+    values.get(key).push({ value: num, date: row.inspection_date });
   }
 
   const baselines = {};
   for (const [key, list] of values) {
-    if (list.length < MIN_BASELINE_DAYS) continue;
+    const stats = rangeStats(list);
+    if (stats.days < MIN_BASELINE_DAYS) continue;
     const [tagId, state] = [Number(key.slice(0, key.indexOf("|"))), key.slice(key.indexOf("|") + 1)];
-    (baselines[tagId] ||= {})[state] = robustStats(list);
+    (baselines[tagId] ||= {})[state] = stats;
   }
   return baselines;
 }
@@ -191,7 +146,7 @@ export async function loadLastValues(env, buildingId, date) {
 // Returns null when the reading is fine (or can't be judged), otherwise
 // { basis, baseline, change, tolerance, detail }.
 //   tag: { unit, reading_type, value_type, monitor_trend, parameter }
-//   baseline: stats for this reading in its machine's current state (or null)
+//   baseline: what this reading has read in its machine's current state (or null)
 //   learned: { lo, hi } the crew has marked normal for this state (or null)
 //   state: the on/off/auto answer the reading was taken in, recorded on the flag
 export function evaluateDeviation(tag, rawValue, baseline, learned = null, state = "") {
@@ -224,26 +179,16 @@ export function evaluateDeviation(tag, rawValue, baseline, learned = null, state
     return odd ? { basis: "plausibility", detail: odd.detail } : null;
   };
   if (!baseline || !trendMonitored(tag)) return sanity();
-  const num = Number.parseFloat(value);
-  if (Number.isNaN(num)) return null;
 
-  const tolerance = inferTolerance(tag.unit, tag.reading_type);
-  const statistical = Math.max(baseline.stdev * 2, Math.abs(baseline.avg) * 0.15, 1);
-  const threshold = Math.min(tolerance, statistical);
-  const change = Math.round((num - baseline.avg) * 100) / 100;
-
-  // >= : "50 vs 53" is exactly a 3-degree gap and must flag; readings
-  // here are mostly whole numbers, so a strict > would let the boundary
-  // case straight through.
-  if (Math.abs(num - baseline.avg) < threshold) return sanity();
-  // Marked "normal" before for this machine in this state -- not a surprise any more.
-  if (learned && num >= learned.lo && num <= learned.hi) return sanity();
+  const out = outsideRange(value, baseline, learned);
+  if (!out) return sanity();
   return {
     basis: "trend",
     state,
     baseline: Math.round(baseline.avg * 100) / 100,
-    change,
-    tolerance: Math.round(threshold * 100) / 100,
-    detail: `Usually about ${Math.round(baseline.avg * 10) / 10}${tag.unit ? ` ${tag.unit}` : ""}; this is ${change > 0 ? "up" : "down"} ${Math.abs(change)}`,
+    lo: out.lo,
+    hi: out.hi,
+    change: out.change,
+    detail: outsideDetail(out, tag.unit, state),
   };
 }

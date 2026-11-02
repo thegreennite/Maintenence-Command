@@ -7,6 +7,7 @@
 
 import { canSeeAllBuildings, ownedOrSharedSql, effectiveClientId, clientScopeSql } from "./access.js";
 import { readingText } from "../shared/reading-unit.js";
+import { isEnglish, ENGLISH_ONLY_MESSAGE } from "../shared/english-only.js";
 
 const CATEGORY_LABELS = {
   inventory: "Inventory",
@@ -48,6 +49,7 @@ export async function handleFlagIssue(request, session, env, corsHeaders) {
   const category = Object.keys(CATEGORY_LABELS).includes(body.category) ? body.category : "other";
   const description = String(body.description || "").trim();
   if (!description) return jsonError("Describe the issue before submitting.", 400, corsHeaders);
+  if (!isEnglish(description)) return jsonError(ENGLISH_ONLY_MESSAGE, 400, corsHeaders);
 
   await env.DB.prepare(
     `INSERT INTO work_orders (building_id, created_by, source, category, title, description)

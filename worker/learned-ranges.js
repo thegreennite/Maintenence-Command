@@ -3,10 +3,10 @@
 // A boiler reads differently when it is on than when it is off, so a numeric
 // reading is judged only against past readings taken in the SAME state of the
 // machine's on/off/auto (hand-off-auto, open/closed) answer -- see
-// worker/deviation.js. And when a superintendent marks a flagged reading
-// "normal" at the end of an inspection, the allowed range for that reading in
-// that state stretches to include it (plus the usual margin beyond), so the
-// machine stops flagging what its own crew says is ordinary.
+// worker/deviation.js. And when a superintendent says a flagged reading is
+// normal (right when it's flagged, or at the end of the inspection), the
+// allowed range for that reading in that state stretches to exactly that
+// value, so the machine stops flagging what its own crew says is ordinary.
 
 export const STATE_KINDS = ["on_off", "hoa", "open_closed"];
 
@@ -61,26 +61,22 @@ export async function loadLearned(env, buildingId) {
   }
 }
 
-// Called at submit for every reading the super marked "normal". Only a reading
-// that was flagged for drifting from its own history teaches anything: a
+// Called for every reading the super calls normal. Only a reading that was
+// flagged for being outside its own machine's range teaches anything: a
 // manager's min/max is the manager's call, and a "doesn't look like a real
 // number" flag is not something to learn from.
-//   deviation: the object recordDeviations stored on the reading
-//   margin: how far past the accepted value to allow (3 deg, 5 psi, 5 %)
-export async function learnFromNormal(env, { tagId, value, deviation, margin }) {
+//   deviation: { basis, state, lo, hi } as evaluateDeviation returned it
+export async function learnFromNormal(env, { tagId, value, deviation }) {
   if (!deviation || deviation.basis !== "trend") return null;
   const v = Number.parseFloat(value);
-  if (!Number.isFinite(v) || deviation.baseline == null) return null;
+  if (!Number.isFinite(v) || deviation.lo == null || deviation.hi == null) return null;
   await ensureLearnedTable(env);
   const state = deviation.state || "";
-  const spread = deviation.tolerance ?? margin;
   const existing = await env.DB.prepare("SELECT lo, hi FROM learned_ranges WHERE tag_id = ? AND state = ?")
     .bind(tagId, state)
     .first();
-  let lo = existing?.lo ?? deviation.baseline - spread;
-  let hi = existing?.hi ?? deviation.baseline + spread;
-  if (v > deviation.baseline) hi = Math.max(hi, v + margin);
-  else lo = Math.min(lo, v - margin);
+  const lo = Math.min(existing?.lo ?? deviation.lo, deviation.lo, v);
+  const hi = Math.max(existing?.hi ?? deviation.hi, deviation.hi, v);
   await env.DB.prepare(
     `INSERT INTO learned_ranges (tag_id, state, lo, hi, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT (tag_id, state) DO UPDATE SET lo = excluded.lo, hi = excluded.hi, updated_at = CURRENT_TIMESTAMP`,

@@ -61,37 +61,47 @@ export function installCameraCapture() {
     dialog.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
     dialog.querySelector("[data-cancel]").onclick = close;
     window.addEventListener("pagehide", close);
+    // The page can redraw while the camera is open (autosave, a status update), which
+    // swaps the file input for an identical new one. Hand the photo to whichever copy
+    // is on the page now instead of failing on the old, detached one.
+    const inputId = input.id;
+    const currentInput = () => (input.isConnected ? input : (inputId && document.getElementById(inputId)) || null);
+    const toJpeg = (canvas, quality) => new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
     shutter.onclick = async () => {
       shutter.disabled = true;
       const canvas = document.createElement("canvas");
       try {
-        if (!video.videoWidth || !video.videoHeight) throw new Error("Camera is not ready yet.");
+        if (!video.videoWidth || !video.videoHeight) throw new Error("Camera is not ready yet. Try again in a second.");
         const scale = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
         canvas.width = Math.round(video.videoWidth * scale);
         canvas.height = Math.round(video.videoHeight * scale);
         canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
         const capturedAt = new Date().toISOString();
-        stop();
         status.textContent = "Preparing photo…";
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
-        if (!blob) throw new Error("Could not capture the photo. Please reopen the camera.");
+        // A phone short on memory can hand back nothing; one smaller retry usually works.
+        const blob = (await toJpeg(canvas, 0.88)) || (await toJpeg(canvas, 0.7));
+        if (!blob) throw new Error("Could not capture the photo. Tap Take Photo again.");
         if (!dialog.isConnected) return;
-        if (!input.isConnected) throw new Error("The inspection changed. Close this camera and try again.");
+        const target = currentInput();
+        if (!target) throw new Error("The inspection changed. Tap Cancel and open the camera again.");
         const transfer = new DataTransfer();
-        const file = new File([blob], `inspection-${Date.now()}.jpg`, { type: "image/jpeg" });
-        transfer.items.add(file);
-        input.files = transfer.files;
-        captures.set(input.files[0], capturedAt);
+        transfer.items.add(new File([blob], `inspection-${Date.now()}.jpg`, { type: "image/jpeg" }));
+        target.files = transfer.files;
+        captures.set(target.files[0], capturedAt);
         close();
-        input.dispatchEvent(new Event("change", { bubbles: true }));
+        target.dispatchEvent(new Event("change", { bubbles: true }));
       } catch (error) {
+        // Keep the camera live so one more tap is all it takes -- never leave a dead shutter.
         status.textContent = error.message;
         showPhotoFeedback(false, error.message);
+        if (dialog.isConnected) shutter.disabled = false;
       } finally {
         canvas.width = canvas.height = 0;
       }
     };
     dialog.showModal();
+    // Lets the page start finding the location while the person frames the shot.
+    document.dispatchEvent(new CustomEvent("inspection-camera:open"));
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera access is unavailable.");
       stream = await navigator.mediaDevices.getUserMedia({

@@ -5,6 +5,8 @@ import { jsPDF } from "jspdf";
 import { createSchedules } from "./schedules.js";
 import { initInstall, installLinkHtml } from "./install.js";
 import { plausibilityFlag } from "../shared/plausibility.js";
+import { outsideRange, outsideDetail, rangeMonitored, OBSERVE_DAYS } from "../shared/machine-range.js";
+import { isEnglish, ENGLISH_ONLY_MESSAGE } from "../shared/english-only.js";
 import { walkOrder, previewNewReading } from "../shared/walk-order.js";
 import { splitReading, withTempUnit, readingParts, readingText } from "../shared/reading-unit.js";
 
@@ -177,6 +179,9 @@ const api = {
   inspectionSave(payload) {
     return this.request("/inspections/save", { method: "POST", body: JSON.stringify(payload) });
   },
+  learnNormal(payload) {
+    return this.request("/inspections/learn-normal", { method: "POST", body: JSON.stringify(payload) });
+  },
   inspectionSubmit(payload) {
     return this.request("/inspections/submit", { method: "POST", body: JSON.stringify(payload) });
   },
@@ -328,7 +333,18 @@ const api = {
     body.append("capturedAt", capturedAt);
     if (latitude != null) body.append("latitude", String(latitude));
     if (longitude != null) body.append("longitude", String(longitude));
-    return this.request("/inspections/group-photo", { method: "POST", body });
+    // A dropped connection or a server hiccup shouldn't send the super back to
+    // "Take photo": retry twice before giving up (same photo, same capture time).
+    const attempt = async (tries) => {
+      try {
+        return await this.request("/inspections/group-photo", { method: "POST", body });
+      } catch (error) {
+        if (tries <= 0 || (error.status && error.status < 500)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        return attempt(tries - 1);
+      }
+    };
+    return attempt(2);
   },
   managerLocations(buildingId) {
     return this.request(`/manager/locations?buildingId=${buildingId}`);
@@ -687,7 +703,7 @@ function renderRegisterRoleStep() {
           <option value="" disabled selected>Select your role</option>
           <option value="superintendent">Superintendent</option>
           <option value="cleaner">Cleaner</option>
-          <option value="property_manager" disabled>Property Manager (coming soon)</option>
+          <option value="property_manager">Property Manager</option>
           <option value="regional_manager">Area Manager</option>
           <option value="operations_manager">Operations Manager</option>
         </select>
@@ -964,6 +980,10 @@ async function loadDashboard() {
     lastScheduleUserId = state.session?.user?.id;
   }
   if ((isSuperintendent || isCleaner) && hasScheduling()) await schedules.loadMine();
+  if (isSuperintendent) {
+    state.fieldPermission = await checkLocationPermission();
+    if (state.fieldPermission === "granted") warmLocation();
+  }
   state.adminStats = isAdminViewing ? await api.adminStats().catch(() => null) : null;
   state.dashboard = dashboardResponse.dashboard;
   state.accounts = accountsResponse.accounts;
@@ -1438,9 +1458,9 @@ function renderSuperintendentTools() {
   const tools = [
     {
       id: "inspection",
-      label: "Inspection",
+      label: "Today",
       icon: "clipboard",
-      body: () => renderSuperintendentOverview(state.inspection) + renderInspectionView(state.inspection) + renderFlagIssuePanel(),
+      body: () => renderSuperHome(state.inspection),
     },
   ];
   if (tasks) {
@@ -1465,7 +1485,99 @@ function renderSuperintendentTools() {
          </section>` + renderPhotoLibraryCard(buildingId, null),
     });
   }
+  tools.push({ id: "help", label: "How it works", icon: "list", body: () => renderSuperTutorial() });
   return renderToolShell("superintendent", tools);
+}
+
+// The super's phone home screen: one big button, a progress bar, and everything
+// else one tap away -- 99% of supers are on their phone mid-walk.
+function renderSuperHome(data) {
+  if (!data) return renderErrorState();
+  const locked = data.status === "submitted";
+  if (!locked && data.tags.length && state.fieldPermission !== "granted") return renderFieldPermissionGate();
+
+  const total = data.tags.length;
+  const done = data.tags.filter((t) => String(data.readings?.[t.id] ?? "").trim() !== "").length;
+  const photoGroups = [...new Set(data.tags.filter((t) => t.equipment_group_id != null && t.equipment_group_requires_photo !== false).map((t) => t.equipment_group_id))];
+  const photosDone = photoGroups.filter((id) => data.groupPhotos?.[id]).length;
+  const started = done > 0 || photosDone > 0;
+  const learning = data.tags.filter(
+    (t) => rangeMonitored(t) && !t.parameter && !(t.history || Object.keys(t.history_by_state || {}).length),
+  ).length;
+  const notices = (data.notices || []).length;
+  const panel = state.superPanel;
+  const linkButton = (id, label, badge = "") =>
+    `<button type="button" class="super-home__link ${panel === id ? "is-active" : ""}" data-super-panel="${id}">${escapeHtml(label)}${badge ? ` <span class="count-badge">${badge}</span>` : ""}</button>`;
+
+  return `
+    <section class="card super-home">
+      <p class="section-kicker">${escapeHtml(data.building.name)} · ${escapeHtml(formatInspectionDate(data.date))}</p>
+      <h2>${locked ? `${icon("check")} Today's inspection is submitted` : started ? "Inspection in progress" : "Ready for today's inspection"}</h2>
+      ${
+        total
+          ? `<div class="super-home__progress" aria-hidden="true"><span style="width:${Math.round((done / total) * 100)}%"></span></div>
+             <p class="super-home__meta">${done} of ${total} readings${photoGroups.length ? ` · ${photosDone} of ${photoGroups.length} machine photos` : ""}</p>`
+          : `<p class="super-home__meta">No checklist has been set up for this building yet. Your area manager adds it.</p>`
+      }
+      ${
+        !locked && learning
+          ? `<div class="super-home__learning">${icon("eye")}<div><strong>The app is still learning ${learning === total ? "this building" : `${learning} ${learning === 1 ? "reading" : "readings"}`}.</strong>
+              For the first ${OBSERVE_DAYS} inspection days it only watches. Enter exactly what each gauge shows — those values become what's normal for each machine, and after that anything different gets flagged.</div></div>`
+          : ""
+      }
+      ${
+        locked
+          ? `<p class="super-home__meta">Submitted ${escapeHtml(formatTimestamp(data.submittedAt))}. It's locked now — ask your area manager if it needs to be reopened.</p>`
+          : total
+            ? `<button type="button" class="button button--primary super-home__start" id="start-command-mode">${icon("camera")} ${started ? "Continue where you left off" : "Start inspection"}</button>
+               ${done === total ? `<button type="button" class="button button--outline super-home__start" data-super-panel="checklist">Review &amp; submit</button>` : ""}`
+            : ""
+      }
+      <div class="super-home__links">
+        ${linkButton("checklist", "Full checklist")}
+        ${linkButton("notices", "Notices & notes", notices || "")}
+        ${linkButton("message", "Message my manager")}
+      </div>
+    </section>
+    ${panel === "checklist" ? renderInspectionView(data) : ""}
+    ${panel === "notices" ? renderSuperintendentOverview(data) : ""}
+    ${panel === "message" ? renderFlagIssuePanel() : ""}`;
+}
+
+function renderFieldPermissionGate() {
+  const denied = state.fieldPermission === "denied" || state.fieldPermission === "camera-denied";
+  const what = state.fieldPermission === "camera-denied" ? "Camera" : "Location";
+  return `
+    <section class="card super-home super-home--gate">
+      <p class="section-kicker">Before you start</p>
+      <h2>${icon("pin")} Allow location and camera</h2>
+      <p>Every machine photo records when and where it was taken, as proof the inspection was done on site. Tap the button below and choose <strong>Allow</strong> when your phone asks.</p>
+      ${
+        denied
+          ? `<div class="super-home__denied">${icon("warning")}<div><strong>${what} is blocked for Inspect Funnels.</strong>
+              Turn it back on, then tap the button again. <br>Android (Chrome): tap the icon left of the web address › Permissions › allow ${what}. <br>iPhone: Settings › Safari (or Chrome) › ${what} › Allow.</div></div>`
+          : ""
+      }
+      <button type="button" class="button button--primary super-home__start" id="allow-field-permissions">${icon("pin")} Allow location &amp; camera</button>
+    </section>`;
+}
+
+function renderSuperTutorial() {
+  const steps = [
+    ["Start your inspection", "Tap <strong>Start inspection</strong>. It walks you through every reading in your walk order, one at a time. Type what the gauge shows."],
+    ["Take the machine photo", "At the end of each machine you take one photo. It records the time and your location as proof you were there, so keep location on."],
+    [`The first ${OBSERVE_DAYS} days: be 100% genuine`, `For the first ${OBSERVE_DAYS} inspection days the app only listens. It learns what is normal for every machine from exactly what you enter, separately for On, Off and Auto. Enter the real values, never a guess.`],
+    ["After that, it flags anything different", "Once it has learned, any reading below the lowest or above the highest value that machine has actually shown is flagged right away."],
+    ["When a reading is flagged", "<strong>Mistake</strong>: you typed it wrong, so re-enter it. <strong>It's normal</strong>: the app learns this value on the spot and won't flag it again. <strong>It's abnormal</strong>: it is reported to your property manager when you submit."],
+    ["Leave a remark", "Tap the <strong>pencil</strong> (top right) to write a note about any reading, in English. When you submit, you choose whether your remarks go to your Area and Operations Managers."],
+    ["Lost signal? Closed the app?", "Just open it again and tap <strong>Continue where you left off</strong>. It goes back to the exact reading you were on."],
+    ["Submit", "When every reading and photo is done, tap <strong>Review &amp; submit</strong>. After that, today is locked; your area manager can reopen it."],
+  ];
+  return `
+    <section class="card tutorial">
+      <div class="card__header"><div><p class="section-kicker">For superintendents</p><h2>How Inspect Funnels works</h2></div></div>
+      <ol class="tutorial__steps">${steps.map(([title, body]) => `<li><strong>${title}</strong><p>${body}</p></li>`).join("")}</ol>
+    </section>`;
 }
 
 function renderDashboard(data) {
@@ -1489,6 +1601,8 @@ function renderDashboard(data) {
             ? renderPropertyView(state.propertyInspections)
             : renderRoleShell(data);
 
+  // Superintendents are on a phone mid-walk: no big page heading, straight to today's card.
+  if (data.kind === "superintendent") return body;
   return `
     <section class="dashboard-heading">
       <div>
@@ -1649,7 +1763,47 @@ function renderManagerDashboard(data) {
           (state.managerBuildings.length ? renderPhotoLibraryCard(state.managerBuildings[0].id, state.managerBuildings.map((b) => ({ id: b.id, name: b.name }))) : "") ||
         renderToolEmpty("Weekly summaries and the photo library appear here once there's data."),
     },
+    { id: "help", label: "How it works", icon: "eye", body: () => renderManagerTutorial() },
   ]);
+}
+
+function renderManagerTutorial() {
+  const sections = [
+    [
+      "Your job, start to finish",
+      [
+        ["Add a building", "<strong>Buildings › Add building</strong>. Upload a photo or PDF of the paper daily-log sheet and the app turns it into the digital checklist. Check the list, then activate it."],
+        ["Give it a superintendent", "Assign the superintendent who walks the building. They see only that building."],
+        ["Add a property manager (optional)", "Ask your admin to add a Property Manager account for the building. They get a read-only view and an email for every abnormal reading."],
+      ],
+    ],
+    [
+      "How readings are judged",
+      [
+        [`First ${OBSERVE_DAYS} days: learning`, `The app only watches. It learns each machine's normal from what the superintendent enters, separately for On, Off and Auto. Remind new superintendents to enter exactly what the gauges show.`],
+        ["After that: exact flags", "Anything below the lowest or above the highest value a machine has actually read is flagged on the spot. The superintendent answers Mistake, It's normal (the app learns it immediately) or It's abnormal (reported at submit)."],
+        ["Parameters are optional", "You don't have to set ranges. Use <strong>parameters</strong> only for a reading that must stay inside a fixed spec; it overrides what the app learned. Outdoor temperature and meters are never flagged for changing."],
+      ],
+    ],
+    [
+      "What comes to you",
+      [
+        ["Exception queue", "On <strong>Overview</strong>: abnormal readings, issues superintendents flag, and observations they send with their remarks. Assign each one or mark it resolved."],
+        ["Friday report", "Every Friday at 5 PM the weekly spreadsheet arrives by email: every reading for the week, what was outside normal, the superintendent's answers, and their remarks."],
+        ["Missed or late inspections", "The overview shows which buildings haven't submitted today. An unsubmitted day locks as partial after midnight."],
+      ],
+    ],
+  ];
+  return `
+    <section class="card tutorial">
+      <div class="card__header"><div><p class="section-kicker">For area and operations managers</p><h2>How Inspect Funnels works</h2></div></div>
+      ${sections
+        .map(
+          ([heading, steps]) => `<h3 class="tutorial__heading">${heading}</h3>
+            <ol class="tutorial__steps">${steps.map(([title, body]) => `<li><strong>${title}</strong><p>${body}</p></li>`).join("")}</ol>`,
+        )
+        .join("")}
+    </section>`;
 }
 
 function renderPendingRequestsPanel() {
@@ -2346,7 +2500,7 @@ function renderManagerParametersBody(data) {
   const groups = groupTagsBySystem(data.tags);
   return `
     <form id="parameters-form" class="inspection-form">
-      <p class="parameters-intro">Set an optional normal range for any reading. Submitted values outside it are flagged automatically — a value just past the edge shows yellow, further out shows red. Leave a reading blank to skip evaluating it.</p>
+      <p class="parameters-intro"><strong>Optional — you don't need to set any of these.</strong> After its first ${OBSERVE_DAYS} inspection days the app learns each machine's normal range by itself from the superintendent's readings. Set a range here only for a reading that must stay within a fixed spec; it then overrides what the app learned.</p>
       ${Object.entries(groups)
         .map(([system, tags]) => renderParameterGroup(system, tags))
         .join("")}
@@ -2736,7 +2890,7 @@ function renderAdminAddAccountForm() {
           ${Object.entries(ADMIN_CREATABLE_ROLES)
             .map(
               ([value, label]) =>
-                `<option value="${value}" ${role === value ? "selected" : ""} ${value === "property_manager" ? "disabled" : ""}>${escapeHtml(label)}${value === "property_manager" ? " (coming soon)" : ""}</option>`,
+                `<option value="${value}" ${role === value ? "selected" : ""}>${escapeHtml(label)}</option>`,
             )
             .join("")}
         </select>
@@ -4774,28 +4928,106 @@ async function compressImageFile(file, { maxDimension = 1600, quality = 0.82 } =
   }
 }
 
-// Best-effort, short-timeout location fix -- never blocks the photo on
-// it. Free (a browser API, not a paid one), so unlike Gemini calls there's
-// no cost reason to hold back; it just quietly omits itself if the
-// device/browser won't grant it in time.
-//
-// Request a fresh fix per capture: the inspector may move between buildings.
-function getGeolocation(timeoutMs = 4000) {
-  if (!navigator.geolocation) return Promise.resolve(null);
+// Location for the proof photos. Indoors and in garages a fresh, precise GPS fix
+// often takes longer than anyone waits, so: start looking the moment the camera
+// opens (or the inspection screen loads), keep the newest fix, accept one up to
+// 2 minutes old, and fall back to a coarse network fix before giving up. Never
+// blocks the photo itself.
+const FIX_MAX_AGE_MS = 120_000;
+let lastFix = null;
+let locationWatchId = null;
+let locationWatchStop = null;
+
+function rememberFix(pos) {
+  lastFix = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, at: Date.now() };
+}
+
+function warmLocation() {
+  if (!navigator.geolocation) return;
+  clearTimeout(locationWatchStop);
+  if (locationWatchId == null) {
+    locationWatchId = navigator.geolocation.watchPosition(rememberFix, () => {}, {
+      enableHighAccuracy: true,
+      maximumAge: FIX_MAX_AGE_MS,
+      timeout: 30_000,
+    });
+  }
+  // Watching drains the battery; stop a few minutes after the last camera use.
+  locationWatchStop = setTimeout(() => {
+    if (locationWatchId != null) navigator.geolocation.clearWatch(locationWatchId);
+    locationWatchId = null;
+  }, 5 * 60_000);
+}
+document.addEventListener("inspection-camera:open", warmLocation);
+
+function positionOnce(options) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(null), timeoutMs);
+    const timer = setTimeout(() => resolve(null), options.timeout + 500);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         clearTimeout(timer);
-        resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+        rememberFix(pos);
+        resolve(lastFix);
       },
       () => {
         clearTimeout(timer);
         resolve(null);
       },
-      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
+      options,
     );
   });
+}
+
+async function getGeolocation() {
+  if (!navigator.geolocation) return null;
+  if (lastFix && Date.now() - lastFix.at < FIX_MAX_AGE_MS) return lastFix;
+  return (
+    (await positionOnce({ enableHighAccuracy: true, maximumAge: FIX_MAX_AGE_MS, timeout: 3000 })) ||
+    (await positionOnce({ enableHighAccuracy: false, maximumAge: 10 * 60_000, timeout: 4000 }))
+  );
+}
+
+// Supers must say yes to location (and camera) before an inspection starts.
+// "granted" | "prompt" | "denied" | "unknown"; checked once per dashboard load.
+async function checkLocationPermission() {
+  try {
+    const status = await navigator.permissions?.query({ name: "geolocation" });
+    if (status?.state) return status.state;
+  } catch {
+    // Some browsers can't query geolocation permission -- fall back to what this device remembered.
+  }
+  try {
+    if (localStorage.getItem("if-location-ok") === "1") return "granted";
+  } catch {}
+  return "unknown";
+}
+
+async function requestFieldPermissions() {
+  const result = await new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve("unsupported");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        rememberFix(pos);
+        resolve("granted");
+      },
+      // 1 = said no. Anything else (no signal yet, timed out) still means permission was given.
+      (error) => resolve(error.code === 1 ? "denied" : "granted"),
+      { enableHighAccuracy: true, maximumAge: FIX_MAX_AGE_MS, timeout: 15_000 },
+    );
+  });
+  if (result !== "granted") return result;
+  try {
+    localStorage.setItem("if-location-ok", "1");
+  } catch {}
+  // Ask for the camera now too, so the first proof photo doesn't stop for a prompt.
+  try {
+    const stream = await navigator.mediaDevices?.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    stream?.getTracks().forEach((track) => track.stop());
+  } catch (error) {
+    if (error?.name === "NotAllowedError") return "camera-denied";
+  }
+  warmLocation();
+  return "granted";
 }
 
 function formatCoords(latitude, longitude) {
@@ -5127,10 +5359,8 @@ function findFlaggedReadings(readings) {
       // Same learned-baseline check command mode already did -- the
       // regular form never ran it, which is how a heating inlet reading
       // of 28 PSI against a steady 60 sailed through unflagged.
-      if (historyFlagFor(tag, value, readings)) {
-        const avg = Math.round(historyFor(tag, readings).h.avg * 10) / 10;
-        return { tag, value, flag: "trend", detail: `Usually about ${avg}${tag.unit ? ` ${tag.unit}` : ""}${machineStateFor(tag, readings) ? ` when ${machineStateFor(tag, readings)}` : ""}` };
-      }
+      const out = historyFlagFor(tag, value, readings);
+      if (out) return { tag, value, flag: "trend", detail: outsideDetail(out, tag.unit, machineStateFor(tag, readings)) };
       // Common-sense check: runs for every numeric reading, including the
       // ones with no range and no history -- 1000000 on an RPM gauge.
       const odd = !hasManagerRange(tag) && plausibilityFlag(tag, value, tag.last_value);
@@ -5149,32 +5379,6 @@ function findFlaggedReadings(readings) {
 // inspection_readings the regular grid form writes to, just through a
 // different UI.
 // ---------------------------------------------------------------------
-
-// A pure statistical threshold (2 std-devs, or 15% of the average) let
-// real problems slide by whenever a gauge's own history happened to be
-// very steady: a boiler that's sat flat at 50° all week has ~0 stdev, so
-// the 15%-of-average rule alone allowed a 7.5° swing before flagging --
-// a real 3° drift wouldn't have tripped it. Lucas's real-world read: a
-// temperature reading should flag past roughly a 3° drift, a PSI
-// reading past roughly 5 PSI, no matter how flat that gauge's history
-// has been. This caps the statistical threshold at that absolute amount
-// for temperature/PSI tags; everything else still falls back to the
-// plain statistical rule (no real-world number to ground a tighter cap
-// on for RPM/Hz/Kw/Amps/etc.). Matched loosely since the unit string
-// comes from free-form AI extraction off a paper sheet (worker/
-// buildings.js's handleGenerateTags) and isn't perfectly consistent --
-// "°", "F", "deg F" should all read as temperature the same way.
-function unitTolerance(unit) {
-  const normalized = (unit || "").trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized === "°" || normalized.includes("deg") || /^°?[cf]$/.test(normalized)) return 3;
-  if (normalized === "psi") return 5;
-  // A tank/glycol level or similar jumping more than 5 percentage
-  // points between checks is worth a confirm, same real-world-sized
-  // reasoning as the PSI tolerance above.
-  if (normalized === "%") return 5;
-  return null;
-}
 
 // Which state ("on", "off", "auto", "open"...) this reading's machine is in right now: the
 // first answered on/off/auto-type reading of the same machine. "" when there is none.
@@ -5196,27 +5400,13 @@ function historyFor(tag, readings) {
   return { h: tag.history || null, learned: tag.learned_by_state?.[""] || null };
 }
 
-// Same trend check the backend uses (worker/deviation.js) -- the client-side half: does THIS
-// value look like an outlier against the machine's own history in its current state.
+// Same check the backend uses (shared/machine-range.js): after its first 3 days of
+// observing, is THIS value outside the exact range the machine has read in its current
+// state? Returns { lo, hi, change } when it is, otherwise null.
 function historyFlagFor(tag, rawValue, readings) {
   const { h, learned } = historyFor(tag, readings);
   if (!h || CLOSED_CHOICE_TYPES[tag.value_type] || rawValue == null || rawValue === "") return null;
-  const num = Number.parseFloat(rawValue);
-  if (Number.isNaN(num)) return null;
-  const statisticalThreshold = Math.max(h.stdev * 2, Math.abs(h.avg) * 0.15, 1);
-  // The server decides the tolerance (unit first, then the reading's own
-  // name for gauges with no unit) so the app, the nightly record and the
-  // weekly report all agree -- see worker/deviation.js.
-  const cap = tag.tolerance !== undefined ? tag.tolerance : unitTolerance(tag.unit);
-  const threshold = cap != null ? Math.min(cap, statisticalThreshold) : statisticalThreshold;
-  // >= , not > -- "50 vs 53" (exactly a 3° gap) is Lucas's own example of
-  // something that should flag, and readings in this domain are usually
-  // whole numbers, so a strict > would silently let the boundary case
-  // through.
-  if (Math.abs(num - h.avg) < threshold) return false;
-  // The crew already marked this level as normal for this machine in this state.
-  if (learned && num >= learned.lo && num <= learned.hi) return false;
-  return true;
+  return outsideRange(rawValue, h, learned);
 }
 
 function startCommandMode() {
@@ -5240,7 +5430,19 @@ function startCommandMode() {
   const flags = { ...(state.inspection.flags || {}) };
   const photoKeys = { ...(state.inspection.photoKeys || {}) };
   const groupPhotos = { ...(state.inspection.groupPhotos || {}) };
-  const resumeIndex = order.findIndex((id) => !readings[id] && !flags[id]);
+  const remarks = { ...(state.inspection.remarks || {}) };
+  // Pick up exactly where this phone left off (signal dropped, app closed), not just at
+  // the first blank reading -- and keep anything typed while offline that never reached
+  // the server.
+  const saved = loadLocalCommandMode();
+  if (saved) {
+    for (const [id, value] of Object.entries(saved.readings || {})) if (value && !readings[id]) readings[id] = value;
+    for (const [id, text] of Object.entries(saved.remarks || {})) if (text && !remarks[id]) remarks[id] = text;
+    state.confirmedNormalTagIds = [...new Set([...(state.confirmedNormalTagIds || []), ...(saved.normal || [])])];
+    state.confirmedAbnormalTagIds = [...new Set([...(state.confirmedAbnormalTagIds || []), ...(saved.abnormal || [])])];
+  }
+  const savedIndex = saved ? order.indexOf(saved.tagId) : -1;
+  const resumeIndex = savedIndex !== -1 ? savedIndex : order.findIndex((id) => !readings[id] && !flags[id]);
 
   state.commandMode = {
     active: true,
@@ -5248,6 +5450,9 @@ function startCommandMode() {
     index: resumeIndex === -1 ? 0 : resumeIndex,
     readings,
     flags,
+    remarks,
+    remarkOpen: false,
+    remarkError: "",
     photoKeys,
     groupPhotos,
     pendingGroupPhoto: null,
@@ -5267,6 +5472,86 @@ function startCommandMode() {
   renderApp();
 }
 
+// This phone's own copy of where it is in today's command mode (and what it has
+// entered), so dropping signal or closing the app never loses the place.
+function localCommandModeKey() {
+  const user = state.session?.user?.id;
+  const building = state.inspection?.building?.id;
+  return user && building ? `if-cm:${user}:${building}:${state.inspection.date}` : null;
+}
+
+function loadLocalCommandMode() {
+  try {
+    const key = localCommandModeKey();
+    return key ? JSON.parse(localStorage.getItem(key) || "null") : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalCommandMode(cm) {
+  try {
+    const key = localCommandModeKey();
+    if (!key) return;
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        tagId: cm.order[cm.index],
+        readings: cm.readings,
+        remarks: cm.remarks,
+        normal: state.confirmedNormalTagIds || [],
+        abnormal: state.confirmedAbnormalTagIds || [],
+      }),
+    );
+  } catch {
+    // Private mode / storage full: resuming falls back to the first blank reading.
+  }
+}
+
+function clearLocalCommandMode() {
+  try {
+    const key = localCommandModeKey();
+    if (key) localStorage.removeItem(key);
+  } catch {}
+}
+
+// The pencil: a short remark about the reading on screen. English only -- it goes
+// into the weekly spreadsheet and, if the super chooses, to management.
+function renderCommandModeRemark(cm, tag) {
+  const text = cm.remarkError ? cm.remarkDraft || "" : cm.remarks[tag.id] || "";
+  return `<div class="modal-overlay" id="command-mode-remark-modal">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="remark-title">
+      <h3 id="remark-title">${icon("edit")} Remark on this reading</h3>
+      <p class="quiet-label">${escapeHtml([tag.tag_no, tag.reading_type].filter(Boolean).join(" — "))}</p>
+      <textarea id="command-mode-remark-text" rows="4" maxlength="500" placeholder="What's wrong or worth knowing? Write it in English.">${escapeHtml(text)}</textarea>
+      ${cm.remarkError ? `<p class="form-error" role="alert">${escapeHtml(cm.remarkError)}</p>` : ""}
+      <p class="quiet-label">Saved with today's inspection and shown in the Friday report. When you submit, you can choose to send your remarks to your Area and Operations Managers.</p>
+      <div class="inspection-actions">
+        ${text ? `<button type="button" class="button button--outline" id="command-mode-remark-delete">Delete</button>` : ""}
+        <button type="button" class="button button--outline" id="command-mode-remark-cancel">Cancel</button>
+        <button type="button" class="button button--primary" id="command-mode-remark-save">Save remark</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function handleCommandModeRemarkSave(remove = false) {
+  const cm = state.commandMode;
+  const tagId = cm.order[cm.index];
+  const text = remove ? "" : (document.querySelector("#command-mode-remark-text")?.value || "").trim();
+  if (!isEnglish(text)) {
+    cm.remarkError = ENGLISH_ONLY_MESSAGE;
+    cm.remarkDraft = text;
+    renderApp();
+    return;
+  }
+  cm.remarks[tagId] = text;
+  cm.remarkOpen = false;
+  cm.remarkError = "";
+  commandModeScheduleSave();
+  renderApp();
+}
+
 // Awaits any pending/in-flight background save first (see
 // commandModeScheduleSave) -- with saves now debounced rather than
 // blocking every question, this is the one moment that actually needs
@@ -5280,6 +5565,7 @@ async function exitCommandMode(options) {
   state.commandMode = null;
   if (toSubmit) {
     haptic([18, 50, 18]);
+    state.superPanel = "checklist";
     queueScroll("#submit-inspection-button", { block: "center" });
   }
   renderApp();
@@ -5372,7 +5658,9 @@ async function commandModeSave() {
       readings: cm.readings,
       flags: cm.flags,
       photoKeys: cm.photoKeys,
+      remarks: cm.remarks,
     });
+    state.inspection.remarks = data.remarks || state.inspection.remarks;
     state.inspection.readings = data.readings;
     state.inspection.flags = data.flags;
     state.inspection.photoKeys = data.photoKeys;
@@ -5630,13 +5918,7 @@ async function commandModeAcceptValue(tagId, rawValue, { photoKey } = {}) {
     return;
   }
   if (trendFlag) {
-    const avg = Math.round(historyFor(tag, cm.readings).h.avg * 10) / 10;
-    cm.abnormalPrompt = {
-      tagId,
-      value: rawValue,
-      basis: "history",
-      detail: `Recent readings for this item${machineStateFor(tag, cm.readings) ? ` while ${machineStateFor(tag, cm.readings)}` : ""} have averaged ${avg}${tag.unit ? ` ${tag.unit}` : ""} — this is a noticeable jump from that.`,
-    };
+    cm.abnormalPrompt = { tagId, value: rawValue, basis: "history", detail: `${outsideDetail(trendFlag, tag.unit, machineStateFor(tag, cm.readings))}.` };
     cm.entryMode = "choose";
     renderApp();
     return;
@@ -5652,9 +5934,32 @@ async function commandModeAcceptValue(tagId, rawValue, { photoKey } = {}) {
   await commandModeAfterValueSettled();
 }
 
+// The super's answer to a flag, given right when it's raised:
+// - "It's normal" teaches the machine on the spot (the range stretches to this exact value)
+//   instead of waiting for the end of the inspection.
+// - "It's abnormal" is kept for the end: it goes out with the submit as an abnormal reading.
+// - "Mistake" (handleCommandModeAbnormalIncorrect) just lets them re-enter the value.
+async function handleCommandModeCallNormal() {
+  const cm = state.commandMode;
+  const { tagId, value, basis } = cm.abnormalPrompt;
+  state.confirmedAbnormalTagIds = state.confirmedAbnormalTagIds.filter((id) => id !== tagId);
+  if (!state.confirmedNormalTagIds.includes(tagId)) state.confirmedNormalTagIds.push(tagId);
+  if (basis === "history") {
+    const tag = state.inspection.tags.find((t) => t.id === tagId);
+    try {
+      const result = await api.learnNormal({ tagId, value, readings: cm.readings });
+      if (result.learned && tag) tag.learned_by_state = { ...(tag.learned_by_state || {}), [result.state]: result.learned };
+    } catch {
+      // Offline or a hiccup: it still learns at submit, from confirmedNormalTagIds.
+    }
+  }
+  await commandModeAfterValueSettled();
+}
+
 async function handleCommandModeAbnormalConfirm() {
   const cm = state.commandMode;
   const tagId = cm.abnormalPrompt.tagId;
+  state.confirmedNormalTagIds = state.confirmedNormalTagIds.filter((id) => id !== tagId);
   if (!state.confirmedAbnormalTagIds.includes(tagId)) {
     state.confirmedAbnormalTagIds.push(tagId);
   }
@@ -5873,13 +6178,16 @@ function renderCommandMode() {
   // aiPhotoEnabled() plumbing is untouched below -- restore
   // `&& !aiPhotoEnabled()` here once the photo-entry flow is revisited.
   const skipToManual = cm.entryMode === "choose";
+  saveLocalCommandMode(cm);
 
   return `
+    ${cm.remarkOpen ? renderCommandModeRemark(cm, tag) : ""}
     <section class="command-mode">
       <div class="command-mode__topbar">
         <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
         <span class="command-mode__progress">${cm.index + 1} of ${total} · ${answeredCount} done</span>
         <button type="button" class="link-button link-button--danger" id="command-mode-clear-all">Clear all</button>
+        <button type="button" class="command-mode__pencil ${cm.remarks[tagId] ? "has-remark" : ""}" id="command-mode-remark" aria-label="Write a remark about this reading">${icon("edit")}</button>
       </div>
       <div class="command-mode__progress-track"><span style="width:${Math.round((cm.index / Math.max(total - 1, 1)) * 100)}%"></span></div>
 
@@ -5904,6 +6212,7 @@ function renderCommandMode() {
         }
 
         ${cm.error ? `<p class="form-error">${escapeHtml(cm.error)}</p>` : ""}
+        ${cm.remarks[tagId] ? `<p class="command-mode__remark">${icon("edit")} ${escapeHtml(cm.remarks[tagId])}</p>` : ""}
 
         ${
           cm.abnormalPrompt
@@ -6038,10 +6347,12 @@ function renderCommandModeAbnormal(prompt, tag) {
     <div class="command-mode__abnormal">
       <div class="command-mode__current">${currentValueHtml(prompt.value, tag)}</div>
       <p class="command-mode__scan-note">${icon("warning")} ${escapeHtml(prompt.detail)}</p>
-      <div class="command-mode__manual-actions">
-        <button type="button" class="button button--outline" id="command-mode-abnormal-incorrect">Incorrect — re-enter</button>
-        <button type="button" class="button button--primary" id="command-mode-abnormal-confirm">${prompt.basis === "plausibility" ? "Yes, that's the real reading" : "Confirm as normal"}</button>
+      <div class="command-mode__manual-actions command-mode__decide">
+        <button type="button" class="button button--outline" id="command-mode-abnormal-incorrect">Mistake — re-enter</button>
+        <button type="button" class="button button--light" id="command-mode-call-normal">${prompt.basis === "plausibility" ? "It's the real reading" : "It's normal"}</button>
+        <button type="button" class="button button--danger" id="command-mode-abnormal-confirm">It's abnormal</button>
       </div>
+      ${prompt.basis === "history" ? `<p class="quiet-label">"It's normal" teaches the machine this value right away. "It's abnormal" is reported when you submit.</p>` : ""}
     </div>`;
 }
 
@@ -6101,6 +6412,19 @@ function renderCommandModeFlagReview(cm, byId) {
 
 function bindCommandModeEvents() {
   document.querySelector("#command-mode-exit")?.addEventListener("click", exitCommandMode);
+  document.querySelector("#command-mode-remark")?.addEventListener("click", () => {
+    state.commandMode.remarkOpen = true;
+    state.commandMode.remarkError = "";
+    renderApp();
+    document.querySelector("#command-mode-remark-text")?.focus();
+  });
+  document.querySelector("#command-mode-remark-cancel")?.addEventListener("click", () => {
+    state.commandMode.remarkOpen = false;
+    state.commandMode.remarkError = "";
+    renderApp();
+  });
+  document.querySelector("#command-mode-remark-save")?.addEventListener("click", () => handleCommandModeRemarkSave());
+  document.querySelector("#command-mode-remark-delete")?.addEventListener("click", () => handleCommandModeRemarkSave(true));
   document.querySelector("#dismiss-location-warning")?.addEventListener("click", () => {
     state.commandMode.lastLocationWarning = null;
     renderApp();
@@ -6134,6 +6458,7 @@ function bindCommandModeEvents() {
   document.querySelector("#command-mode-scan-retake")?.addEventListener("click", handleCommandModeScanRetake);
   document.querySelector("#command-mode-scan-manual")?.addEventListener("click", handleCommandModeScanManual);
   document.querySelector("#command-mode-abnormal-confirm")?.addEventListener("click", handleCommandModeAbnormalConfirm);
+  document.querySelector("#command-mode-call-normal")?.addEventListener("click", handleCommandModeCallNormal);
   document.querySelector("#command-mode-abnormal-incorrect")?.addEventListener("click", handleCommandModeAbnormalIncorrect);
   document.querySelectorAll(".command-mode-resolve-flag").forEach((button) => {
     button.addEventListener("click", () => handleCommandModeResolveFlag(Number(button.dataset.tagId)));
@@ -6181,7 +6506,36 @@ async function handleInspectionSubmit(event) {
   await submitInspection(form);
 }
 
+// Remarks left with the pencil: ask once, at submit, whether they go to the Area and
+// Operations Managers as an observation or just stay in the report.
+function renderRemarksChoiceModal(count) {
+  return new Promise((resolve) => {
+    document.querySelector("#remarks-choice-modal")?.remove();
+    const wrap = document.createElement("div");
+    wrap.id = "remarks-choice-modal";
+    wrap.className = "modal-overlay";
+    wrap.innerHTML = `
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="remarks-choice-title">
+        <h3 id="remarks-choice-title">${icon("edit")} You left ${count} ${count === 1 ? "remark" : "remarks"}</h3>
+        <p>Send ${count === 1 ? "it" : "them"} to your Area and Operations Managers as an observation of an abnormal reading? Either way, remarks are kept in the weekly report.</p>
+        <div class="inspection-actions">
+          <button type="button" class="button button--outline" data-choice="keep">Keep in report only</button>
+          <button type="button" class="button button--primary" data-choice="send">Send to management</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    wrap.querySelectorAll("[data-choice]").forEach((b) =>
+      b.addEventListener("click", () => {
+        wrap.remove();
+        resolve(b.dataset.choice === "send");
+      }),
+    );
+  });
+}
+
 async function submitInspection(form) {
+  const remarkCount = Object.values(state.inspection?.remarks || {}).filter((t) => String(t || "").trim()).length;
+  const sendRemarksToManagement = remarkCount ? await renderRemarksChoiceModal(remarkCount) : false;
   const button = document.querySelector("#submit-inspection-button");
   const error = document.querySelector("#inspection-error");
   if (button) {
@@ -6193,7 +6547,9 @@ async function submitInspection(form) {
       ...collectInspectionForm(form),
       confirmedAbnormalTagIds: state.confirmedAbnormalTagIds || [],
       confirmedNormalTagIds: state.confirmedNormalTagIds || [],
+      sendRemarksToManagement,
     });
+    clearLocalCommandMode();
     state.confirmedOutOfRange = false;
     state.confirmedAbnormalTagIds = [];
     state.confirmedNormalTagIds = [];
@@ -6334,23 +6690,99 @@ function renderOutOfRangeModal(flagged) {
   });
 }
 
+// Property Manager: read-only, one building -- Overview (today + last 14 days +
+// readings outside normal), Messages (everything the super sent up), How it works.
 function renderPropertyView(data) {
   if (!data) return renderErrorState();
-  if (!data.days.length) {
-    return `<section class="card empty-state"><span>${icon("clock")}</span><h2>No inspections yet</h2><p>${escapeHtml(data.building.name)} hasn't had an inspection submitted yet — check back after today's rounds.</p></section>`;
-  }
+  const messages = data.messages || [];
+  const open = messages.filter((m) => m.status === "open").length;
+  return renderToolShell("property", [
+    { id: "overview", label: "Overview", icon: "overview", body: () => renderPropertyOverview(data) },
+    { id: "messages", label: "Messages", icon: "list", badge: open || "", body: () => renderPropertyMessages(messages) },
+    { id: "help", label: "How it works", icon: "eye", body: () => renderPropertyTutorial() },
+  ]);
+}
+
+function renderPropertyOverview(data) {
+  const today = data.today;
+  const outcomeLabels = { normal: "All normal", needs_look: "Needs a look", abnormal: "Abnormal reading reported", not_evaluated: "In progress" };
+  const todayLine = !today
+    ? "Not started yet today."
+    : today.status === "submitted"
+      ? `Submitted ${formatTimestamp(today.submittedAt)}${today.author ? ` by ${today.author}` : ""} · ${outcomeLabels[today.outcome]}`
+      : `In progress · ${today.counts.filled} of ${data.totalReadings} readings so far`;
+  const answerText = { abnormal: "Called abnormal", normal: "Called normal" };
   return `
-    <section class="card" aria-labelledby="property-log-title">
-      <div class="card__header">
-        <div><p class="section-kicker">${escapeHtml(data.building.name)}</p><h2 id="property-log-title">Inspection log</h2></div>
-        <span class="quiet-label">Last ${data.days.length} day${data.days.length === 1 ? "" : "s"}</span>
-      </div>
-      <div class="property-log">
-        <div class="property-log__row property-log__row--head">
-          <span>Date</span><span>Status</span><span>Started</span><span>Submitted</span><span>Outcome</span>
-        </div>
-        ${data.days.map(renderPropertyLogRow).join("")}
-      </div>
+    <section class="card property-today">
+      <p class="section-kicker">${escapeHtml(data.building.name)} · Today</p>
+      <h2>${today?.status === "submitted" ? `${icon("check")} Today's inspection is done` : "Today's inspection"}</h2>
+      <p class="super-home__meta">${escapeHtml(todayLine)}</p>
+    </section>
+    <section class="card">
+      <div class="card__header"><div><p class="section-kicker">Needs your attention</p><h2>Readings outside normal</h2></div><span class="quiet-label">Last 14 days</span></div>
+      ${
+        data.outside?.length
+          ? `<ul class="property-outside">${data.outside
+              .map(
+                (o) => `<li class="${o.answer === "abnormal" ? "is-abnormal" : ""}">
+                  <div><strong>${escapeHtml(o.where)}</strong><small>${escapeHtml(formatInspectionDate(o.date))}${o.detail ? ` · ${escapeHtml(o.detail)}` : ""}</small>
+                  ${o.remark ? `<p class="property-outside__remark">${icon("edit")} ${escapeHtml(o.remark)}</p>` : ""}</div>
+                  <div class="property-outside__value"><span>${escapeHtml(o.value)}</span><small>${escapeHtml(answerText[o.answer] || "No answer")}</small></div>
+                </li>`,
+              )
+              .join("")}</ul>`
+          : `<p class="parameters-intro">Nothing has been outside normal in the last 14 days.</p>`
+      }
+    </section>
+    ${
+      data.days.length
+        ? `<section class="card" aria-labelledby="property-log-title">
+            <div class="card__header"><div><p class="section-kicker">${escapeHtml(data.building.name)}</p><h2 id="property-log-title">Inspection log</h2></div>
+              <span class="quiet-label">Last ${data.days.length} day${data.days.length === 1 ? "" : "s"}</span></div>
+            <div class="property-log">
+              <div class="property-log__row property-log__row--head"><span>Date</span><span>Status</span><span>Started</span><span>Submitted</span><span>Outcome</span></div>
+              ${data.days.map(renderPropertyLogRow).join("")}
+            </div>
+          </section>`
+        : `<section class="card empty-state"><span>${icon("clock")}</span><h2>No inspections yet</h2><p>${escapeHtml(data.building.name)} hasn't had an inspection submitted yet — check back after today's rounds.</p></section>`
+    }`;
+}
+
+function renderPropertyMessages(messages) {
+  const sourceLabel = { flagged: "Issue flagged", reading: "Abnormal reading" };
+  return `
+    <section class="card">
+      <div class="card__header"><div><p class="section-kicker">From your superintendent</p><h2>Messages</h2></div><span class="quiet-label">Last 60 days</span></div>
+      ${
+        messages.length
+          ? `<ul class="property-messages">${messages
+              .map(
+                (m) => `<li>
+                  <div class="property-messages__head"><span class="status-pill ${m.status === "open" ? "status-pill--warning" : "status-pill--success"}">${m.status === "open" ? "Open" : "Resolved"}</span>
+                    <strong>${escapeHtml(m.category === "observation" ? "Observation" : sourceLabel[m.source] || "Message")} · ${escapeHtml(m.title || "")}</strong></div>
+                  ${m.description ? `<p>${escapeHtml(m.description).replace(/\n/g, "<br>")}</p>` : ""}
+                  <small>${escapeHtml(m.reported_by || "Superintendent")} · ${escapeHtml(formatTimestamp(m.created_at))}</small>
+                </li>`,
+              )
+              .join("")}</ul>`
+          : `<p class="parameters-intro">Nothing yet. Issues your superintendent flags, observations they send, and readings they call abnormal show up here.</p>`
+      }
+    </section>`;
+}
+
+function renderPropertyTutorial() {
+  const steps = [
+    ["What this is", "A read-only view of your building's daily mechanical inspection. You never fill anything in."],
+    ["What the superintendent does", "Every inspection day the superintendent walks the building, enters every gauge reading (boilers, pumps, pressures, levels), and takes a timestamped, location-tagged photo of each machine as proof it was done on site."],
+    ["How readings are judged", `For the first ${OBSERVE_DAYS} days the app learns each machine's normal from the superintendent's real readings. After that, anything outside what that machine has actually read is flagged, and the superintendent answers: a typo, normal, or abnormal.`],
+    ["Overview", "<strong>Today</strong> shows whether today's inspection is done. <strong>Readings outside normal</strong> lists every flagged reading from the last 14 days with the superintendent's answer and remark. The <strong>log</strong> shows when each inspection started and was submitted."],
+    ["Messages", "Issues the superintendent flagged, observations they chose to send, and readings they called abnormal. You also get an email for every abnormal reading."],
+    ["What to do about an abnormal reading", "Read the remark, then contact your Area Manager (or the superintendent) to arrange a check or a service call. The Area and Operations Managers get the same information and the Friday report."],
+  ];
+  return `
+    <section class="card tutorial">
+      <div class="card__header"><div><p class="section-kicker">For property managers</p><h2>How Inspect Funnels works</h2></div></div>
+      <ol class="tutorial__steps">${steps.map(([title, body]) => `<li><strong>${title}</strong><p>${body}</p></li>`).join("")}</ol>
     </section>`;
 }
 
@@ -6365,7 +6797,7 @@ function renderPropertyLogRow(day) {
   return `
     <div class="property-log__row">
       <span>${escapeHtml(formatInspectionDate(day.date))}</span>
-      <span class="status-pill ${day.status === "submitted" ? "status-pill--success" : "status-pill--warning"}">${day.status === "submitted" ? "Submitted" : "Draft"}</span>
+      <span class="status-pill ${day.status === "submitted" ? "status-pill--success" : "status-pill--warning"}">${day.status === "submitted" ? "Submitted" : "In progress"}</span>
       <span>${escapeHtml(formatTimestamp(day.startedAt) || "—")}</span>
       <span>${escapeHtml(formatTimestamp(day.submittedAt) || "—")}</span>
       <span class="flag-badge ${tone}">${escapeHtml(label)}</span>
@@ -6462,6 +6894,21 @@ function bindDashboardEvents() {
     });
   });
   document.querySelector("#start-command-mode")?.addEventListener("click", startCommandMode);
+  document.querySelectorAll("[data-super-panel]").forEach((button) =>
+    button.addEventListener("click", () => {
+      const panel = button.dataset.superPanel;
+      state.superPanel = state.superPanel === panel && !button.classList.contains("super-home__start") ? null : panel;
+      if (panel === "message") state.flagIssueOpen = true;
+      renderApp();
+      if (state.superPanel) queueScroll(panel === "checklist" ? "#inspection-form" : ".super-home + .card", { block: "start" });
+    }),
+  );
+  document.querySelector("#allow-field-permissions")?.addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    event.currentTarget.textContent = "Waiting for your phone…";
+    state.fieldPermission = await requestFieldPermissions();
+    renderApp();
+  });
   document.querySelector("#parameters-form")?.addEventListener("submit", handleParametersSave);
   document.querySelector("#toggle-manager-parameters")?.addEventListener("click", () => {
     state.managerParametersExpanded = !state.managerParametersExpanded;

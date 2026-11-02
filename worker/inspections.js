@@ -3,8 +3,9 @@
 // checklist pulled from an actual Forest Hill inspection sheet.
 
 import { createReadingWorkOrder } from "./work-orders.js";
-import { loadBaselines, loadLastValues, evaluateDeviation, inferTolerance, trendMonitored, stateTagIdsFor, readingState } from "./deviation.js";
+import { loadBaselines, loadLastValues, evaluateDeviation, trendMonitored, stateTagIdsFor, readingState } from "./deviation.js";
 import { loadLearned, learnFromNormal } from "./learned-ranges.js";
+import { saveRemarks, loadRemarks, sendObservation, englishError } from "./remarks.js";
 import { sendAbnormalAlert } from "./abnormal-alert.js";
 
 // Toronto time, not UTC -- an inspection "day" should turn over at
@@ -60,9 +61,6 @@ async function loadTags(env, buildingId) {
         ? { min: row.min_value, max: row.max_value, expected: row.expected_value }
         : null,
     monitor_trend: row.monitor_trend,
-    // Real-world drift allowed before this reading flags (null = no fixed
-    // number, statistical rule only) -- see worker/deviation.js.
-    tolerance: inferTolerance(row.unit, row.reading_type),
     // A machine's readings are judged per state (on / off / auto...): the app picks
     // `history_by_state[<the machine's current answer>]`. A reading with no such answer
     // just has one history.
@@ -82,7 +80,7 @@ async function loadSubmission(env, buildingId, date) {
   )
     .bind(buildingId, date)
     .first();
-  if (!submission) return { submission: null, readings: {}, flags: {}, photoKeys: {}, groupNotes: {}, groupPhotos: {} };
+  if (!submission) return { submission: null, readings: {}, flags: {}, photoKeys: {}, groupNotes: {}, groupPhotos: {}, remarks: {} };
 
   const [readings, groupNotes, groupPhotos] = await Promise.all([
     env.DB.prepare(`SELECT tag_id, value, flagged, photo_key FROM inspection_readings WHERE submission_id = ?`)
@@ -121,6 +119,7 @@ async function loadSubmission(env, buildingId, date) {
     photoKeys: photoKeysByTag,
     groupNotes: groupNotesById,
     groupPhotos: groupPhotosById,
+    remarks: await loadRemarks(env, submission.id).catch(() => ({})),
   };
 }
 
@@ -130,7 +129,7 @@ export async function handleInspectionToday(session, env, corsHeaders) {
     return jsonError("No building is assigned to this account yet.", 409, corsHeaders);
   }
 
-  const [building, tags, { submission, readings, flags, photoKeys, groupNotes, groupPhotos }, notices, recentNotes, recentGroupNotes] = await Promise.all([
+  const [building, tags, { submission, readings, flags, photoKeys, groupNotes, groupPhotos, remarks }, notices, recentNotes, recentGroupNotes] = await Promise.all([
     env.DB.prepare("SELECT id, name, region, inspection_days, status, deleted_at FROM buildings WHERE id = ?")
       .bind(buildingId)
       .first(),
@@ -189,6 +188,7 @@ export async function handleInspectionToday(session, env, corsHeaders) {
       photoKeys,
       groupNotes,
       groupPhotos,
+      remarks,
       notices: notices.results,
       recentNotes: recentNotes.results,
       recentGroupNotes: recentGroupNotes.results,
@@ -268,7 +268,10 @@ export async function lockStaleDrafts(env) {
   return { locked: result.meta.changes || 0 };
 }
 
-async function upsertDraft(session, env, { notes, readings, flags, photoKeys, groupNotes }) {
+async function upsertDraft(session, env, { notes, readings, flags, photoKeys, groupNotes, remarks }) {
+  // Anything written goes into reports, which must be in English (shared/english-only.js).
+  const notEnglish = englishError(notes, ...Object.values(groupNotes || {}), ...Object.values(remarks || {}));
+  if (notEnglish) throw Object.assign(new Error(notEnglish), { status: 400 });
   const { submissionId, buildingId } = await ensureSubmission(session, env);
   if (notes != null) {
     await env.DB.prepare("UPDATE inspection_submissions SET notes = ? WHERE id = ?")
@@ -341,6 +344,7 @@ async function upsertDraft(session, env, { notes, readings, flags, photoKeys, gr
     }
   }
   if (statements.length) await env.DB.batch(statements);
+  if (remarks) await saveRemarks(env, submissionId, validTagIds, remarks);
 
   const groupNotesMap = groupNotes || {};
   if (Object.keys(groupNotesMap).length) {
@@ -424,10 +428,10 @@ async function recordDeviations(env, buildingId, submissionId, body) {
     const deviation = evaluateDeviation(tag, row.value, baseline, learnedRange, hasStates ? state : "");
     if (!deviation) continue;
     const ack = abnormal.has(row.tag_id) ? "abnormal" : normal.has(row.tag_id) ? "normal" : null;
-    stamped.set(row.tag_id, { tag, value: row.value, deviation: { ...deviation, tolerance: deviation.tolerance ?? tag.tolerance, ack } });
+    stamped.set(row.tag_id, { tag, value: row.value, deviation: { ...deviation, ack } });
     statements.push(
       env.DB.prepare("UPDATE inspection_readings SET deviation = ? WHERE submission_id = ? AND tag_id = ?").bind(
-        JSON.stringify({ ...deviation, tolerance: deviation.tolerance ?? tag.tolerance, ack }),
+        JSON.stringify({ ...deviation, ack }),
         submissionId,
         row.tag_id,
       ),
@@ -440,12 +444,39 @@ async function recordDeviations(env, buildingId, submissionId, body) {
     const item = stamped.get(tagId);
     if (!item) continue;
     try {
-      await learnFromNormal(env, { tagId, value: item.value, deviation: item.deviation, margin: item.tag.tolerance ?? item.deviation.tolerance ?? 0 });
+      await learnFromNormal(env, { tagId, value: item.value, deviation: item.deviation });
     } catch (error) {
       console.error("learnFromNormal failed", error);
     }
   }
   return stamped;
+}
+
+// "It's normal" pressed the moment a reading is flagged: teach the machine right
+// away instead of waiting for the end of the inspection. The flag is worked out
+// again here from the saved history (never trusted from the phone); only a value
+// outside the machine's own range teaches anything.
+//   body: { tagId, value, readings: { [tagId]: value } } -- readings carries the
+//   machine's on/off/auto answer so the right state's range is stretched.
+export async function handleLearnNormal(request, session, env, corsHeaders) {
+  const buildingId = session.building_id;
+  if (!buildingId) return jsonError("No building is assigned to this account yet.", 409, corsHeaders);
+  const body = await request.json().catch(() => ({}));
+  const tagId = Number.parseInt(body.tagId, 10);
+  const tags = await loadTags(env, buildingId);
+  const tag = tags.find((t) => t.id === tagId);
+  if (!tag) return jsonError("Reading not found for this building.", 404, corsHeaders);
+  const readings = body.readings && typeof body.readings === "object" ? body.readings : {};
+  const hasStates = (tag.state_tag_ids || []).length > 0;
+  const state = readingState(tag, stateTagIdsFor(tags), (id) => readings[id]);
+  const baseline = hasStates ? tag.history_by_state?.[state] || null : tag.history;
+  const learnedRange = tag.learned_by_state?.[hasStates ? state : ""] || null;
+  const deviation = evaluateDeviation(tag, body.value, baseline, learnedRange, hasStates ? state : "");
+  const learned = deviation ? await learnFromNormal(env, { tagId, value: body.value, deviation }) : null;
+  return new Response(JSON.stringify({ ok: true, learned, state: hasStates ? state : "" }), {
+    status: 200,
+    headers: { ...Object.fromEntries(new Headers(corsHeaders)), "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+  });
 }
 
 export async function handleInspectionSubmit(request, session, env, corsHeaders) {
@@ -524,6 +555,15 @@ export async function handleInspectionSubmit(request, session, env, corsHeaders)
     });
   } catch (error) {
     console.error("sendAbnormalAlert failed", error);
+  }
+
+  // The super chose to send their remarks to the Area and Operations Managers.
+  if (body.sendRemarksToManagement) {
+    try {
+      await sendObservation(env, { buildingId: session.building_id, submissionId, superId: session.id, superName: session.full_name || session.username });
+    } catch (error) {
+      console.error("sendObservation failed", error);
+    }
   }
 
   return handleInspectionToday(session, env, corsHeaders);

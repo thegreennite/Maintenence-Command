@@ -39,18 +39,7 @@ export async function storePhoto(env, { buildingId, imageBase64, imageBlob, medi
   const rand = crypto.randomUUID().slice(0, 8);
 
   let backend, location;
-  if (ghlConfigured(env)) {
-    const { uploadInspectionPhotoToGhl } = await import("./ghl-media.js");
-    const building = await env.DB.prepare("SELECT name FROM buildings WHERE id = ?").bind(buildingId).first();
-    const fileName = `${date}-${context}-${rand}.${ext}`;
-    const result = await uploadInspectionPhotoToGhl(
-      { apiKey: env.GHL_API_KEY, locationId: env.GHL_LOCATION_ID },
-      { imageBase64, imageBlob, mediaType, buildingName: building?.name || `building-${buildingId}`, inspectionDateIso: date, fileName },
-      env,
-    );
-    backend = "ghl";
-    location = result.url;
-  } else if (env.PHOTOS) {
+  const toR2 = async () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const key = `${buildingId}/${date}/${stamp}-${rand}-${context}.${ext}`;
     const binary = imageBlob ? await imageBlob.arrayBuffer() : Uint8Array.from(atob(imageBase64), (c) => c.charCodeAt(0));
@@ -60,6 +49,28 @@ export async function storePhoto(env, { buildingId, imageBase64, imageBlob, medi
     });
     backend = "r2";
     location = key;
+  };
+  if (ghlConfigured(env)) {
+    try {
+      const { uploadInspectionPhotoToGhl } = await import("./ghl-media.js");
+      const building = await env.DB.prepare("SELECT name FROM buildings WHERE id = ?").bind(buildingId).first();
+      const fileName = `${date}-${context}-${rand}.${ext}`;
+      const result = await uploadInspectionPhotoToGhl(
+        { apiKey: env.GHL_API_KEY, locationId: env.GHL_LOCATION_ID },
+        { imageBase64, imageBlob, mediaType, buildingName: building?.name || `building-${buildingId}`, inspectionDateIso: date, fileName },
+        env,
+      );
+      backend = "ghl";
+      location = result.url;
+    } catch (error) {
+      // A GoHighLevel hiccup used to fail the whole photo, sending the super back
+      // to "Take photo" with nothing saved. Keep the photo in R2 instead.
+      if (!env.PHOTOS) throw error;
+      console.error("GHL photo upload failed, storing in R2 instead", error);
+      await toR2();
+    }
+  } else if (env.PHOTOS) {
+    await toR2();
   } else {
     return null;
   }

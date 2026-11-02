@@ -9,7 +9,9 @@
 import { Workbook, S } from "./xlsx-writer.js";
 import { readingText } from "../shared/reading-unit.js";
 import { weekDates, todayIso, weekdayName } from "./dashboard-data.js";
-import { loadBaselines, evaluateDeviation, MIN_BASELINE_DAYS, inferTolerance, trendMonitored, stateTagIdsFor, readingState } from "./deviation.js";
+import { loadBaselines, evaluateDeviation, MIN_BASELINE_DAYS, trendMonitored, stateTagIdsFor, readingState } from "./deviation.js";
+import { allowedRange, rangeText } from "../shared/machine-range.js";
+import { remarksForSubmissions } from "./remarks.js";
 import { loadLearned } from "./learned-ranges.js";
 import { ghlUpsertContact, ghlSendEmail } from "./ghl.js";
 import { getNativeClientId } from "./tenant-db.js";
@@ -108,6 +110,7 @@ async function gatherBuilding(env, building, dates, today) {
   const tagById = new Map(tags.map((t) => [t.id, t]));
   const idsFor = stateTagIdsFor(tags);
   const learnedAll = await loadLearned(env, building.id);
+  const remarks = await remarksForSubmissions(env, subs.map((s) => s.id)).catch(() => new Map());
   const days = [];
   const flagged = [];
   const notes = [];
@@ -147,9 +150,10 @@ async function gatherBuilding(env, building, dates, today) {
           const state = readingState(tag, idsFor, (id) => rows.get(id)?.value);
           deviation = evaluateDeviation(tag, row.value, baselines[tagId]?.[state] || null, learnedAll[tagId]?.[state] || null, state);
         }
-        readings.set(tagId, { value: String(row.value).trim(), deviation });
+        const remark = remarks.get(`${sub.id}|${tagId}`) || "";
+        readings.set(tagId, { value: String(row.value).trim(), deviation, remark });
         if (deviation) {
-          flagged.push({ date, tag, value: String(row.value).trim(), deviation });
+          flagged.push({ date, tag, value: String(row.value).trim(), deviation, remark });
         }
       }
       if (sub.notes && sub.notes.trim()) {
@@ -158,6 +162,20 @@ async function gatherBuilding(env, building, dates, today) {
       for (const gn of groupNotes) {
         if (gn.submission_id === sub.id && gn.note && gn.note.trim()) {
           notes.push({ date, where: gn.group_name, text: gn.note.trim(), author: sub.author });
+        }
+      }
+      // The super's remarks on single readings (the pencil in command mode).
+      for (const [tagId] of rows) {
+        const remark = remarks.get(`${sub.id}|${tagId}`);
+        const tag = tagById.get(tagId);
+        if (remark && tag) {
+          const value = rows.get(tagId)?.value;
+          notes.push({
+            date,
+            where: `Remark · ${[tag.group_name, readingLabel(tag)].filter(Boolean).join(": ")}${value ? ` (${withUnit(asCell(value), tag.unit)})` : ""}`,
+            text: remark,
+            author: sub.author,
+          });
         }
       }
     }
@@ -216,6 +234,7 @@ async function gatherBuilding(env, building, dates, today) {
     openWorkOrders: ordersRes?.c || 0,
     authors,
     endBaselines: lastBaselineDay ? baselinesByDate.get(lastBaselineDay.date) : {},
+    learned: learnedAll,
   };
 }
 
@@ -265,22 +284,24 @@ const STATE_STYLE = {
   missed: S.headMissed,
 };
 
-function normalText(tag, baseline) {
+function normalText(tag, baseline, learned) {
   if (tag.parameter?.min != null && tag.parameter?.max != null) return withUnit(`${tag.parameter.min}–${tag.parameter.max}`, tag.unit);
   if (tag.parameter?.expected) return `Expected: ${tag.parameter.expected}`;
   if (tag.value_type && tag.value_type !== "numeric") return "";
   if (tag.monitor_trend === 0) return "Not monitored";
-  // Meters, pump RPM/amps/Hz etc. have no fixed normal worth showing.
+  // Meters and outside/weather readings have no machine range to show.
   if (!trendMonitored(tag)) return "";
   const states = Object.entries(baseline || {});
   if (states.length) {
-    const tol = inferTolerance(tag.unit, tag.reading_type);
-    // One line per machine state ("on: about 150, off: about 141"); plain "about 60" when there is just one.
+    // One line per machine state ("on: 148–151 °; off: 139–141 °"); just the range when there is one.
     return states
-      .map(([state, b]) => `${state ? `${state}: ` : ""}about ${Math.round(b.avg * 10) / 10}${tol != null ? ` (±${tol})` : ""}`)
+      .map(([state, b]) => {
+        const { lo, hi } = allowedRange(b, learned?.[state]);
+        return `${state ? `${state}: ` : ""}${rangeText(lo, hi, tag.unit)}`;
+      })
       .join("; ");
   }
-  return `Learning (needs ${MIN_BASELINE_DAYS} days)`;
+  return `Learning (first ${MIN_BASELINE_DAYS} days)`;
 }
 
 const answerLabel = (ack) => (ack === "abnormal" ? "Called abnormal" : ack === "normal" ? "Called normal" : "No answer recorded");
@@ -342,7 +363,7 @@ function writeBuildingSheet(wb, bld, week, opts = {}) {
     for (const tag of group.tags) {
       ws.set(row, 0, `${tag.walkNumber}. ${readingLabel(tag)}`, S.text);
       ws.set(row, 1, tag.unit || "", S.center);
-      ws.set(row, 2, normalText(tag, bld.endBaselines[tag.id]), S.center);
+      ws.set(row, 2, normalText(tag, bld.endBaselines[tag.id], bld.learned?.[tag.id]), S.center);
       bld.days.forEach((day, i) => {
         const reading = day.readings.get(tag.id);
         if (!reading) ws.set(row, 3 + i, "—", S.muted);
@@ -372,10 +393,10 @@ function writeBuildingSheet(wb, bld, week, opts = {}) {
       ws.set(row, 2, f.deviation.detail || "", S.text);
       ws.set(row, 3, withUnit(asCell(f.value), f.tag.unit), S.flag);
       ws.set(row, 4, f.deviation.change != null ? (f.deviation.change > 0 ? `+${f.deviation.change}` : `${f.deviation.change}`) : "", S.center);
-      ws.set(row, 5, answerLabel(f.deviation.ack), S.text);
+      ws.set(row, 5, `${answerLabel(f.deviation.ack)}${f.remark ? `\nRemark: ${f.remark}` : ""}`, S.text);
       ws.merge(row, 5, row, lastCol);
       ws.fill(row, 5, lastCol, S.text);
-      ws.height(row, rowHeightFor(f.deviation.detail || "", 24));
+      ws.height(row, Math.max(rowHeightFor(f.deviation.detail || "", 24), f.remark ? rowHeightFor(`x\n${f.remark}`, 40) : 0));
       row += 1;
     }
   }
@@ -388,7 +409,7 @@ function writeBuildingSheet(wb, bld, week, opts = {}) {
     ws.merge(row, 0, row, lastCol);
     row += 1;
   } else {
-    ws.set(row, 0, "Where", S.header).set(row, 1, "Day", S.header).set(row, 2, "Note", S.header);
+    ws.set(row, 0, "Where", S.header).set(row, 1, "Day", S.header).set(row, 2, "Note / remark", S.header);
     ws.merge(row, 2, row, lastCol);
     ws.fill(row, 2, lastCol, S.header);
     row += 1;
@@ -398,7 +419,7 @@ function writeBuildingSheet(wb, bld, week, opts = {}) {
       ws.set(row, 2, `${n.text}${n.author ? `  — ${n.author}` : ""}`, S.note);
       ws.merge(row, 2, row, lastCol);
       ws.fill(row, 2, lastCol, S.note);
-      ws.height(row, rowHeightFor(n.text, 70));
+      ws.height(row, Math.max(rowHeightFor(n.text, 70), rowHeightFor(n.where, 38)));
       row += 1;
     }
   }

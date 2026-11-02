@@ -7,7 +7,7 @@ import {
   verifyPassword,
 } from "./security.js";
 import { dashboardForRole, roleLabels } from "./dashboard-data.js";
-import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit, lockStaleDrafts } from "./inspections.js";
+import { handleInspectionToday, handleInspectionSave, handleInspectionSubmit, handleLearnNormal, lockStaleDrafts } from "./inspections.js";
 import { handleManagerInspection, handleManagerParametersSave, handleManagerSuperintendents } from "./manager.js";
 import { handlePropertyInspections } from "./property.js";
 import { handleInspectionPhoto, handleCommandModePhoto } from "./vision.js";
@@ -319,6 +319,13 @@ export default {
           return json({ error: "Superintendent access required" }, 403, cors.headers);
         }
         return handleInspectionSubmit(request, session, env, cors.headers);
+      }
+
+      if (url.pathname === "/api/inspections/learn-normal" && request.method === "POST") {
+        if (session.role !== "superintendent") {
+          return json({ error: "Superintendent access required" }, 403, cors.headers);
+        }
+        return handleLearnNormal(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/inspections/flag-issue" && request.method === "POST") {
