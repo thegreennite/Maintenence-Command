@@ -659,6 +659,29 @@ function startRegistration() {
   renderRegister();
 }
 
+// Top row of the sign-up / verify screens: logo on the left, one clear back
+// button on the right (steps back one screen; from the first screen, to sign in).
+function authHeaderHtml(backLabel) {
+  return `<div class="auth-header">
+    <div class="mobile-brand brand">
+      <span class="brand-mark">${logoGlyph()}</span>
+      <span>Inspect <strong>Funnels</strong></span>
+    </div>
+    <button type="button" class="auth-back" id="auth-back">${icon("arrow")}<span>${escapeHtml(backLabel)}</span></button>
+  </div>`;
+}
+
+const REGISTER_PREVIOUS = { building: "role", profile: "building" };
+
+function registerGoBack() {
+  const reg = state.registration;
+  const isManagerTier = reg.role === "regional_manager" || reg.role === "operations_manager";
+  const previous = reg.step === "profile" && isManagerTier ? "role" : REGISTER_PREVIOUS[reg.step];
+  if (!previous || reg.step === "done") return renderLogin();
+  state.registration = { ...reg, step: previous, ...(previous === "role" ? { role: null, building: null } : {}) };
+  renderRegister();
+}
+
 function renderRegister() {
   const reg = state.registration;
   setDocumentTitle(reg.role ? `Register as ${ROLE_LABELS_FOR_REGISTRATION[reg.role]}` : "Create an account");
@@ -667,10 +690,7 @@ function renderRegister() {
     <main class="login-page login-page--register">
       <section class="login-panel login-panel--wide">
         <div class="login-form-wrap">
-          <div class="mobile-brand brand">
-            <span class="brand-mark">${logoGlyph()}</span>
-            <span>Inspect <strong>Funnels</strong></span>
-          </div>
+          ${authHeaderHtml(reg.step === "role" || reg.step === "done" ? "Sign in" : "Back")}
           <p class="eyebrow">${reg.role ? `Register as ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}` : "Create an account"}</p>
           <h2>${titles[reg.step]}</h2>
           ${
@@ -682,12 +702,12 @@ function renderRegister() {
                   ? renderRegisterProfileStep(reg)
                   : renderRegisterDoneStep(reg)
           }
-          <button type="button" class="link-button" id="back-to-login">← Back to sign in</button>
         </div>
       </section>
     </main>`;
 
-  document.querySelector("#back-to-login")?.addEventListener("click", () => renderLogin());
+  document.querySelector("#auth-back")?.addEventListener("click", registerGoBack);
+  document.querySelector("#register-done-sign-in")?.addEventListener("click", () => renderLogin());
   document.querySelector("#registration-role-form")?.addEventListener("submit", handleRegistrationRoleSubmit);
   document.querySelector("#registration-building-search")?.addEventListener("input", handleRegistrationBuildingSearch);
   document.querySelectorAll(".registration-building-result").forEach((button) => {
@@ -726,7 +746,7 @@ function handleRegistrationRoleSubmit(event) {
 function renderRegisterBuildingStep(reg) {
   return `
     <p class="form-intro">Search for your building by name. If your operations manager hasn't registered it yet, you won't be able to create a profile until they do.</p>
-    <label class="inspection-field"><span>Building name</span><input id="registration-building-search" autocomplete="off" placeholder="Start typing…" /></label>
+    <label class="inspection-field registration-building-search"><span>Building name</span><input id="registration-building-search" autocomplete="off" placeholder="Start typing…" /></label>
     <div class="registration-building-results">
       ${reg.buildingResults
         .map(
@@ -773,7 +793,8 @@ function renderRegisterProfileStep(reg) {
 function renderRegisterDoneStep(reg) {
   const approver =
     reg.role === "regional_manager" || reg.role === "operations_manager" ? "an administrator" : "your operations manager";
-  return `<div class="finding"><p>${icon("check")} Your request has been sent to ${approver} for approval. You'll be able to sign in once they approve it.</p></div>`;
+  return `<div class="finding"><p>${icon("check")} Your request has been sent to ${approver} for approval. You'll be able to sign in once they approve it.</p></div>
+    <button type="button" class="button button--primary button--full auth-done" id="register-done-sign-in"><span>Go to sign in</span>${icon("arrow")}</button>`;
 }
 
 async function handleRegistrationBuildingSearch(event) {
@@ -879,10 +900,7 @@ function renderVerifyCodeScreen(pendingToken) {
       </section>
       <section class="login-panel">
         <div class="login-form-wrap">
-          <div class="mobile-brand brand">
-            <span class="brand-mark">${logoGlyph()}</span>
-            <span>Inspect <strong>Funnels</strong></span>
-          </div>
+          ${authHeaderHtml("Sign in")}
           <p class="eyebrow">Verify it's you</p>
           <h2>Check your email</h2>
           <p class="form-intro">Enter the 6-digit code we just sent.</p>
@@ -896,13 +914,12 @@ function renderVerifyCodeScreen(pendingToken) {
               <span>Verify &amp; sign in</span>${icon("arrow")}
             </button>
           </form>
-          <button type="button" class="link-button" id="back-to-login-from-verify">← Back to sign in</button>
         </div>
       </section>
     </main>`;
 
   document.querySelector("#verify-code-form").addEventListener("submit", (event) => handleVerifyCode(event, pendingToken));
-  document.querySelector("#back-to-login-from-verify").addEventListener("click", () => renderLogin());
+  document.querySelector("#auth-back").addEventListener("click", () => renderLogin());
   document.querySelector('input[name="code"]').focus();
 }
 

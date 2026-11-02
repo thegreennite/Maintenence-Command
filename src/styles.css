@@ -1603,3 +1603,21 @@ p, li, .parameters-intro, .super-home__meta, .tutorial__steps p { text-wrap: pre
   .user-identity strong { font-size: 13px; }
   .impersonation-bar > span { max-width: 62%; font-size: 12px; }
 }
+
+/* Sign-up / verify screens: logo + one clear back button on top, even spacing below. */
+.auth-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 48px; }
+.auth-header .mobile-brand { margin-bottom: 0; }
+.auth-back { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.auth-back svg { width: 16px; height: 16px; transform: rotate(180deg); }
+.auth-back:hover { border-color: var(--forest); }
+.login-page--register .form-intro { margin: 0 0 28px; line-height: 1.5; }
+.login-page--register h2 { margin-bottom: 12px; }
+.registration-building-search { display: grid; gap: 8px; margin: 0; }
+.registration-building-results { margin-top: 14px; }
+.login-page--register .form-error { margin-top: 14px; line-height: 1.45; }
+.auth-done { margin-top: 20px; }
+@media (min-width: 981px) { .auth-header .mobile-brand { display: inline-flex; } }
+@media (max-width: 680px) { .auth-header { margin-bottom: 36px; } }
+/* File pickers (profile photo, sheet upload): a real button instead of the browser's raw control. */
+.login-form input[type="file"] { padding: 8px; font-size: 14px; color: var(--muted); }
+.login-form input[type="file"]::file-selector-button { margin-right: 12px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--canvas); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
