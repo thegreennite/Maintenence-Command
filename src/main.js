@@ -6186,7 +6186,7 @@ function renderCommandMode() {
     ${cm.remarkOpen ? renderCommandModeRemark(cm, tag) : ""}
     <section class="command-mode">
       <div class="command-mode__topbar">
-        <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
+        <button type="button" class="link-button" id="command-mode-exit">← Exit</button>
         <span class="command-mode__progress">${cm.index + 1} of ${total} · ${answeredCount} done</span>
         <button type="button" class="link-button link-button--danger" id="command-mode-clear-all">Clear all</button>
         <button type="button" class="command-mode__pencil ${cm.remarks[tagId] ? "has-remark" : ""}" id="command-mode-remark" aria-label="Write a remark about this reading">${icon("edit")}</button>
@@ -6363,7 +6363,7 @@ function renderCommandModeGroupPhoto(cm) {
   return `
     <section class="command-mode">
       <div class="command-mode__topbar">
-        <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
+        <button type="button" class="link-button" id="command-mode-exit">← Exit</button>
         <span class="command-mode__progress">${cm.index + 1} of ${cm.order.length}</span>
         <span></span>
       </div>
@@ -6390,7 +6390,7 @@ function renderCommandModeFlagReview(cm, byId) {
   return `
     <section class="command-mode">
       <div class="command-mode__topbar">
-        <button type="button" class="link-button" id="command-mode-exit">← Exit command mode</button>
+        <button type="button" class="link-button" id="command-mode-exit">← Exit</button>
         <button type="button" class="link-button link-button--danger" id="command-mode-clear-all">Clear all</button>
       </div>
       <div class="command-mode__stage command-mode__stage--review">
@@ -6800,8 +6800,8 @@ function renderPropertyLogRow(day) {
     <div class="property-log__row">
       <span>${escapeHtml(formatInspectionDate(day.date))}</span>
       <span class="status-pill ${day.status === "submitted" ? "status-pill--success" : "status-pill--warning"}">${day.status === "submitted" ? "Submitted" : "In progress"}</span>
-      <span>${escapeHtml(formatTimestamp(day.startedAt) || "—")}</span>
-      <span>${escapeHtml(formatTimestamp(day.submittedAt) || "—")}</span>
+      <span class="property-log__time" data-label="Started">${escapeHtml(formatTimestamp(day.startedAt) || "—")}</span>
+      <span class="property-log__time" data-label="Submitted">${escapeHtml(formatTimestamp(day.submittedAt) || "—")}</span>
       <span class="flag-badge ${tone}">${escapeHtml(label)}</span>
     </div>`;
 }

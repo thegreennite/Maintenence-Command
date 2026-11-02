@@ -86,6 +86,7 @@ const PHRASES = {
 
   // Command mode
   "← Exit command mode": ["← Quitter le mode commande", "← Salir del modo comando", "← Esci dalla modalità comando", "← Sair do modo comando", "← Sair do modo comando"],
+  "← Exit": ["← Quitter", "← Salir", "← Esci", "← Sair", "← Sair"],
   "Clear all": ["Tout effacer", "Borrar todo", "Cancella tutto", "Limpar tudo", "Limpar tudo"],
   "← Back": ["← Retour", "← Atrás", "← Indietro", "← Voltar", "← Voltar"],
   "Flag for later": ["Signaler pour plus tard", "Marcar para después", "Segnala per dopo", "Marcar para depois", "Marcar para depois"],

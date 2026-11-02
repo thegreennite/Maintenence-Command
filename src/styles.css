@@ -1504,3 +1504,85 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .topbar .lang-picker select { max-width: 96px; padding-right: 22px; background-position: right 8px center; text-overflow: ellipsis; }
   .topbar .user-identity small { display: none; }
 }
+
+/* ---------------------------------------------------------------------
+   Phone polish (2026-11-02): nothing wider than the screen, tab bars that
+   wrap instead of being cut off mid-word, compact stats, and a command mode
+   that fits one phone screen without a big empty gap.
+   --------------------------------------------------------------------- */
+html { overflow-x: clip; }
+@media (max-width: 680px) {
+  .dashboard { padding-top: 20px; }
+  .dashboard-heading { margin-bottom: 22px; }
+  .dashboard-heading h1 { font-size: 30px; }
+
+  /* Sign in */
+  .login-panel { place-items: start center; padding: 24px 20px 40px; }
+  .login-form-wrap { width: 100%; min-width: 0; }
+  .login-panel__top { flex-wrap: wrap; gap: 10px; margin-bottom: 40px; }
+  .login-panel__top .add-business-link { margin-left: auto; }
+  .login-form-wrap h2 { font-size: 32px; }
+
+  /* Tool bars: a grid of tappable tiles, never a cut-off scroller */
+  .tool-bar__track { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; overflow: visible; }
+  .tool-tab { position: relative; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; min-height: 54px; padding: 6px 4px; font-size: 11.5px; line-height: 1.15; white-space: normal; text-align: center; }
+  .tool-tab .icon { width: 18px; height: 18px; }
+  .tool-tab__label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .tool-tab__badge { position: absolute; top: 4px; right: 6px; min-width: 18px; padding: 1px 5px; font-size: 10px; }
+
+  /* Stats two-up and compact */
+  .metric-grid, .metric-grid--three { grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 22px; }
+  .metric-card { min-height: 104px; padding: 14px; }
+  .metric-card > strong { font-size: 26px; }
+
+  /* Command mode fits one screen */
+  .command-mode { min-height: 0; gap: 12px; }
+  .command-mode__topbar { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; }
+  .command-mode__topbar .link-button { white-space: nowrap; font-size: 14px; }
+  .command-mode__progress { text-align: center; white-space: nowrap; }
+  .command-mode__stage { flex: 0 0 auto; padding: 22px 16px; }
+  .command-mode__nav { gap: 8px; }
+  .command-mode__nav .button { min-height: 52px; padding: 0 6px; font-size: 14px; white-space: nowrap; }
+
+  /* Checklist: less box-inside-box */
+  .inspection-card .card__header { padding: 14px; }
+  .inspection-group { padding: 12px 12px 4px; }
+  .inspection-form { gap: 14px; }
+
+  .app-footer { justify-content: center; padding-top: 16px; }
+}
+@media (max-width: 440px) {
+  .metric-grid, .metric-grid--three { grid-template-columns: 1fr 1fr; }
+  .metric-card { min-height: 98px; }
+}
+@media (max-width: 680px) {
+  /* Footer: just the install link, not the desktop tagline run together */
+  .app-footer > span { display: none; }
+  .app-footer:not(:has(.install-link)) { display: none; }
+  /* Cards that were tall and mostly empty on a phone */
+  .coverage-card, .recurring-card, .detail-card { min-height: 0; }
+  /* Rows: name on its own line, buttons grouped underneath (not flung to opposite edges) */
+  .building-row, .tool-card .building-row, .admin-section .building-row { flex-wrap: wrap; justify-content: flex-start; gap: 8px 10px; }
+  .building-row__name, .tool-card .building-row__name, .admin-section .building-row__name { flex: 1 1 100%; }
+}
+/* PM inspection log on a phone: date + outcome on one line, times underneath */
+@media (max-width: 680px) {
+  .property-log { padding: 4px 14px 14px; }
+  .property-log__row { grid-template-columns: 1fr auto; grid-template-areas: "date outcome" "times times"; gap: 6px 10px; padding: 12px 2px; }
+  .property-log__row > span:nth-child(1) { grid-area: date; }
+  .property-log__row > span:nth-child(2) { display: none; }
+  .property-log__row > .flag-badge { grid-area: outcome; justify-self: end; }
+  .property-log__row > .property-log__time { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+  .property-log__row > .property-log__time:nth-child(3) { grid-row: 2; }
+  .property-log__row > .property-log__time:nth-child(4) { grid-row: 3; }
+  .property-log__row span:not(:first-child)::before { content: none; }
+  .property-log__row > .property-log__time::before { content: attr(data-label) " · " !important; font-weight: 600; }
+}
+/* Cards built without a .card__header need their own inner padding. */
+.super-home, .property-today, .tutorial > .tutorial__steps { padding: 20px; }
+.tutorial > .tutorial__steps, .tutorial > .tutorial__heading { margin-left: 20px; margin-right: 20px; padding-left: 0; padding-right: 0; }
+.tutorial > .tutorial__steps { padding-bottom: 20px; }
+@media (max-width: 680px) {
+  .super-home, .property-today { padding: 18px 16px; }
+  .tutorial > .tutorial__steps, .tutorial > .tutorial__heading { margin-left: 14px; margin-right: 14px; }
+}
