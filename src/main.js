@@ -516,6 +516,7 @@ function renderLoading() {
 }
 
 function renderLogin(message = "") {
+  authScreen = "login";
   setDocumentTitle("Sign in");
   app.innerHTML = `
     <main class="login-page">
@@ -683,6 +684,7 @@ function registerGoBack() {
 }
 
 function renderRegister() {
+  authScreen = "register";
   const reg = state.registration;
   setDocumentTitle(reg.role ? `Register as ${ROLE_LABELS_FOR_REGISTRATION[reg.role]}` : "Create an account");
   const titles = { role: "What's your role?", building: "Which building do you cover?", profile: "Create your profile", done: "Request sent" };
@@ -897,6 +899,7 @@ async function handleLogin(event) {
 }
 
 function renderVerifyCodeScreen(pendingToken) {
+  authScreen = "verify";
   setDocumentTitle("Verify it's you");
   app.innerHTML = `
     <main class="login-page">
@@ -6558,6 +6561,10 @@ function renderRemarksChoiceModal(count) {
         </div>
       </div>`;
     document.body.appendChild(wrap);
+    wrap.onBack = () => {
+      wrap.remove();
+      resolve(null);
+    };
     wrap.querySelectorAll("[data-choice]").forEach((b) =>
       b.addEventListener("click", () => {
         wrap.remove();
@@ -6570,6 +6577,7 @@ function renderRemarksChoiceModal(count) {
 async function submitInspection(form) {
   const remarkCount = Object.values(state.inspection?.remarks || {}).filter((t) => String(t || "").trim()).length;
   const sendRemarksToManagement = remarkCount ? await renderRemarksChoiceModal(remarkCount) : false;
+  if (sendRemarksToManagement === null) return; // backed out of the question: don't submit
   const button = document.querySelector("#submit-inspection-button");
   const error = document.querySelector("#inspection-error");
   if (button) {
@@ -7725,6 +7733,127 @@ document.addEventListener("change", (event) => {
   setLanguage(event.target.value);
   location.reload();
 });
+
+// ---------------------------------------------------------------------
+// The phone's back button / back swipe (Android button or gesture, iPhone
+// edge-swipe, browser back). The app is one page, so on its own every back
+// press left the app. Instead it keeps one extra history step: each back press
+// lands here, the app goes back one level from wherever the person is, and
+// only on the home screen with nothing open does back actually leave.
+// ---------------------------------------------------------------------
+let authScreen = "login";
+
+function closeTopModal() {
+  const camera = document.querySelector("dialog.inspection-camera[open]");
+  if (camera) {
+    camera.querySelector("[data-cancel]")?.click();
+    return true;
+  }
+  const overlays = [...document.querySelectorAll(".modal-overlay")];
+  const top = overlays[overlays.length - 1];
+  if (!top) return false;
+  if (top.id === "command-mode-remark-modal") {
+    state.commandMode.remarkOpen = false;
+    state.commandMode.remarkError = "";
+    renderApp();
+    return true;
+  }
+  if (typeof top.onBack === "function") {
+    top.onBack();
+    return true;
+  }
+  const cancel = top.querySelector('[id*="cancel"], [data-cancel]') || [...top.querySelectorAll("button")].find((b) => /^(cancel|close|done)$/i.test(b.textContent.trim()));
+  if (cancel) cancel.click();
+  else top.remove();
+  return true;
+}
+
+// Go back one level. Returns false when there's nowhere left to go (home screen).
+function goBackInApp() {
+  if (closeTopModal()) return true;
+
+  if (!state.session) {
+    if (authScreen === "register") {
+      registerGoBack();
+      return true;
+    }
+    if (authScreen === "verify") {
+      renderLogin();
+      return true;
+    }
+    return false;
+  }
+
+  const cm = state.commandMode;
+  if (cm?.active) {
+    if (cm.abnormalPrompt) {
+      handleCommandModeAbnormalIncorrect();
+      return true;
+    }
+    if (cm.reviewingSingleFlag || cm.reviewFlags || cm.pendingGroupPhoto || cm.entryMode === "scan-result") {
+      exitCommandMode();
+      return true;
+    }
+    if (cm.index > 0) {
+      handleCommandModePrev();
+      return true;
+    }
+    exitCommandMode();
+    return true;
+  }
+
+  if (state.buildingWizard?.step && state.buildingWizard.step !== "closed") {
+    if (!confirm("Leave building setup? What you've entered so far won't be saved.")) return true;
+    resetBuildingWizard();
+    renderApp();
+    return true;
+  }
+  if (state.photoLibrary?.open) {
+    state.photoLibrary = { open: false, buildingId: null, dates: [], selectedDate: null, photos: [], loading: false };
+    renderApp();
+    return true;
+  }
+  if (state.flagIssueOpen) {
+    state.flagIssueOpen = false;
+    renderApp();
+    return true;
+  }
+  if (state.superPanel) {
+    state.superPanel = null;
+    renderApp();
+    return true;
+  }
+  if (state.buildingWorld) {
+    closeBuildingWorld();
+    return true;
+  }
+  // Another tab is open: back goes to the first one (Today / Overview).
+  const shell = document.querySelector("[data-tool-shell]");
+  const first = shell?.querySelector(".tool-tab");
+  if (shell && first && !first.classList.contains("is-active")) {
+    setActiveTool(first.dataset.shell, first.dataset.tool);
+    renderApp();
+    return true;
+  }
+  return false;
+}
+
+function installBackButton() {
+  // One guard step above wherever the app was opened (only once, even across reloads).
+  if (!history.state?.ifGuard) history.pushState({ ifGuard: true }, "");
+  let leaving = false;
+  window.addEventListener("popstate", () => {
+    if (leaving) return;
+    if (goBackInApp()) {
+      history.pushState({ ifGuard: true }, "");
+      return;
+    }
+    // Home screen, nothing open: let back actually leave (closes the installed app).
+    leaving = true;
+    history.back();
+  });
+}
+installBackButton();
 
 async function bootstrap() {
   renderLoading();
