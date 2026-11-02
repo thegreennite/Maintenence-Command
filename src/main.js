@@ -386,6 +386,9 @@ const api = {
   createTag(payload) {
     return this.request("/manager/tags/create", { method: "POST", body: JSON.stringify(payload) });
   },
+  propertyWeeks() {
+    return this.request("/property/weekly/list");
+  },
   inspectionHistory(buildingId) {
     return this.request(`/manager/buildings/inspection-history?buildingId=${buildingId}`);
   },
@@ -1033,6 +1036,15 @@ async function loadDashboard() {
   state.inspection = inspectionResponse;
   state.managerInspection = managerInspectionResponse;
   state.propertyInspections = propertyResponse;
+  if (isPropertyManager && propertyResponse?.building) {
+    const [history, weeks] = await Promise.all([
+      api.inspectionHistory(propertyResponse.building.id).catch(() => ({ submissions: [] })),
+      api.propertyWeeks().catch(() => ({ weeks: [] })),
+    ]);
+    state.buildingWorldHistory = history.submissions;
+    state.propertyWeeks = weeks.weeks;
+    maybeStartPropertyTour();
+  }
   if (isSuperintendent && inspectionResponse?.building) {
     state.buildingWorldHistory = (
       await api.inspectionHistory(inspectionResponse.building.id).catch(() => ({ submissions: [] }))
@@ -1249,7 +1261,7 @@ function renderApp() {
   const activations = pendingActivations;
   pendingActivations = [];
   if (activations.length) setTimeout(() => activations.forEach((run) => run()), 0);
-  if (state.session.user.role === "regional_manager" || state.session.user.role === "admin") setTimeout(hydrateGeoAddresses, 0);
+  if (["regional_manager", "admin", "property_manager"].includes(state.session.user.role)) setTimeout(hydrateGeoAddresses, 0);
 
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
   document.querySelector("#return-admin")?.addEventListener("click", handleReturnToAdmin);
@@ -1703,7 +1715,8 @@ async function handleDownloadWeeklyReport(button) {
   button.disabled = true;
   button.textContent = "Building…";
   try {
-    const response = await fetch(`${API_BASE}/api/reports/weekly?week=${encodeURIComponent(week)}`, { credentials: "include" });
+    const path = state.session?.user?.role === "property_manager" ? "/api/property/weekly" : "/api/reports/weekly";
+    const response = await fetch(`${API_BASE}${path}?week=${encodeURIComponent(week)}`, { credentials: "include" });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.error || "Couldn't build that week.");
@@ -4630,10 +4643,10 @@ function renderPhotoLibraryCard(defaultBuildingId, buildingOptions) {
               ? `<p class="quiet-label">Loading…</p>`
               : lib.photos.length
                 ? lib.photos
-                    .map((p) =>
+                    .map((p, index) =>
                       p.key.toLowerCase().endsWith(".pdf")
                         ? `<a href="${api.photoViewUrl(p.key, lib.buildingId)}" target="_blank" rel="noopener" class="photo-library__thumb photo-library__thumb--file">${icon("file")}<span>PDF · ${escapeHtml(formatTimestamp(p.uploadedAt))}</span></a>`
-                        : `<a href="${api.photoViewUrl(p.key, lib.buildingId)}" target="_blank" rel="noopener" class="photo-library__thumb"><img src="${api.photoViewUrl(p.key, lib.buildingId)}" alt="" loading="lazy" />${photoMetaHtml(p)}</a>`,
+                        : `<a href="${api.photoViewUrl(p.key, lib.buildingId)}" target="_blank" rel="noopener" class="photo-library__thumb" data-photo-index="${index}"><img src="${api.photoViewUrl(p.key, lib.buildingId)}" alt="" loading="lazy" />${photoMetaHtml(p)}</a>`,
                     )
                     .join("")
                 : lib.selectedDate
@@ -5283,6 +5296,113 @@ function photoMetaHtml(p) {
       ? `<span class="photo-meta__time">${icon("clock")}Uploaded ${escapeHtml(formatTimestamp(p.uploadedAt))}</span>`
       : "";
   return `<span class="photo-meta">${time}${geo}</span>`;
+}
+
+// ---------------------------------------------------------------------
+// Photo viewer: the picture full screen with its proof stamped on it --
+// when it was taken, where (address, or GPS coordinates), and how far from
+// the building. "Download" saves a copy with that stamp burned into the
+// image itself, so it travels with the file.
+// ---------------------------------------------------------------------
+function photoStampLines(p) {
+  const lines = [];
+  const when = p.capturedAt || p.uploadedAt;
+  if (when) lines.push(`${p.capturedAt ? "Taken" : "Uploaded"} ${formatTimestamp(when)}`);
+  if (p.latitude != null && p.longitude != null) {
+    const address = geoAddressCache.get(geoKey(p.latitude, p.longitude));
+    lines.push(address || formatCoords(p.latitude, p.longitude));
+    if (address) lines.push(formatCoords(p.latitude, p.longitude));
+    if (p.distanceM != null) lines.push(p.distanceM > 150 ? `${p.distanceM} m from the building` : "At the building");
+  } else if (p.capturedAt) {
+    lines.push("No location recorded");
+  }
+  return lines;
+}
+
+function openPhotoViewer(index) {
+  const lib = state.photoLibrary;
+  const photo = lib.photos?.[index];
+  if (!photo) return;
+  document.querySelector("#photo-viewer")?.remove();
+  const src = api.photoViewUrl(photo.key, lib.buildingId);
+  const wrap = document.createElement("div");
+  wrap.id = "photo-viewer";
+  wrap.className = "modal-overlay photo-viewer";
+  const render = () => {
+    const lines = photoStampLines(photo);
+    wrap.innerHTML = `
+      <div class="photo-viewer__frame" role="dialog" aria-modal="true" aria-label="Photo">
+        <img src="${src}" alt="Inspection photo" />
+        <div class="photo-viewer__stamp" data-no-translate>${lines.map((l, i) => `<span class="${i === 0 ? "is-time" : ""}">${escapeHtml(l)}</span>`).join("")}</div>
+      </div>
+      <div class="photo-viewer__actions">
+        ${index > 0 ? `<button type="button" class="button button--light button--small" data-viewer="prev">‹ Previous</button>` : ""}
+        <button type="button" class="button button--light button--small" data-viewer="download">Download</button>
+        <button type="button" class="button button--light button--small" data-viewer="cancel">Close</button>
+        ${index < lib.photos.length - 1 ? `<button type="button" class="button button--light button--small" data-viewer="next">Next ›</button>` : ""}
+      </div>`;
+    wrap.querySelector('[data-viewer="cancel"]').addEventListener("click", () => wrap.remove());
+    wrap.querySelector('[data-viewer="prev"]')?.addEventListener("click", () => openPhotoViewer(index - 1));
+    wrap.querySelector('[data-viewer="next"]')?.addEventListener("click", () => openPhotoViewer(index + 1));
+    wrap.querySelector('[data-viewer="download"]').addEventListener("click", (event) => downloadStampedPhoto(src, lines, event.currentTarget));
+  };
+  render();
+  wrap.addEventListener("click", (event) => {
+    if (event.target === wrap) wrap.remove();
+  });
+  document.body.appendChild(wrap);
+  // Look up the street address if we don't have it yet, then redraw the stamp.
+  if (photo.latitude != null && photo.longitude != null && !geoAddressCache.has(geoKey(photo.latitude, photo.longitude))) {
+    api
+      .reverseGeocode(photo.latitude, photo.longitude)
+      .then((r) => {
+        geoAddressCache.set(geoKey(photo.latitude, photo.longitude), r?.address || "");
+        if (wrap.isConnected) render();
+      })
+      .catch(() => geoAddressCache.set(geoKey(photo.latitude, photo.longitude), ""));
+  }
+}
+
+async function downloadStampedPhoto(src, lines, button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Preparing…";
+  try {
+    const response = await fetch(`${src}&download=1`, { credentials: "include" });
+    if (!response.ok) throw new Error("photo unavailable");
+    const blob = await response.blob();
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0);
+    const size = Math.max(16, Math.round(canvas.width / 34));
+    const pad = Math.round(size * 0.8);
+    const band = pad * 2 + lines.length * size * 1.35;
+    ctx.fillStyle = "rgba(10, 30, 26, 0.72)";
+    ctx.fillRect(0, canvas.height - band, canvas.width, band);
+    ctx.fillStyle = "#ffffff";
+    ctx.textBaseline = "top";
+    lines.forEach((line, i) => {
+      ctx.font = `${i === 0 ? "700" : "500"} ${size}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+      ctx.fillText(line, pad, canvas.height - band + pad + i * size * 1.35, canvas.width - pad * 2);
+    });
+    const out = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+    const url = URL.createObjectURL(out);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `inspection-photo-${(lines[0] || "").replace(/[^0-9A-Za-z]+/g, "-").replace(/^-|-$/g, "") || Date.now()}.jpg`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    button.textContent = original;
+  } catch {
+    button.textContent = "Couldn't download";
+  } finally {
+    button.disabled = false;
+  }
 }
 
 let geoHydrating = false;
@@ -6738,14 +6858,26 @@ function renderOutOfRangeModal(flagged) {
   });
 }
 
-// Property Manager: read-only, one building -- Overview (today + last 14 days +
-// readings outside normal), Messages (everything the super sent up), How it works.
+// Property Manager: read-only, one building -- Overview (today + the inspection
+// log), History (each week, each day as a PDF, and the weekly spreadsheet),
+// Photos (with when/where stamped on them), Messages, How it works (+ guided tour).
 function renderPropertyView(data) {
   if (!data) return renderErrorState();
   const messages = data.messages || [];
   const open = messages.filter((m) => m.status === "open").length;
+  const buildingId = data.building.id;
   return renderToolShell("property", [
     { id: "overview", label: "Overview", icon: "overview", body: () => renderPropertyOverview(data) },
+    { id: "history", label: "History", icon: "clock", body: () => renderPropertyHistory(buildingId) },
+    {
+      id: "photos",
+      label: "Photos",
+      icon: "image",
+      activate: () => {
+        if (!state.photoLibrary.open) openPhotoLibrary(buildingId);
+      },
+      body: () => renderPhotoLibraryCard(buildingId, null),
+    },
     { id: "messages", label: "Messages", icon: "list", badge: open || "", body: () => renderPropertyMessages(messages) },
     { id: "help", label: "How it works", icon: "eye", body: () => renderPropertyTutorial() },
   ]);
@@ -6759,32 +6891,15 @@ function renderPropertyOverview(data) {
     : today.status === "submitted"
       ? `Submitted ${formatTimestamp(today.submittedAt)}${today.author ? ` by ${today.author}` : ""} · ${outcomeLabels[today.outcome]}`
       : `In progress · ${today.counts.filled} of ${data.totalReadings} readings so far`;
-  const answerText = { abnormal: "Called abnormal", normal: "Called normal" };
   return `
     <section class="card property-today">
       <p class="section-kicker">${escapeHtml(data.building.name)} · Today</p>
       <h2>${today?.status === "submitted" ? `${icon("check")} Today's inspection is done` : "Today's inspection"}</h2>
       <p class="super-home__meta">${escapeHtml(todayLine)}</p>
     </section>
-    <section class="card">
-      <div class="card__header"><div><p class="section-kicker">Needs your attention</p><h2>Readings outside normal</h2></div><span class="quiet-label">Last 14 days</span></div>
-      ${
-        data.outside?.length
-          ? `<ul class="property-outside">${data.outside
-              .map(
-                (o) => `<li class="${o.answer === "abnormal" ? "is-abnormal" : ""}">
-                  <div><strong>${escapeHtml(o.where)}</strong><small>${escapeHtml(formatInspectionDate(o.date))}${o.detail ? ` · ${escapeHtml(o.detail)}` : ""}</small>
-                  ${o.remark ? `<p class="property-outside__remark">${icon("edit")} ${escapeHtml(o.remark)}</p>` : ""}</div>
-                  <div class="property-outside__value"><span>${escapeHtml(o.value)}</span><small>${escapeHtml(answerText[o.answer] || "No answer")}</small></div>
-                </li>`,
-              )
-              .join("")}</ul>`
-          : `<p class="parameters-intro">Nothing has been outside normal in the last 14 days.</p>`
-      }
-    </section>
     ${
       data.days.length
-        ? `<section class="card" aria-labelledby="property-log-title">
+        ? `<section class="card property-log-card" aria-labelledby="property-log-title">
             <div class="card__header"><div><p class="section-kicker">${escapeHtml(data.building.name)}</p><h2 id="property-log-title">Inspection log</h2></div>
               <span class="quiet-label">Last ${data.days.length} day${data.days.length === 1 ? "" : "s"}</span></div>
             <div class="property-log">
@@ -6792,8 +6907,34 @@ function renderPropertyOverview(data) {
               ${data.days.map(renderPropertyLogRow).join("")}
             </div>
           </section>`
-        : `<section class="card empty-state"><span>${icon("clock")}</span><h2>No inspections yet</h2><p>${escapeHtml(data.building.name)} hasn't had an inspection submitted yet — check back after today's rounds.</p></section>`
+        : `<section class="card empty-state property-log-card"><span>${icon("clock")}</span><h2>No inspections yet</h2><p>${escapeHtml(data.building.name)} hasn't had an inspection submitted yet — check back after today's rounds.</p></section>`
     }`;
+}
+
+function renderPropertyHistory(buildingId) {
+  const weeks = (state.propertyWeeks || []).slice(0, 8);
+  return `
+    <section class="card property-history-card">
+      <div class="card__header"><div><p class="section-kicker">Daily history</p><h2>Every inspection, by week</h2></div></div>
+      <p class="parameters-intro property-pad">Open a week, then download any day as a PDF with every reading from that day.</p>
+      ${renderInspectionHistory(buildingId)}
+    </section>
+    <section class="card property-weekly">
+      <div class="card__header"><div><p class="section-kicker">Weekly history</p><h2>Weekly spreadsheet</h2></div></div>
+      <p class="parameters-intro property-pad">One spreadsheet per week: every reading, each day side by side, anything outside normal in red, and the superintendent's remarks.</p>
+      ${
+        weeks.length
+          ? `<div class="buildings-list">${weeks
+              .map(
+                (w) => `<div class="building-row">
+                  <div class="building-row__name"><strong>${escapeHtml(w.label)}</strong>${w.current ? `<small>This week so far</small>` : ""}</div>
+                  <button type="button" class="button button--outline button--small download-weekly-report" data-week="${w.weekStart}">${icon("check")} Download</button>
+                </div>`,
+              )
+              .join("")}</div>`
+          : `<p class="parameters-intro property-pad">No weeks recorded yet.</p>`
+      }
+    </section>`;
 }
 
 function renderPropertyMessages(messages) {
@@ -6822,16 +6963,130 @@ function renderPropertyTutorial() {
   const steps = [
     ["What this is", "A read-only view of your building's daily mechanical inspection. You never fill anything in."],
     ["What the superintendent does", "Every inspection day the superintendent walks the building, enters every gauge reading (boilers, pumps, pressures, levels), and takes a timestamped, location-tagged photo of each machine as proof it was done on site."],
-    ["How readings are judged", `For the first ${OBSERVE_DAYS} days the app learns each machine's normal from the superintendent's real readings. After that, anything outside what that machine has actually read is flagged, and the superintendent answers: a typo, normal, or abnormal.`],
-    ["Overview", "<strong>Today</strong> shows whether today's inspection is done. <strong>Readings outside normal</strong> lists every flagged reading from the last 14 days with the superintendent's answer and remark. The <strong>log</strong> shows when each inspection started and was submitted."],
-    ["Messages", "Issues the superintendent flagged, observations they chose to send, and readings they called abnormal. You also get an email for every abnormal reading."],
-    ["What to do about an abnormal reading", "Read the remark, then contact your Area Manager (or the superintendent) to arrange a check or a service call. The Area and Operations Managers get the same information and the Friday report."],
+    ["Overview", "Whether today's inspection is done, and the inspection log: when each day started, when it was submitted, and how it went."],
+    ["History", "Every inspection organized by week. Download any single day as a PDF, or a whole week as a spreadsheet."],
+    ["Photos", "Every machine photo, by day. Tap one to see it full size with when and where it was taken stamped on it. Download keeps that stamp."],
+    ["Messages", "Issues the superintendent flagged, observations they sent, and readings they called abnormal. You also get an email for every abnormal reading."],
   ];
   return `
     <section class="card tutorial">
       <div class="card__header"><div><p class="section-kicker">${L("For property managers")}</p><h2>${L("How Inspect Funnels works")}</h2></div></div>
+      <div class="tutorial__start"><button type="button" class="button button--primary" id="start-property-tour">${icon("eye")} Take the guided tour</button></div>
       <ol class="tutorial__steps">${steps.map(([title, body]) => `<li><strong>${L(title)}</strong><p>${L(body)}</p></li>`).join("")}</ol>
     </section>`;
+}
+
+// ---------------------------------------------------------------------
+// Guided tour for property managers: walks through the real screen, one
+// highlighted area at a time, with Back / Next. Starts by itself the first
+// time a property manager signs in on a device; replay from How it works.
+// ---------------------------------------------------------------------
+const PROPERTY_TOUR = [
+  { tab: "overview", target: ".tool-bar", title: "Welcome to Inspect Funnels", body: "These tabs are everything you need. We'll walk through each one. Tap Next." },
+  { tab: "overview", target: ".property-today", title: "Today", body: "Shows whether today's inspection has been done, and when it was submitted." },
+  { tab: "overview", target: ".property-log-card", title: "Inspection log", body: "Every recent day: when the superintendent started, when they submitted, and how it went." },
+  { tab: "history", target: ".property-history-card", title: "Daily history", body: "Every inspection, grouped by week. Open a week and download any day as a PDF." },
+  { tab: "history", target: ".property-weekly", title: "Weekly spreadsheet", body: "A spreadsheet per week with every reading side by side. This week and last week are right at the top." },
+  { tab: "photos", target: ".photo-library__layout, .photo-library, .tool-panel", title: "Photos", body: "Pick a day, then tap a photo. You'll see when and where it was taken, stamped right on the picture." },
+  { tab: "messages", target: ".tool-panel", title: "Messages", body: "Anything the superintendent sends you: issues, observations, and abnormal readings." },
+  { tab: "help", target: "#start-property-tour", title: "You're all set", body: "Replay this tour anytime from How it works." },
+];
+const TOUR_DONE_KEY = "if-pm-tour-done";
+
+function startPropertyTour() {
+  document.querySelector("#guided-tour")?.remove();
+  const wrap = document.createElement("div");
+  wrap.id = "guided-tour";
+  wrap.className = "modal-overlay guided-tour";
+  wrap.innerHTML = `<div class="guided-tour__spot"></div><div class="guided-tour__card" role="dialog" aria-modal="true" aria-live="polite"></div>`;
+  document.body.appendChild(wrap);
+  const spot = wrap.querySelector(".guided-tour__spot");
+  const card = wrap.querySelector(".guided-tour__card");
+  let index = 0;
+  const finish = () => {
+    try {
+      localStorage.setItem(TOUR_DONE_KEY, "1");
+    } catch {}
+    wrap.remove();
+    window.removeEventListener("resize", place);
+  };
+  // The sticky header + tab bar sit on top of the page; areas below them start under that.
+  const stickyBottom = (el) => {
+    if (el.closest(".tool-bar, .topbar")) return 0;
+    const bar = document.querySelector(".tool-bar") || document.querySelector(".topbar");
+    return bar ? bar.getBoundingClientRect().bottom : 0;
+  };
+  // First selector that's on screen wins (so ".photo-library, .tool-panel" prefers the photos themselves).
+  const tourTarget = (step) => {
+    for (const selector of step.target.split(",")) {
+      const node = [...document.querySelectorAll(selector.trim())].find((n) => n.offsetParent !== null && !wrap.contains(n));
+      if (node) return node;
+    }
+    return null;
+  };
+  function place() {
+    const step = PROPERTY_TOUR[index];
+    const el = tourTarget(step);
+    const pad = 8;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      // Highlight only the part on screen, at most ~45% of it, so the explanation still fits.
+      const top = Math.max(r.top, stickyBottom(el) + pad);
+      const roomForCard = window.innerHeight - card.offsetHeight - pad - 48;
+      const bottom = Math.max(top + 40, Math.min(r.bottom, top + window.innerHeight * 0.45, roomForCard));
+      Object.assign(spot.style, { display: "block", top: `${top - pad}px`, left: `${r.left - pad}px`, width: `${r.width + pad * 2}px`, height: `${Math.max(bottom - top, 40) + pad * 2}px` });
+      const below = bottom + pad + 16;
+      const cardTop = below + card.offsetHeight <= window.innerHeight - 8 ? below : Math.max(16, top - pad - 16 - card.offsetHeight);
+      card.style.top = `${cardTop}px`;
+    } else {
+      spot.style.display = "none";
+      card.style.top = `${Math.max(16, window.innerHeight / 2 - 90)}px`;
+    }
+  }
+  function show(i) {
+    index = i;
+    const step = PROPERTY_TOUR[i];
+    setActiveTool("property", step.tab);
+    renderApp();
+    card.innerHTML = `
+      <p class="guided-tour__count">${i + 1} of ${PROPERTY_TOUR.length}</p>
+      <h3>${escapeHtml(L(step.title))}</h3>
+      <p>${escapeHtml(L(step.body))}</p>
+      <div class="guided-tour__actions">
+        <button type="button" class="link-button" data-tour="skip">${i === PROPERTY_TOUR.length - 1 ? "" : "Skip tour"}</button>
+        <span>
+          ${i > 0 ? `<button type="button" class="button button--outline button--small" data-tour="back">Back</button>` : ""}
+          <button type="button" class="button button--primary button--small" data-tour="next">${i === PROPERTY_TOUR.length - 1 ? "Done" : "Next"}</button>
+        </span>
+      </div>`;
+    card.querySelector('[data-tour="next"]').addEventListener("click", () => (i === PROPERTY_TOUR.length - 1 ? finish() : show(i + 1)));
+    card.querySelector('[data-tour="back"]')?.addEventListener("click", () => show(i - 1));
+    card.querySelector('[data-tour="skip"]')?.addEventListener("click", finish);
+    // Let the tab draw (photos load a moment later), bring the area into view, then highlight it.
+    setTimeout(() => {
+      const el = tourTarget(step);
+      if (el) {
+        // Start of the area just under the sticky tabs (never hidden behind them).
+        const r = el.getBoundingClientRect();
+        window.scrollTo({ top: Math.max(0, window.scrollY + r.top - stickyBottom(el) - 16), behavior: "instant" });
+      }
+      requestAnimationFrame(place);
+    }, step.tab === "photos" ? 700 : 120);
+  }
+  wrap.onBack = () => (index > 0 ? show(index - 1) : finish());
+  window.addEventListener("resize", place);
+  show(0);
+}
+
+function maybeStartPropertyTour() {
+  try {
+    if (localStorage.getItem(TOUR_DONE_KEY) === "1") return;
+  } catch {
+    return;
+  }
+  setTimeout(() => {
+    if (state.session?.user?.role === "property_manager" && !document.querySelector("#guided-tour")) startPropertyTour();
+  }, 700);
 }
 
 function renderPropertyLogRow(day) {
@@ -6924,6 +7179,12 @@ function bindDashboardEvents() {
   document.querySelectorAll(".photo-library__date").forEach((button) => {
     button.addEventListener("click", () => selectPhotoLibraryDate(button.dataset.date));
   });
+  document.querySelectorAll(".photo-library__thumb[data-photo-index]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      openPhotoViewer(Number(link.dataset.photoIndex));
+    });
+  });
   document.querySelectorAll(".impersonate-button").forEach((button) => {
     button.addEventListener("click", () => handleImpersonate(button));
   });
@@ -6942,6 +7203,7 @@ function bindDashboardEvents() {
     });
   });
   document.querySelector("#start-command-mode")?.addEventListener("click", startCommandMode);
+  document.querySelector("#start-property-tour")?.addEventListener("click", startPropertyTour);
   document.querySelectorAll("[data-super-panel]").forEach((button) =>
     button.addEventListener("click", () => {
       const panel = button.dataset.superPanel;

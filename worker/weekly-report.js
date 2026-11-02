@@ -238,19 +238,20 @@ async function gatherBuilding(env, building, dates, today) {
   };
 }
 
-async function gatherRange(env, dates) {
+// onlyBuildingId: just that building (a property manager's own spreadsheet).
+async function gatherRange(env, dates, onlyBuildingId = null) {
   const today = todayIso();
   const buildingRows = (
     await env.DB.prepare(
       "SELECT id, name, address, inspection_days FROM buildings WHERE status = 'active' AND deleted_at IS NULL ORDER BY name",
     ).all()
-  ).results;
+  ).results.filter((row) => onlyBuildingId == null || row.id === onlyBuildingId);
   const buildings = [];
   for (const row of buildingRows) buildings.push(await gatherBuilding(env, row, dates, today));
   return { dates, today, buildings };
 }
 
-export const gatherWeek = (env, weekStartIso) => gatherRange(env, weekDates(weekStartIso));
+export const gatherWeek = (env, weekStartIso, onlyBuildingId = null) => gatherRange(env, weekDates(weekStartIso), onlyBuildingId);
 
 // Every calendar day from the first recorded inspection through today.
 async function allRecordedDates(env) {
@@ -505,9 +506,9 @@ export function highlightLines(week) {
   return lines.length ? lines : ["No active buildings registered yet."];
 }
 
-export async function buildWeeklyReport(env, weekStartIso) {
+export async function buildWeeklyReport(env, weekStartIso, onlyBuildingId = null) {
   const weekStart = mondayOf(weekStartIso);
-  const week = await gatherWeek(env, weekStart);
+  const week = await gatherWeek(env, weekStart, onlyBuildingId);
   const wb = new Workbook();
   writeSummarySheet(wb, week);
   for (const b of week.buildings) writeBuildingSheet(wb, b, week);

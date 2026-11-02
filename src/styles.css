@@ -1623,3 +1623,25 @@ p, li, .parameters-intro, .super-home__meta, .tutorial__steps p { text-wrap: pre
 .login-form input[type="file"]::file-selector-button { margin-right: 12px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--canvas); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
 .update-banner { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 10001; display: flex; align-items: center; gap: 12px; width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 12px 12px 12px 16px; border-radius: 16px; background: var(--forest); color: #fff; font-size: 0.92rem; box-shadow: 0 12px 40px rgba(16, 42, 37, .25); }
 .update-banner span { flex: 1; line-height: 1.35; }
+
+/* Photo viewer: the picture with its time/location stamp on it */
+.photo-viewer { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 16px; background: rgba(8, 18, 16, 0.92); }
+.photo-viewer__frame { position: relative; max-width: min(960px, 100%); max-height: calc(100vh - 110px); border-radius: 14px; overflow: hidden; background: #000; }
+.photo-viewer__frame img { display: block; max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; margin: 0 auto; }
+.photo-viewer__stamp { position: absolute; left: 0; right: 0; bottom: 0; display: grid; gap: 2px; padding: 12px 14px; background: linear-gradient(to top, rgba(10, 30, 26, .88), rgba(10, 30, 26, .55)); color: #fff; font-size: 13px; line-height: 1.35; }
+.photo-viewer__stamp .is-time { font-weight: 700; font-size: 14px; }
+.photo-viewer__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+
+/* Property manager history + guided tour */
+.property-pad { padding: 0 22px; }
+.tutorial__start { padding: 0 20px 4px; }
+.tutorial__start .button { width: 100%; justify-content: center; min-height: 50px; }
+.guided-tour { background: transparent; padding: 0; display: block; }
+.guided-tour__spot { position: fixed; z-index: 1; border-radius: 16px; box-shadow: 0 0 0 9999px rgba(10, 22, 20, 0.62); outline: 3px solid var(--lime); pointer-events: none; transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease; }
+.guided-tour__card { position: fixed; z-index: 2; left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; border-radius: 18px; background: var(--paper); box-shadow: 0 18px 50px rgba(10, 22, 20, .35); transition: top .25s ease; }
+.guided-tour__card h3 { margin: 2px 0 6px; font-size: 1.15rem; }
+.guided-tour__card p { margin: 0; line-height: 1.5; }
+.guided-tour__count { color: var(--forest); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px !important; }
+.guided-tour__actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; }
+.guided-tour__actions span { display: flex; gap: 8px; }
+@media (max-width: 680px) { .property-pad { padding: 0 14px; } }

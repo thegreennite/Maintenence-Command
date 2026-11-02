@@ -66,7 +66,7 @@ function shortAddress(a = {}, fallback = "") {
 }
 
 export async function handleReverseGeocode(request, session, env, corsHeaders) {
-  if (session.role !== "regional_manager" && session.role !== "admin") return jsonError("Not available for this role.", 403, corsHeaders);
+  if (!["regional_manager", "admin", "property_manager"].includes(session.role)) return jsonError("Not available for this role.", 403, corsHeaders);
   const url = new URL(request.url);
   const lat = Number(url.searchParams.get("lat"));
   const lon = Number(url.searchParams.get("lon"));

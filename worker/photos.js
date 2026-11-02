@@ -93,7 +93,8 @@ export async function storePhoto(env, { buildingId, imageBase64, imageBlob, medi
 }
 
 async function resolveAllowedBuildingIds(session, env, requestedBuildingId) {
-  if (session.role === "superintendent") {
+  // Superintendents and property managers: their own building's photos only.
+  if (session.role === "superintendent" || session.role === "property_manager") {
     return session.building_id === requestedBuildingId ? [requestedBuildingId] : [];
   }
   if (session.role === "regional_manager" || session.role === "admin") {
@@ -213,6 +214,17 @@ export async function handlePhotoView(request, session, env, corsHeaders) {
   if (session.role === "cleaner" && !isTaskPhoto) return new Response("Not found", { status: 404 });
 
   if (isGhlUrl) {
+    // ?download=1: pass the image through from here instead of redirecting, so the
+    // app can stamp the time/location onto it (a browser won't let a page draw
+    // on an image fetched from another site).
+    if (url.searchParams.get("download") === "1") {
+      const upstream = await fetch(key);
+      if (!upstream.ok) return new Response("Not found", { status: 404 });
+      const headers = new Headers(corsHeaders);
+      headers.set("Content-Type", upstream.headers.get("content-type") || "image/jpeg");
+      headers.set("Cache-Control", "private, max-age=3600");
+      return new Response(upstream.body, { headers });
+    }
     return new Response(null, { status: 302, headers: { ...corsHeaders, Location: key } });
   }
 

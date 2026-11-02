@@ -11,7 +11,8 @@ async function ownsBuilding(env, session, buildingId) {
   // only their own building, never another one. Already implicitly
   // client-scoped -- their own building_id was assigned within their own
   // client to begin with.
-  if (session.role === "superintendent") {
+  // Same for a property manager: read-only, their own building only.
+  if (session.role === "superintendent" || session.role === "property_manager") {
     if (session.building_id !== buildingId) return null;
     return env.DB.prepare("SELECT id, name FROM buildings WHERE id = ? AND deleted_at IS NULL").bind(buildingId).first();
   }

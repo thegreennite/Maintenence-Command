@@ -250,6 +250,17 @@ export default {
         if (!canSeeAllBuildings(session)) return json({ error: "Operations Manager or Administrator access required" }, 403, cors.headers);
         return json({ weeks: await listReportWeeks(env) }, 200, cors.headers);
       }
+      // A property manager's own weekly spreadsheet: their building only.
+      if (url.pathname === "/api/property/weekly/list" && request.method === "GET") {
+        if (session.role !== "property_manager") return json({ error: "Property Manager access required" }, 403, cors.headers);
+        return json({ weeks: await listReportWeeks(env) }, 200, cors.headers);
+      }
+      if (url.pathname === "/api/property/weekly" && request.method === "GET") {
+        if (session.role !== "property_manager" || !session.building_id) return json({ error: "Property Manager access required" }, 403, cors.headers);
+        const week = url.searchParams.get("week");
+        if (!isValidIsoDate(week)) return json({ error: "A week (YYYY-MM-DD) is required." }, 400, cors.headers);
+        return xlsxResponse(await buildWeeklyReport(env, week, session.building_id), cors.headers);
+      }
       if (url.pathname === "/api/reports/weekly" && request.method === "GET") {
         if (!canSeeAllBuildings(session)) return json({ error: "Operations Manager or Administrator access required" }, 403, cors.headers);
         const week = url.searchParams.get("week");
@@ -633,14 +644,14 @@ export default {
         // A superintendent may also pull this, but only for their own
         // assigned building -- handleInspectionHistory's ownsBuilding()
         // enforces that (buildingId must equal session.building_id).
-        if (session.role !== "regional_manager" && session.role !== "admin" && session.role !== "superintendent") {
+        if (!["regional_manager", "admin", "superintendent", "property_manager"].includes(session.role)) {
           return json({ error: "Access required" }, 403, cors.headers);
         }
         return handleInspectionHistory(request, session, env, cors.headers);
       }
 
       if (url.pathname === "/api/manager/buildings/inspection-detail" && request.method === "GET") {
-        if (session.role !== "regional_manager" && session.role !== "admin" && session.role !== "superintendent") {
+        if (!["regional_manager", "admin", "superintendent", "property_manager"].includes(session.role)) {
           return json({ error: "Access required" }, 403, cors.headers);
         }
         return handleInspectionDetail(request, session, env, cors.headers);
