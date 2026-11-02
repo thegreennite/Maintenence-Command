@@ -776,8 +776,10 @@ async function handleLogin(request, env, corsHeaders) {
   // so a wrong-password guess against a real email doesn't confirm it exists.
   const user = await db.prepare(
     `SELECT id, username, password_hash, password_salt, full_name, job_title, role, region, building_access, status, email, last_2fa_verified_at, ghl_contact_id, is_active, removed_at, classification, designation
-     FROM users WHERE username = ?`,
+     FROM users WHERE LOWER(username) = LOWER(?)`,
   )
+    // Case-insensitive: phone keyboards capitalize the first letter
+    // ("Lucas.garcia@...") and that used to fail as a wrong password.
     .bind(username)
     .first();
 

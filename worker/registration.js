@@ -12,6 +12,7 @@ import { hashPassword } from "./security.js";
 import { cleanDesignation } from "./roles.js";
 import { canSeeAllBuildings, ownedOrSharedSql } from "./access.js";
 import { getNativeClientId, recordLoginDirectory } from "./tenant-db.js";
+import { sendAccountEmailFor } from "./account-emails.js";
 
 const SELF_SERVE_ROLES = new Set(["superintendent", "cleaner", "property_manager", "regional_manager", "operations_manager"]);
 const JOB_TITLES = {
@@ -90,6 +91,8 @@ export async function handleSelfRegister(request, env, corsHeaders) {
       .bind(email, hash, salt, fullName, JOB_TITLES[requestedRole], buildingAccess, regionName, email, phone || null, profilePhoto)
       .run();
     if (nativeClientId) await recordLoginDirectory(env, email, nativeClientId);
+    const created = await env.DB.prepare("SELECT id FROM users WHERE username = ?").bind(email).first();
+    if (created) await sendAccountEmailFor(env, env.DB, created.id, "received", { approver: "an administrator" });
     return jsonOk({ ok: true, message: "Your request has been sent to an administrator for approval." }, corsHeaders);
   }
 
@@ -134,6 +137,9 @@ export async function handleSelfRegister(request, env, corsHeaders) {
     )
     .run();
   if (nativeClientId) await recordLoginDirectory(env, email, nativeClientId);
+  // Welcome email when the account works right away; otherwise a confirmation the request arrived.
+  const created = await env.DB.prepare("SELECT id FROM users WHERE username = ?").bind(email).first();
+  if (created) await sendAccountEmailFor(env, env.DB, created.id, instant ? "welcome" : "received");
 
   return jsonOk(
     instant
@@ -220,6 +226,8 @@ export async function handlePendingRequestDecision(request, session, env, corsHe
   await env.DB.prepare("UPDATE users SET status = ?, is_active = ?, designation = COALESCE(?, designation) WHERE id = ?")
     .bind(approve ? "active" : "denied", approve ? 1 : 0, approve ? cleanDesignation(body.designation) : null, userId)
     .run();
+  // Approved: the welcome email ("your account is ready, sign in").
+  if (approve) await sendAccountEmailFor(env, env.DB, userId, "welcome");
 
   return jsonOk({ ok: true }, corsHeaders);
 }
