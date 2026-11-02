@@ -88,6 +88,8 @@ const PHRASES = {
   "← Exit command mode": ["← Quitter le mode commande", "← Salir del modo comando", "← Esci dalla modalità comando", "← Sair do modo comando", "← Sair do modo comando"],
   "A new version of Inspect Funnels is ready.": ["Une nouvelle version d'Inspect Funnels est prête.", "Hay una nueva versión de Inspect Funnels.", "È pronta una nuova versione di Inspect Funnels.", "Há uma nova versão do Inspect Funnels.", "Há uma nova versão do Inspect Funnels."],
   "Refresh": ["Actualiser", "Actualizar", "Aggiorna", "Atualizar", "Atualizar"],
+  "Your account is ready. Sign in with your email and password.": ["Votre compte est prêt. Connectez-vous avec votre courriel et votre mot de passe.", "Tu cuenta está lista. Inicia sesión con tu correo y contraseña.", "Il tuo account è pronto. Accedi con email e password.", "A sua conta está pronta. Inicie sessão com o seu email e palavra-passe.", "Sua conta está pronta. Entre com seu e-mail e senha."],
+  "Create account": ["Créer le compte", "Crear cuenta", "Crea account", "Criar conta", "Criar conta"],
   "Back": ["Retour", "Atrás", "Indietro", "Voltar", "Voltar"],
   "Sign in": ["Connexion", "Iniciar sesión", "Accedi", "Iniciar sessão", "Entrar"],
   "Go to sign in": ["Aller à la connexion", "Ir a iniciar sesión", "Vai all'accesso", "Ir para o início de sessão", "Ir para o login"],

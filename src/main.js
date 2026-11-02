@@ -786,7 +786,9 @@ function renderRegisterProfileStep(reg) {
     <p class="form-intro">${
       isManager
         ? `Registering as an ${escapeHtml(ROLE_LABELS_FOR_REGISTRATION[reg.role])}. Once you submit, an administrator will need to approve you before you can sign in.`
-        : `Registering for <strong>${escapeHtml(reg.building.name)}</strong>. Once you submit, your operations manager will need to approve you before you can sign in.`
+        : reg.role === "property_manager"
+          ? `Registering for <strong>${escapeHtml(reg.building.name)}</strong>. Your account works as soon as you create it.`
+          : `Registering for <strong>${escapeHtml(reg.building.name)}</strong>. Once you submit, your operations manager will need to approve you before you can sign in.`
     }</p>
     <form id="registration-profile-form" class="login-form">
       <label><span>Full name</span><input name="fullName" required autocomplete="name" /></label>
@@ -804,11 +806,15 @@ function renderRegisterProfileStep(reg) {
         <span>I agree to receive text messages and emails from Inspect Funnels about my account, assignments, and building operations.</span>
       </label>
       <p class="form-error" id="registration-error" hidden role="alert"></p>
-      <button class="button button--primary button--full" type="submit"><span>Submit request</span>${icon("arrow")}</button>
+      <button class="button button--primary button--full" type="submit"><span>${reg.role === "property_manager" ? "Create account" : "Submit request"}</span>${icon("arrow")}</button>
     </form>`;
 }
 
 function renderRegisterDoneStep(reg) {
+  if (reg.role === "property_manager") {
+    return `<div class="finding"><p>${icon("check")} Your account is ready. Sign in with your email and password.</p></div>
+    <button type="button" class="button button--primary button--full auth-done" id="register-done-sign-in"><span>Go to sign in</span>${icon("arrow")}</button>`;
+  }
   const approver =
     reg.role === "regional_manager" || reg.role === "operations_manager" ? "an administrator" : "your operations manager";
   return `<div class="finding"><p>${icon("check")} Your request has been sent to ${approver} for approval. You'll be able to sign in once they approve it.</p></div>

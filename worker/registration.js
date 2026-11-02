@@ -109,9 +109,13 @@ export async function handleSelfRegister(request, env, corsHeaders) {
     );
   }
 
+  // Property managers only get a read-only view of their own building, so they
+  // don't wait for approval: the account works as soon as it's created.
+  // Superintendents and cleaners still need a manager to approve them.
+  const instant = requestedRole === "property_manager";
   await env.DB.prepare(
     `INSERT INTO users (username, password_hash, password_salt, full_name, job_title, role, region, building_id, email, phone, profile_photo, status, is_active, contact_consent, contact_consent_at, client_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP, 1)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, 1)`,
   )
     .bind(
       email,
@@ -125,12 +129,16 @@ export async function handleSelfRegister(request, env, corsHeaders) {
       email,
       phone || null,
       profilePhoto,
+      instant ? "active" : "pending",
+      instant ? 1 : 0,
     )
     .run();
   if (nativeClientId) await recordLoginDirectory(env, email, nativeClientId);
 
   return jsonOk(
-    { ok: true, message: "Your request has been sent to your operations manager for approval." },
+    instant
+      ? { ok: true, instant: true, message: "Your account is ready. Sign in with your email and password." }
+      : { ok: true, message: "Your request has been sent to your operations manager for approval." },
     corsHeaders,
   );
 }
