@@ -28,6 +28,12 @@ export async function ensureLearnedTable(env) {
     `CREATE TABLE IF NOT EXISTS learning_reset (
        building_id INTEGER PRIMARY KEY, since TEXT NOT NULL, reset_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
   ).run();
+  // Readings that stay on record but never count toward a range (an obvious
+  // typo, two fields swapped). Unlike "abnormal", nothing gets reported.
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS learning_excluded (
+       reading_id INTEGER PRIMARY KEY, reason TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+  ).run();
   ready.add(env.DB);
 }
 

@@ -90,7 +90,8 @@ export async function loadBaselines(env, buildingId, date) {
      WHERE s.building_id = ? AND s.status = 'submitted'
        AND s.inspection_date >= ? AND s.inspection_date < ?
        AND t.answer_kind = 'numeric' AND r.value IS NOT NULL AND TRIM(r.value) != ''
-       ${skipAbnormal ? `AND (r.deviation IS NULL OR r.deviation NOT LIKE '%"ack":"abnormal"%')` : ""}`;
+       ${skipAbnormal ? `AND (r.deviation IS NULL OR r.deviation NOT LIKE '%"ack":"abnormal"%')
+       AND r.id NOT IN (SELECT reading_id FROM learning_excluded)` : ""}`;
   let result;
   try {
     result = await env.DB.prepare(sql(true)).bind(buildingId, since, date).all();
