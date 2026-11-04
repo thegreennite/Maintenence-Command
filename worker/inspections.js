@@ -429,6 +429,9 @@ async function recordDeviations(env, buildingId, submissionId, body) {
     if (!deviation) continue;
     const ack = abnormal.has(row.tag_id) ? "abnormal" : normal.has(row.tag_id) ? "normal" : null;
     stamped.set(row.tag_id, { tag, value: row.value, deviation: { ...deviation, ack } });
+    // The super called it normal, so it is normal: it teaches the range below
+    // but leaves no flag for any report or dashboard to show.
+    if (ack === "normal") continue;
     statements.push(
       env.DB.prepare("UPDATE inspection_readings SET deviation = ? WHERE submission_id = ? AND tag_id = ?").bind(
         JSON.stringify({ ...deviation, ack }),

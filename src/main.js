@@ -6801,7 +6801,7 @@ function renderOutOfRangeModal(flagged) {
   wrap.innerHTML = `
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="out-of-range-title">
       <h3 id="out-of-range-title">${icon("warning")} Double-check before submitting</h3>
-      <p>${flagged.length === 1 ? "This reading is" : "These readings are"} outside the normal range. Confirm each one before it goes to your operations manager.</p>
+      <p>${flagged.length === 1 ? "This reading is" : "These readings are"} outside the normal range. Only readings you call abnormal are reported to management.</p>
       <div class="out-of-range-list">
         ${flagged
           .map(
@@ -6848,12 +6848,14 @@ function renderOutOfRangeModal(flagged) {
   wrap.querySelector("#out-of-range-cancel").addEventListener("click", () => wrap.remove());
   confirmButton.addEventListener("click", async () => {
     state.confirmedOutOfRange = true;
-    state.confirmedAbnormalTagIds = Array.from(decisions.entries())
-      .filter(([, choice]) => choice === "abnormal")
-      .map(([tagId]) => Number(tagId));
-    state.confirmedNormalTagIds = Array.from(decisions.entries())
-      .filter(([, choice]) => choice === "normal")
-      .map(([tagId]) => Number(tagId));
+    // Answers given during the walk stay unless this list changed them.
+    const decided = new Set(Array.from(decisions.keys()).map(Number));
+    const chosen = (answer) =>
+      Array.from(decisions.entries())
+        .filter(([, choice]) => choice === answer)
+        .map(([tagId]) => Number(tagId));
+    state.confirmedAbnormalTagIds = [...state.confirmedAbnormalTagIds.filter((id) => !decided.has(id)), ...chosen("abnormal")];
+    state.confirmedNormalTagIds = [...state.confirmedNormalTagIds.filter((id) => !decided.has(id)), ...chosen("normal")];
     wrap.remove();
     await submitInspection(state.pendingSubmitForm);
   });
